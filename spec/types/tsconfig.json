@@ -1,9 +1,0 @@
-{
-  "compilerOptions": {
-    "strict": true, "target": "ES2023", "module": "ESNext", "moduleResolution": "bundler",
-    "noEmit": true, "exactOptionalPropertyTypes": true, "noUncheckedIndexedAccess": true,
-    "allowImportingTsExtensions": true, "skipLibCheck": true, "types": []
-  },
-  "include": ["**/*.ts"],
-  "exclude": ["node_modules", "fixtures/negative", "fixtures/effect-boundary.ts"]
-}
