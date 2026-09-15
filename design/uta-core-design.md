@@ -307,13 +307,24 @@ fp-01–05 的 FP 案例集里没有把 in-doubt **类型化**的成熟先例（
 ### 8b.1 抽象
 
 ```rust
-/// 一张单据 = 一把锁 + 一条线性版本链。锁的持有者是单据的负责人。
+/// 一张单据 = 一把锁 + 一条线性版本链 + 一个对账钩子。锁的持有者是单据的负责人。
 struct Ticket<I> {
     id: TicketId,
     owner: Principal,            // 当前负责人；锁 = 这个字段的存在
     head: Hash,                  // 版本链末端（内容寻址，每版带父 hash）
     history: Vec<Version<I>>,    // 只追加；I = 意图类型（下单/改单/撤单…）
+    basis: PosSet,               // head 依据的观察位置集
+    fit: Fit,                    // 对账钩子的输出：单据与世界是否仍相符（见下）
     state: Open | Submitted(Hash) | Closed(Outcome),
+}
+
+/// 对账钩子：每种意图类型自带，纯函数，输入是 head 与当前观察侧的 integral。
+/// 不是"外部触发对账"，而是单据在每次相关观察推进时被重新解释出来的一个状态字段。
+trait Reconcile { fn fit(&self, head: &Self, world: &Observed) -> Fit; }
+enum Fit {
+    Fits,                         // 依据仍有效、约束仍满足
+    Drifted(NonEmpty<Drift>),     // 与世界偏离：依据过期 / 被撤回 / 价格越界 / 持仓不足 / 能力变化 …
+    Unknowable(NonEmpty<Gap>),    // 观察侧有 gap，无法判断
 }
 
 enum TicketOp<I> {
@@ -326,6 +337,9 @@ enum TicketOp<I> {
 }
 ```
 
+- **统一的对账钩子（维护者）**：每种意图类型 `I` 实现 `Reconcile`；`fit` 不是一条 `TicketOp`，而是单据 fold 的一部分——观察侧的相关 `Pos` 推进时（依据引用的 range 有新记录、被撤回、出现 gap、能力证据变化），单据的 `fit` 被重新算出。于是**"单据是否偏离"成为一个状态字段，不再需要外部触发对账**：没有人"发起对账"，单据始终知道自己与世界的关系。这让提交前的很多问题不存在——§8.2 第 3 条的依据有效性检查退化为 `fit == Fits` 的读取；`Submitted` 期间世界变了，`fit` 变 `Drifted`，审批人看到的就是一张已偏离的单据，不需要另一套失效逻辑；`Unknowable` 时不能送审也不能放行（fail-closed，C12）。
+- **钩子的输入只有观察侧**（派生 `Trace` 的 `integral` 与能力证据），不含执行事实——单据在 `Reserved` 前不与 IO 壳发生关系，对账钩子也不例外。`Reserved` 之后的对账是另一件事（§8.0 IO 壳的证据 gate），两者同名不同物：前者问"我的意图还对不对"，后者问"我的动作发生了没有"。
+- **钩子是纯函数、按 `I` 分派**：下单看价格/数量/持仓/资金/能力，改单额外看原单是否仍在，撤单只看原单是否仍在。新意图类型 = 新 `Reconcile` 实现，核心不变。
 - **锁 = `owner` 字段的存在**，不是互斥原语。`Open` 即取锁，`Close` 即释放；期间只有 `owner` 能 `Edit`/`Submit`，其他 principal 的 `Edit` 被拒绝（不排队、不产生分支）。
 - **每个 `TicketOp` 都是一条 append 记录**，带 principal 与依据 `Pos`；`Ticket` 自身是这些记录的 fold（§2 的 `integral`），不是被原地修改的对象。因此"锁"也是记录的解释：`owner` 由最近一次 `Open`/`Handoff` 决定。
 - **转移表穷尽**：`Open --Edit--> Open`、`Open --Submit--> Submitted`、`Submitted --Return--> Open`、`Submitted --Close(Reserved)--> Closed`、任意 `--Close(Withdrawn|Rejected|Expired)--> Closed`、`Open|Submitted --Handoff--> 同态`。`Submitted` 期间 `Edit` 被拒（决定绑定的 head 不能变，C11）。
