@@ -220,7 +220,7 @@ struct Program { nodes: Vec<Node>, rules: Vec<Step>, state: Vec<NamedProj> }
 
 ## 8. 写边界的两阶段协议与对账：受控执行一次，用证据确认
 
-**定性（维护者）**：unknown 不是一个孤立的类型问题，是一个**对账系统**；写边界上的协议就是**两阶段事务**（prepare = `Reserved` 持久化，commit = 发出并取得回执，in-doubt = `Undeterminable`，resolution = 对账），且**两阶段只存在于写操作的边界**——STS、`Trace`、程序、消费方都只见结果记录，不参与协议。这是成熟领域（XA in-doubt 事务、支付 pending/settlement 对账、FIX 订单状态查询与重传、工作流平台 at-least-once activity），先例调查在 `research/fp-06-reconciliation-and-in-doubt.md`。**[设计：维护者定性]**
+**定性（维护者）**：unknown 不是一个孤立的类型问题，是一个**对账系统**；写边界上的协议就是**两阶段事务**（prepare = `Reserved` 持久化，commit = 发出并取得回执，in-doubt = `Undeterminable`，resolution = 对账）。**工作假设**：两阶段**大体上**只存在于写操作的边界——STS、`Trace`、程序、消费方只见结果记录，不参与协议；维护者明言这条"不一定对，但大体应该如此"，由 `research/fp-06-reconciliation-and-in-doubt.md` 的先例（XA in-doubt 事务、支付 pending/settlement 对账、FIX 订单状态查询与重传、工作流平台 at-least-once activity）校验：若先例显示 prepare/in-doubt 状态必须被写边界之外的某层可见（例如 lane 阻塞、对账发起方、审计投影），则在此处收窄假设并写明哪一层、为什么。**[设计：维护者定性 + 待校验假设]**
 
 fp-01–05 的 FP 案例集里没有把 in-doubt **类型化**的成熟先例（这是那组调查的范围限制，不是领域无先例）；可迁移的三条：**[证据：fp-01 M7 Mercury；fp-04 命题 12 Stripe/PayPal；fp-03 命题 5 Fowler]**
 
