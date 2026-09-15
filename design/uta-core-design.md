@@ -161,6 +161,17 @@ struct Program { nodes: Vec<Node>, rules: Vec<Step>, state: Vec<NamedProj> }
 - 派生侧按 frontier 压缩（`compact` 只对 `Abelian` 存在）；执行事实侧按 §1 第二层只 append，快照只做加速。**[域 P15]**
 - 谁登记引用、谁批准边界推进、原始证据与派生历史各留多久 → **[spike S8]**。
 
+### 6.1 存储引擎：SQLite（维护者裁决）
+
+两侧 `Trace` 与规则状态落在**一个 SQLite 文件**（WAL 模式），不手写分段日志与索引。**[设计：维护者裁决，理由"否则需要自己写索引"]**
+
+- 每张 trace 表主键 `(range_id, pos)`，`pos` 单调；`integral`/`AS OF`/cursor 之后的记录都是范围扫描，索引由引擎给。
+- §1 第二层"执行事实侧只 append"由**Rust 侧存储接口**保证（该表的模块 API 只暴露 `append`），不靠 SQL 权限；派生侧 `compact` = 在保留边界之下的 `DELETE`，只对 `Abelian` 表存在。
+- "决策 append + 投递 outbox + 规则状态更新"是一个 SQLite 事务：单文件事务消解了跨存储原子性问题。
+- 单写者：核心进程唯一持有该文件（H10 的 OS 文件锁与 SQLite 锁同向）；集成进程与程序隔离域**不接触**数据库，只经内部协议与核心交换记录（C7 凭据链、H2 程序不可信）。
+- 快照只做加速：状态可随时由 `integral` 重建；格式版本存在 schema 表，升级只前进（C14）。
+- 这项裁决关闭 S8 的"引擎"部分；S8 保留"引用登记、边界推进审批、留存时长"三项归属；S3（同一 `Trace` 形状是否两侧共用）在 SQLite 里退化为"两侧是否共用同一张表结构"，实验成本降低但仍是 spike。
+
 ---
 
 ## 7. provider：开放实例，能力是有时效的证据
@@ -260,12 +271,12 @@ struct Program { nodes: Vec<Node>, rules: Vec<Step>, state: Vec<NamedProj> }
 |---|---|---|
 | S1 | unknown 写结果 + 证据渠道的记录模型（无先例） | fp-01/02/04/05 未覆盖 |
 | S2 | 运行期能力证据在 Rust 中是否值得抬进类型 | fp-03 未覆盖 |
-| S3 | 同一 `Trace` 形状统一 differential 派生与 event-sourcing 执行历史 | fp-05 未覆盖末条 |
+| S3 | 同一 `Trace` 形状统一 differential 派生与 event-sourcing 执行历史（SQLite 下 = 是否共用同一表结构，见 §6.1） | fp-05 未覆盖末条 |
 | S4 | 程序状态显式序列化 / 版本化 / 重放边界 | fp-01 M7 前提 |
 | S5 | 小程序语言的表达力与膨胀 | fp-01 M9/M10 |
 | S6 | enum + 解释器 + 增量引擎的性能与资源成本 | fp-03 条目 2/4 |
 | S7 | lane 的作用域键、并发协议、解除阻塞条件 | 域 H4 |
-| S8 | 保留边界、审计引用、原始证据与派生历史的所有权 | fp-05 命题 13 |
+| S8 | 保留边界的引用登记、边界推进审批、原始证据与派生历史留存时长的归属（引擎已裁决为 SQLite，§6.1） | fp-05 命题 13 |
 | S9 | 规则组合的可交换性分类表 | fp-03 命题 6 |
 | S10 | 发出后-持久化前崩溃窗口的恢复协议实测（与 S1 合并） | 域 F5/C1 |
 
