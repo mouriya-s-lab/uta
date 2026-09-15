@@ -232,6 +232,30 @@ fp-01–05 的 FP 案例集里没有把 in-doubt **类型化**的成熟先例（
 
 **在 2PC 里的位置**：UTA 是协调者；venue 是一个**总是单方面决定**的参与者——它不 prepare、不等协调者裁决，收到请求即自行 commit 或 reject，协调者事后只能发现结果。这在 2PC 语义里不是缺失，而是已定义的分支：参与者单方面完成（XA 的 heuristic 结果），协调者进入 in-doubt 并以查询/日志决议。UTA 的每一次写都落在这个分支上，所以决议出口只有 found / absent / inconclusive，协调者没有 commit/rollback 可下达。名字保持"两阶段"，因为中间态语义与决议流程都来自它；只是 UTA 永远处在参与者已单方面决定的那一支。**[设计；先例由 fp-06 校验]**
 
+### 8.0 IO 壳是什么：效应侧的解释器，不是一个函数
+
+前文把两阶段、unknown、lane 队列、能力证据的使用、重放抑制都归到"IO 壳"，却没有定义它。**修正：IO 壳不是"调用 venue 的那个函数"，而是效应侧的解释器**——`Reserved` 之后、决议之前发生的一切都在它里面。它的边界、代数、状态与义务如下。**[设计；维护者指出缺失]**
+
+**抽象**
+
+- **位置**：草稿（§8.3）与 STS 决策（§4）在它之前，产出 `Reserved` 记录；投影与消费方在它之后，只读记录。IO 壳是**唯一**把记录变成对 venue 的动作、把 venue 的回应变成记录的地方；核心里没有第二处接触集成进程的写接口。
+- **输入**：按 lane 顺序 tail 执行事实 `Trace` 上的 `Reserved` 记录；以及对账驱动需要的证据回应。
+- **输出**：只有 append——`Sent(venue_ref?)`、`Undeterminable(reason)`、`Rejected(reason)`、`Evidence(channel, found|absent|inconclusive, raw)`、`CapabilityObserved`、`ChannelGap`。它**不修改**任何记录，不持有权威状态；重启后它的全部状态由 `integral` 重建。
+- **代数**：每个 Attempt 是一条线性的阶段链 `Reserved → (Sent | Undeterminable | Rejected) → Evidence* → Resolved`；IO 壳是这条链的驱动器，每一步的转移条件是：venue 回应类型 × 该 (venue, op) 的能力证据 × 超时参数。链的形状是闭合 sum，转移表穷尽，没有"其他"分支（C13）。
+- **对集成的操作集（IDL，小且闭合）**：`handshake → Capabilities`、`submit(attempt) → Ack(venue_id) | Reject(reason) | NoResponse`、`query_by_key(key) → Found(state) | Absent | Unavailable`、`list_open(scope)`、`list_fills(scope, since)`、`cancel(venue_id | key)`。加一种操作 = 改所有集成（§7 轴 B，显式接受）。`NoResponse`/`Unavailable` 是一等返回值，不是异常。
+- **每 lane 一个驱动实例**，lane 之间无共享状态；lane 内严格按 `Reserved` 位置顺序驱动，队首未 `Resolved` 时不 `submit` 下一条（§4 队首阻塞）。
+- **对账驱动**：`Undeterminable` 后，IO 壳按该 (venue, op) 能力证据声明的渠道**自动**依次取证（by-key → listing → fills/positions），每次取证都 append 一条 `Evidence`；渠道穷尽仍 inconclusive → append 后停下，等待带 principal 的人工 `Evidence`。取证（读）可以重试，`submit`（写）永不重试——这是 IO 壳内部唯一的读写不对称。
+- **重放**：恢复时 IO 壳从日志重建每 lane 的链状态；无后继的 `Reserved` 一律 append `Undeterminable(crash_window)`，然后进入对账驱动。它不 `submit` 任何历史记录。
+
+**现实参考**（待 fp-06 逐条校验）：券商侧 ack/reject/working/fill 的回执形态与 ClOrdID 查询、幂等键保留期、drop copy；支付侧 pending/settlement 与 idempotency key；XA 的 in-doubt 表与 RECO。IO 壳的转移表与渠道顺序按这些先例校准，不自创。
+
+**权衡**
+
+- IO 壳是效应侧**最大**的组件，不是最薄的；把它做薄（"就是个 HTTP 调用"）会让两阶段、unknown、队列语义散落到规则与集成里，正是维护者批评的"不贴近实际"。代价：它内部的转移表与渠道策略是设计的重点，需要走查与 spike（S1/S7/S10）。
+- 它的一切状态都是记录，意味着每一步取证都写日志（体积、噪音）；换来的是重启零丢失与审计完整（S8）。
+- 它与集成进程之间是 JSON-RPC（§7.1）：集成崩溃在 `submit` 中途 = `NoResponse` = `Undeterminable`，不区分"集成挂了"和"venue 没回"——区分靠后续证据，不靠猜。
+- **草稿锁在它之外**（§8.3 属于意图形成期）；因此"UTA 唯一的锁"与"IO 壳内没有锁"两句同时成立。
+
 本文的选择：
 
 - **发 IO 之前用 typestate**：`Reserved` 记录已持久化才允许调用投放（这段转移静态已知，满足 fp-04 命题 4 条件）。
