@@ -220,15 +220,18 @@ struct Program { nodes: Vec<Node>, rules: Vec<Step>, state: Vec<NamedProj> }
 
 ## 8. 写边界的两阶段协议与对账：受控执行一次，用证据确认
 
-**定性（维护者）**：unknown 不是一个孤立的类型问题，是一个**对账系统**；写边界上的协议就是**两阶段事务**（prepare = `Reserved` 持久化，commit = 发出并取得回执，in-doubt = `Undeterminable`，resolution = 对账）。**工作假设**：两阶段**大体上**只存在于写操作的边界——STS、`Trace`、程序、消费方只见结果记录，不参与协议；维护者明言这条"不一定对，但大体应该如此"，由 `research/fp-06-reconciliation-and-in-doubt.md` 的先例（XA in-doubt 事务、支付 pending/settlement 对账、FIX 订单状态查询与重传、工作流平台 at-least-once activity）校验：若先例显示 prepare/in-doubt 状态必须被写边界之外的某层可见（例如 lane 阻塞、对账发起方、审计投影），则在此处收窄假设并写明哪一层、为什么。**[设计：维护者定性 + 待校验假设]**
+**定性（维护者，已由 fp-06 证实）**：unknown 不是一个孤立的类型问题，是一个**对账系统**；写边界上的协议就是**两阶段事务**（prepare = `Reserved` 持久化，commit = 发出并取得业务回执，in-doubt = `Undeterminable`，resolution = 对账）。in-doubt 作为一等持久状态有直接先例：MongoDB `UnknownTransactionCommitResult` error label、Oracle `in-doubt` + `DBA_2PC_PENDING`、PostgreSQL/MySQL `PREPARED`、Kafka `PREPARE_COMMIT`、Seata `PhaseOne_Timeout`——不是 `Option`、字符串或普通 `pending`。**[证据：fp-06 P1、修正 1]**
 
-fp-01–05 的 FP 案例集里没有把 in-doubt **类型化**的成熟先例（这是那组调查的范围限制，不是领域无先例）；可迁移的三条：**[证据：fp-01 M7 Mercury；fp-04 命题 12 Stripe/PayPal；fp-03 命题 5 Fowler]**
+**"两阶段只在写边界"的裁定**：维护者的工作假设在**窄义成立、广义不成立**。窄义——prepare 记录的归属、持久化与协议驱动只在写边界（IO 壳）：9 案例全部如此。广义——in-doubt **状态**无一例外泄漏到四个面：串行化阻塞（PostgreSQL 持锁、Oracle `ORA-01591`、Kafka LSO）、对账发起方（Oracle RECO、外部 TM、客户端 worker）、审计投影（`DBA_2PC_PENDING`、`pg_prepared_xacts`、`serverStatus`）、上游超时语义（`ORA-02050`、MongoDB label 直达 driver、Binance `-1007`）。因此：**协议逻辑只在 IO 壳；`Reserved`/`Sending`/`Undeterminable` 作为记录对 lane 队列（§4）、投影、对账发起、审批人视图合法可见，且都必须按"可能已发生"解释。** 这些面是把状态读出去的通道，不是把 prepare 逻辑复制进读/编排/对账层。**[证据：fp-06 修正 6]**
+
+可迁移的先例（fp-06 P1–P6，另见 fp-01 M7、fp-04 命题 12、fp-03 命题 5）：
 
 1. 决策是对日志的纯函数；投放是**唯一 IO 壳**。
-2. 有幂等键的 venue 用键：key ↔ attempt ↔ latest status。
-3. 重放只重算决策，IO 壳抑制外部写。
+2. 收敛靠稳定身份 + 独立证据；**无一系统把 timeout 当收敛终态**（P2）。
+3. 有幂等键的 venue 用键：key ↔ attempt ↔ latest status；重放只重算决策，IO 壳抑制外部写。
+4. 两阶段不假装原子化 venue 之外的世界（P6：Kafka EOS 只在 Kafka 内、Temporal 不掌握外部写结果）。
 
-**不锁 ≠ 不要两阶段（维护者）**。两阶段协议照样需要，因为它的价值不在锁，而在**已经定义了中间态的副作用语义**：prepare 之后、resolution 之前，效果被定义为"可能已发生"——既不是成功也不是未发生，不能重发，也不能当作没做过，只能由 resolution 用证据收敛。这正是 F5 所需的那个定义，所以 `Reserved` → (`Sent` | `Undeterminable`) → Reconciliation 保持为两阶段协议，而不退化成"发一次、超时算失败"的单阶段调用。凡是能看见 `Reserved`/`Undeterminable` 记录的层（lane 队列、投影、对账发起、审批人视图）**都必须按"可能已发生"解释它**，这就是中间态语义从写边界向外可见的唯一方式；fp-06 校验的是各先例把这条可见性放到了哪些层。**[设计：维护者定性]**
+**不锁 ≠ 不要两阶段（维护者）**。两阶段协议照样需要，因为它的价值不在锁，而在**已经定义了中间态的副作用语义**：prepare 之后、resolution 之前，效果被定义为"可能已发生"——既不是成功也不是未发生，不能重发，也不能当作没做过，只能由 resolution 用证据收敛。这正是 F5 所需的那个定义，所以 `Reserved` → `Sending` → (`Accepted` | `Rejected` | `Undeterminable`) → Evidence* → Resolved 保持为两阶段协议，而不退化成"发一次、超时算失败"的单阶段调用。**[设计：维护者定性]**
 
 **在 2PC 里的位置**：UTA 是协调者；venue 是一个**总是单方面决定**的参与者——它不 prepare、不等协调者裁决，收到请求即自行 commit 或 reject，协调者事后只能发现结果。这在 2PC 语义里不是缺失，而是已定义的分支：参与者单方面完成（XA 的 heuristic 结果），协调者进入 in-doubt 并以查询/日志决议。UTA 的每一次写都落在这个分支上，所以决议出口只有 found / absent / inconclusive，协调者没有 commit/rollback 可下达。名字保持"两阶段"，因为中间态语义与决议流程都来自它；只是 UTA 永远处在参与者已单方面决定的那一支。**[设计；先例由 fp-06 校验]**
 
@@ -243,7 +246,7 @@ fp-01–05 的 FP 案例集里没有把 in-doubt **类型化**的成熟先例（
 | `IO a` 值（纯，可构造、可组合、可检查） | `Reserved` 记录：一个已持久化的"将要对 venue 做什么"的描述，构造它（草稿 → 决策 → append）不接触 venue |
 | `>>=` 组合：后一步依赖前一步的结果 | lane 队列：后一条 `Reserved` 的含义依赖队首的结果，所以顺序执行（§4） |
 | runtime 运行 `main` | IO 壳解释 `Reserved` 链：唯一让效果发生的地方 |
-| 效果发生后只剩结果值与世界的改变 | 效果发生后只剩 append 的记录（`Sent`/`Undeterminable`/`Evidence`）与 venue 侧的改变 |
+| 效果发生后只剩结果值与世界的改变 | 效果发生后只剩 append 的记录（`Accepted`/`Rejected`/`Undeterminable`/`Evidence`）与 venue 侧的改变 |
 | `unsafePerformIO` 是禁忌 | 规则、程序、集成、消费方直接调 venue 写接口是禁忌 |
 | 纯代码可以随意重算，`IO` 不能 | 派生侧与决策可以重放重算，`Reserved` 的运行不能重放（§8 第 3 条） |
 
@@ -253,14 +256,17 @@ fp-01–05 的 FP 案例集里没有把 in-doubt **类型化**的成熟先例（
 
 - **位置**：单据（§8b）与 STS 决策（§4）在它之前，产出 `Reserved` 记录；投影与消费方在它之后，只读记录。IO 壳是**唯一**把记录变成对 venue 的动作、把 venue 的回应变成记录的地方；核心里没有第二处接触集成进程的写接口。
 - **输入**：按 lane 顺序 tail 执行事实 `Trace` 上的 `Reserved` 记录；以及对账驱动需要的证据回应。
-- **输出**：只有 append——`Sent(venue_ref?)`、`Undeterminable(reason)`、`Rejected(reason)`、`Evidence(channel, found|absent|inconclusive, raw)`、`CapabilityObserved`、`ChannelGap`。它**不修改**任何记录，不持有权威状态；重启后它的全部状态由 `integral` 重建。
-- **代数**：每个 Attempt 是一条线性的阶段链 `Reserved → (Sent | Undeterminable | Rejected) → Evidence* → Resolved`；IO 壳是这条链的驱动器，每一步的转移条件是：venue 回应类型 × 该 (venue, op) 的能力证据 × 超时参数。链的形状是闭合 sum，转移表穷尽，没有"其他"分支（C13）。
-- **对集成的操作集（IDL，小且闭合）**：`handshake → Capabilities`、`submit(attempt) → Ack(venue_id) | Reject(reason) | NoResponse`、`query_by_key(key) → Found(state) | Absent | Unavailable`、`list_open(scope)`、`list_fills(scope, since)`、`cancel(venue_id | key)`。加一种操作 = 改所有集成（§7 轴 B，显式接受）。`NoResponse`/`Unavailable` 是一等返回值，不是异常。
+- **输出**：只有 append——`Sending`、`Accepted(venue_ref)`、`Rejected(reason)`、`Undeterminable(reason)`、`Evidence(channel, found|absent|inconclusive, raw)`、`CapabilityObserved`、`ChannelGap`。它**不修改**任何记录，不持有权威状态；重启后它的全部状态由 `integral` 重建。
+- **代数**：每个 Attempt 是一条线性的阶段链 `Reserved → Sending → (Accepted | Rejected | Undeterminable) → Evidence* → Resolved`；IO 壳是这条链的驱动器，每一步的转移条件是：venue 回应类型 × 该 (venue, op) 的能力证据 × 超时参数。链的形状是闭合 sum，转移表穷尽，没有"其他"分支（C13）。
+  - **`Sending` 是发送屏障**：durable append（fsync）之后才允许调用 `submit`。它把崩溃窗口切成两半：`Reserved` 无 `Sending` = **确未发出**；`Sending` 无后继 = **可能已发出**。先例：PostgreSQL `EndPrepare` 先 `XLogFlush` 再 `MarkAsPrepared`。**[证据：fp-06 修正 5]**
+  - **`Accepted` 只认 venue 业务级回执**（订单被受理并给出 venue 身份 / FIX application-level ExecutionReport）。传输 ACK、HTTP 5xx、超时、集成崩溃**都不是** `Accepted`，全部落 `Undeterminable`。先例：Helland "ACK says nothing about delivery, even less about processing"；FIX session 送达 ≠ application 确认；没有一个成熟协议让单个"已发送"同时表达送达、受理、回执。因此集成的 `submit` 只在拿到业务回执时返回 `Ack(venue_id)`，否则 `NoResponse`（§7.1 IDL 义务）。**[证据：fp-06 修正 3]**
+- **对集成的操作集（IDL，小且闭合）**：`handshake → Capabilities`、`submit(attempt) → Ack(venue_id) | Reject(reason) | NoResponse`、`query_by_key(key) → Found(state) | Absent | Unavailable`、`list_open(scope)`、`list_fills(scope, since)`、`cancel(venue_id | key)`、`replay_by_key(key) → Original(response) | Unavailable`（仅在能力证据声明的幂等键保留期内可调）。加一种操作 = 改所有集成（§7 轴 B，显式接受）。`NoResponse`/`Unavailable` 是一等返回值，不是异常。
 - **每 lane 一个驱动实例**，lane 之间无共享状态；lane 内严格按 `Reserved` 位置顺序驱动，队首未 `Resolved` 时不 `submit` 下一条（§4 队首阻塞）。
-- **对账驱动**：`Undeterminable` 后，IO 壳按该 (venue, op) 能力证据声明的渠道**自动**依次取证（by-key → listing → fills/positions），每次取证都 append 一条 `Evidence`；渠道穷尽仍 inconclusive → append 后停下，等待带 principal 的人工 `Evidence`。取证（读）可以重试，`submit`（写）永不重试——这是 IO 壳内部唯一的读写不对称。
-- **重放**：恢复时 IO 壳从日志重建每 lane 的链状态；无后继的 `Reserved` 一律 append `Undeterminable(crash_window)`，然后进入对账驱动。它不 `submit` 任何历史记录。
+- **对账驱动的自动化边界**：`Undeterminable` 后，IO 壳按该 (venue, op) 能力证据声明的渠道**自动**依次取证（by-key → listing+venue 身份 → fills/positions → 保留期内 replay-by-key），每次取证 append 一条 `Evidence`；渠道给出 **found / absent 即自动收敛**；渠道穷尽仍 inconclusive → append 后**停下等带 principal 的人工 `Evidence`**，IO 壳**永不 heuristic**。先例谱系：能全自动收敛的系统同时拥有权威结果源与防重身份（Oracle RECO 有 commit record、Kafka 有 coordinator log、Seata 有 TC state）；权威源在系统外的（PostgreSQL/MySQL 外部 TM、Stripe/Binance/Temporal）自动化止于"重建状态 / 触发查询 / 一次安全重放"，决议交外部。UTA 因 F1 权威恒在外，落在后一侧。取证（读）可以重试，`submit`（写）永不重试。**[证据：fp-06 修正 7；域 C1/C2/C12]**
+  - `replay_by_key` 是唯一形似写的渠道：同幂等键重放在保留期内语义上是查询（Stripe 同 key 拿回原响应），但保留期声明错误即重复下单（Longbridge 10 分钟缓存、IBKR 无键）。**默认关闭，按 venue 显式开启，且只在能力证据声明的保留期内**；渠道顺序里排最后。
+- **重放**：恢复时 IO 壳从日志重建每 lane 的链状态；`Reserved` 无 `Sending` 者仍是可安全发送的 `Reserved`；`Sending` 无后继者 append `Undeterminable(crash_window)` 进入对账驱动。它不 `submit` 任何已有 `Sending` 的记录。
 
-**现实参考**（待 fp-06 逐条校验）：券商侧 ack/reject/working/fill 的回执形态与 ClOrdID 查询、幂等键保留期、drop copy；支付侧 pending/settlement 与 idempotency key；XA 的 in-doubt 表与 RECO。IO 壳的转移表与渠道顺序按这些先例校准，不自创。
+**现实参考**（fp-06 已逐条校验）：券商侧 ack/reject/working/fill 的回执形态与 ClOrdID 查询（Binance `-1007` "send status unknown"、FIX Order Status Request）、幂等键保留期、drop copy；支付侧 pending/settlement 与 idempotency key（Stripe）；XA 的 in-doubt 表与 RECO（Oracle）；MongoDB `UnknownTransactionCommitResult` 的 retry-commit-only 语义。IO 壳的转移表与渠道顺序按这些先例校准，不自创。
 
 **权衡**
 
@@ -271,15 +277,15 @@ fp-01–05 的 FP 案例集里没有把 in-doubt **类型化**的成熟先例（
 
 本文的选择：
 
-- **发 IO 之前用 typestate**：`Reserved` 记录已持久化才允许调用投放（这段转移静态已知，满足 fp-04 命题 4 条件）。
-- **发出之后是持久的运行期 enum + 证据 gate**：IO 壳写回 `Sent | Undeterminable`；`Undeterminable` 的唯一后继是携带 P1 声明渠道证据的 Reconciliation 记录（found / absent / inconclusive；无渠道或 inconclusive → 停在带 principal 的人工）。同 lane 在 `Undeterminable` 无后继时不产生新 Attempt。**[域 C1/C2/C12]**
-- **恢复协议**：重启时任何 `Reserved` 且无 `Sent`/`Undeterminable` 后继的尝试**一律视为 `Undeterminable`** 进入证据 gate——发出与持久化之间的崩溃窗口无法区分，只能保守。"重放关闭 IO"不覆盖这个窗口。**[设计；修正自阅读评审 §八]**
-- 不宣称"unknown 的可组合代数"。记录模型与恢复协议按 fp-06 的对账先例校准 → **[spike S1/S10]**。
+- **发 IO 之前用 typestate**：`Reserved` → `Sending` 的转移静态已知（fp-04 命题 4 条件成立）；写边界特指**第一次可能使 venue 持久变化的投放调用及其本地持久化交界**，不是任意接口边界。**[证据：fp-06 修正 2]**
+- **发出之后是持久的运行期 enum + 证据 gate**：`Undeterminable` 的**唯一恢复责任**归对账通道；`Evidence` 是容纳 {by-key / listing+身份 / fills-positions / 保留期内 replay / 人工} 的 sum，其结论 found / absent 才是终态，inconclusive 停在人工。同 lane 在 `Undeterminable` 未 `Resolved` 时不产生新 Attempt。**[证据：fp-06 修正 4；域 C1/C2/C12]**
+- **恢复协议**：见 §8.0"重放"——`Sending` 屏障使"确未发出"与"可能已发出"可区分；只有后者升为 `Undeterminable`。**[证据：fp-06 修正 5]**
+- 不宣称"unknown 的可组合代数"：本次 9 个一手案例未见"多个 unknown 组合成新 unknown"的运算，不写成行业无先例。记录模型细节 → **[spike S1/S10]**。
 
 ### 8.1 场景：买入请求超时
 
-1. 行情到达，形成带位置的输入。2. 增量计算产生突破信号（派生侧）。3. 程序产生买入意图，记录输入依据 `Pos` 集。4. STS 检查授权、输入约束、审批、期限、lane。5. 持久化 `Reserved`。6. IO 壳发送。7. 超时 → 记 `Undeterminable`，不记失败。8. 同 lane 阻塞。9. 按能力证据渠道查询幂等键 / 订单 / 成交，或进入人工。10. 追加对账证据，规则决定收敛与解除阻塞。
-若行情随后修订：撤回旧信号，不抹去发送历史。若进程重启：重放恢复状态，不重发；`Reserved` 无后继者按恢复协议处理。
+1. 行情到达，形成带位置的输入。2. 增量计算产生突破信号（派生侧）。3. 程序产生买入意图，记录输入依据 `Pos` 集。4. STS 检查授权、输入约束、审批、期限、lane。5. 持久化 `Reserved`。6. IO 壳 durable append `Sending`，调用 `submit`。7. 超时/无业务回执 → 记 `Undeterminable`，不记失败。8. 同 lane 阻塞。9. 按能力证据渠道查询幂等键 / 订单 / 成交，或进入人工。10. 追加对账证据，规则决定收敛与解除阻塞。
+若行情随后修订：撤回旧信号，不抹去发送历史。若进程重启：重放恢复状态；`Reserved` 无 `Sending` 者仍可发，`Sending` 无后继者升 `Undeterminable` 进对账。
 
 ### 8.2 副作用来自读；读→写依赖不是隔离问题，是依据的有效性问题（维护者）
 
@@ -377,7 +383,7 @@ enum TicketOp<I> {
 | 身份 | `(venue, native_id)` opaque + 智能构造；instrument 只在 venue 内有意义；换名不是安全，构造器隐藏才是 | fp-04 命题 16；域 F2 |
 | 时间 | event_time / recv_time 分离；deadline 用单调钟；顺序只有 `(range, seq)` 偏序 | fp-04 命题 9/11；域 F11 |
 | 错误 | 每规则封闭 sum；venue 映射保留 `Unmapped` | fp-04 命题 8；域 C13 |
-| 外部写结果 | `Reserved | Sent | Undeterminable` + 证据记录，非 `Option`/字符串 | fp-01 M11 DAML 反例 |
+| 外部写结果 | `Reserved | Sending | Accepted | Rejected | Undeterminable` + `Evidence` 记录，非 `Option`/字符串 | fp-06 P1（MongoDB `UnknownTransactionCommitResult`、Oracle in-doubt）；fp-01 M11 DAML 反例 |
 
 ---
 
@@ -415,7 +421,7 @@ enum TicketOp<I> {
 
 1. 代码库中不存在同时承载 provider 字段与业务状态的 struct；订单/持仓只作为对执行事实 `Trace` 的 fold 或非权威读模型出现。
 2. 可交换规则集通过交换性测试；顺序固定规则链的顺序由代码显式固定并有测试。
-3. 任一 `Undeterminable` 记录在没有 Reconciliation 后继时，同 lane 无新 Attempt；重启后无后继的 `Reserved` 被记为 `Undeterminable`。
+3. 任一 `Undeterminable` 记录未 `Resolved` 时，同 lane 无新 Attempt；重启后无后继的 `Sending` 被记为 `Undeterminable`，无 `Sending` 的 `Reserved` 不被误升。
 4. 压缩后所有仍被引用的 `Pos` 均 ≥ 保留边界。
 5. 新 provider 接入不改核心 crate；新操作种类必然改全部 provider。
 6. latest 消费者的每次合并都可追溯到声明的窗口界或 `conflated` gap。
@@ -443,7 +449,7 @@ enum TicketOp<I> {
 ## 15. 与既有文档的关系
 
 - `problem-domain.md`（迁移自原 uta-design.md §1 问题域与附录 B）继续有效；原 uta-design.md §3–§6 的"五轴投影 + P6–P11 现象表照抄成类型"的设计中心被本文取代。
-- `research/fp-00-synthesis.md` 是本文每条 **[证据]** 的索引；`fp-01`–`fp-05` 是一手出处。
+- `research/fp-00-synthesis.md` 是本文 FP 案例 **[证据]** 的索引；`fp-01`–`fp-05` 是一手出处；`fp-06` 是 §8 写边界/in-doubt/对账的一手出处。
 - 讨论记录：两位讨论者（steady/divergent）的压力测试与一次外部阅读评审的修正已并入 §1 §2.1 §3 §4 §5 §8。
 
 ---
