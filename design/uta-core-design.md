@@ -218,9 +218,11 @@ struct Program { nodes: Vec<Node>, rules: Vec<Step>, state: Vec<NamedProj> }
 
 ---
 
-## 8. 写与 unknown：受控执行一次，用证据确认
+## 8. 写边界的两阶段协议与对账：受控执行一次，用证据确认
 
-研究最大缺口：没有成熟案例直接建模"已发出、既非成功也非失败、不得盲重试"。可迁移的只有三条：**[证据：fp-01 M7 Mercury；fp-04 命题 12 Stripe/PayPal；fp-03 命题 5 Fowler]**
+**定性（维护者）**：unknown 不是一个孤立的类型问题，是一个**对账系统**；写边界上的协议就是**两阶段事务**（prepare = `Reserved` 持久化，commit = 发出并取得回执，in-doubt = `Undeterminable`，resolution = 对账），且**两阶段只存在于写操作的边界**——STS、`Trace`、程序、消费方都只见结果记录，不参与协议。这是成熟领域（XA in-doubt 事务、支付 pending/settlement 对账、FIX 订单状态查询与重传、工作流平台 at-least-once activity），先例调查在 `research/fp-06-reconciliation-and-in-doubt.md`。**[设计：维护者定性]**
+
+fp-01–05 的 FP 案例集里没有把 in-doubt **类型化**的成熟先例（这是那组调查的范围限制，不是领域无先例）；可迁移的三条：**[证据：fp-01 M7 Mercury；fp-04 命题 12 Stripe/PayPal；fp-03 命题 5 Fowler]**
 
 1. 决策是对日志的纯函数；投放是**唯一 IO 壳**。
 2. 有幂等键的 venue 用键：key ↔ attempt ↔ latest status。
@@ -231,7 +233,7 @@ struct Program { nodes: Vec<Node>, rules: Vec<Step>, state: Vec<NamedProj> }
 - **发 IO 之前用 typestate**：`Reserved` 记录已持久化才允许调用投放（这段转移静态已知，满足 fp-04 命题 4 条件）。
 - **发出之后是持久的运行期 enum + 证据 gate**：IO 壳写回 `Sent | Undeterminable`；`Undeterminable` 的唯一后继是携带 P1 声明渠道证据的 Reconciliation 记录（found / absent / inconclusive；无渠道或 inconclusive → 停在带 principal 的人工）。同 lane 在 `Undeterminable` 无后继时不产生新 Attempt。**[域 C1/C2/C12]**
 - **恢复协议**：重启时任何 `Reserved` 且无 `Sent`/`Undeterminable` 后继的尝试**一律视为 `Undeterminable`** 进入证据 gate——发出与持久化之间的崩溃窗口无法区分，只能保守。"重放关闭 IO"不覆盖这个窗口。**[设计；修正自阅读评审 §八]**
-- 不宣称"unknown 的可组合代数"——无先例。记录模型与恢复协议 → **[spike S1/S10]**。
+- 不宣称"unknown 的可组合代数"。记录模型与恢复协议按 fp-06 的对账先例校准 → **[spike S1/S10]**。
 
 ### 8.1 场景：买入请求超时
 
