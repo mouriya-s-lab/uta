@@ -288,7 +288,7 @@ fp-01–05 的 FP 案例集里没有把 in-doubt **类型化**的成熟先例（
 - 当写**依赖读**（限价单的价格来自查询/最新报价，数量来自持仓读数，撤单目标来自订单 listing）时，读与写之间出现一个边界，**它与数据库事务的隔离要求完全不同**：venue 是外部世界，没有 serializable snapshot 可锁；能做的不是隔离，而是——
   1. 读本身是一条带 `Pos` 的观察记录（一次性查询也写入派生侧 `Trace`，与推送观察同形，§2/§3）；
   2. Intent 的**依据**字段记录它消费的 `Pos` 集与取值（§2.1）；
-  3. 写边界 prepare（`Reserved` 之前）由一条 STS 规则检查依据的**有效性**：依据位置相对当前完备进度的滞后不超过该操作声明的窗口，依据引用的记录未被撤回（派生侧负 diff），待决集合版本与决定时的期望一致（C11）。不满足 → 规则否决（`PredicateFailure`，fail-closed，C12），不发出；
+  3. 写边界 prepare（`Reserved` 之前）由一条 STS 规则读取单据的两层状态（§8b.1）：第一层 `validity == Fresh`（依据滞后不超过该操作声明的窗口、未被撤回、未落到保留边界下），第二层 `fit` 中该账户 × 操作种类要求的检查项均为 `Fits`；`Submitted(head)` 与决定绑定的 head 一致（C11）。不满足 → 规则否决（`PredicateFailure`，fail-closed，C12），不发出。规则**不自己算**这些——它们是单据 fold 已经算好的状态字段；
   4. 有效性窗口是**操作种类 × 账户策略**的参数，不是全局常量；无窗口声明的操作默认要求依据不晚于最近一次完备进度。
 - **UTA 唯一的锁是单据（§8b）；执行阶段与观察侧没有锁（维护者）**。提交是消费动作，只有有权消费者才谈得上锁。F1：venue 域事实（账户、持仓、订单、成交、价格）由 venue 消费与裁决，UTA 无权决定是否消费，因此对它们**不存在 UTA 的锁**。UTA 自己的记录（审批、意图、尝试、队列顺序、程序装载、订阅表）是 UTA 说出的话，UTA 对它们有**权威**，但权威不是锁：append-only 日志上顺序就是位置本身——单写者（H10）、每次 append 原子、没有第二个写者争同一位置。唯一例外是**意图形成期的单据**：那里确实有多个编辑者争同一份东西，单据本身就是锁（§8b）。过期读由 C11 的依据版本**可见**，不需要锁让它不可能。
   - **对 venue 的写入通道**：每 (账户, 子账户) 一条有序队列（H4）。它的有序与队首阻塞来自**通讯协议**——后续写的含义依赖队首结果（见 §4"队首阻塞是通讯协议的一部分"），不是 UTA 抢占通道的锁；UTA 不能通过"先拿到通道"改变 venue 消费什么，只能决定自己以什么顺序把请求交给协议。
@@ -314,18 +314,22 @@ struct Ticket<I> {
     head: Hash,                  // 版本链末端（内容寻址，每版带父 hash）
     history: Vec<Version<I>>,    // 只追加；I = 意图类型（下单/改单/撤单…）
     basis: PosSet,               // head 依据的观察位置集
-    fit: Fit,                    // 对账钩子的输出：单据与世界是否仍相符（见下）
+    validity: Validity,          // 第一层：依据有效性（总有）
+    fit: Fit,                    // 第二层：意图专属对账，逐项状态（可能全部 Unavailable）
     state: Open | Submitted(Hash) | Closed(Outcome),
 }
 
-/// 对账钩子：每种意图类型自带，纯函数，输入是 head 与当前观察侧的 integral。
-/// 不是"外部触发对账"，而是单据在每次相关观察推进时被重新解释出来的一个状态字段。
-trait Reconcile { fn fit(&self, head: &Self, world: &Observed) -> Fit; }
-enum Fit {
-    Fits,                         // 依据仍有效、约束仍满足
-    Drifted(NonEmpty<Drift>),     // 与世界偏离：依据过期 / 被撤回 / 价格越界 / 持仓不足 / 能力变化 …
-    Unknowable(NonEmpty<Gap>),    // 观察侧有 gap，无法判断
-}
+/// 第一层：依据有效性。任何单据都有，不依赖意图类型，不需要钩子。
+fn basis_valid(basis: &PosSet, world: &Observed, window: Lag) -> Validity;
+enum Validity { Fresh, Stale(Lag), Retracted(PosSet), BeyondRetention(PosSet) }
+
+/// 第二层：意图专属对账。一组检查，每项声明它需要哪些观察输入。
+/// 由 (意图类型 × 该 venue 当前能力证据) 在评估时解析，不存在单据上；握手变了它就变。
+struct Check<I> { name: CheckName, needs: Set<RangeKind>, eval: fn(&I, &Observed) -> CheckResult }
+type Hook<I> = Vec<Check<I>>;
+enum CheckResult { Fits, Drifted(Drift), Unknowable(Gap) }        // 输入齐全时的三种结果
+type Fit = Map<CheckName, Fits | Drifted(Drift) | Unknowable(Gap) | Unavailable(Set<RangeKind>)>;
+//                                                                   ^ 该项需要的输入观察侧没有
 
 enum TicketOp<I> {
     Open   { by: Principal, initial: I, basis: PosSet },   // 建立单据 = 取得锁 = 声明负责
@@ -337,9 +341,12 @@ enum TicketOp<I> {
 }
 ```
 
-- **统一的对账钩子（维护者）**：每种意图类型 `I` 实现 `Reconcile`；`fit` 不是一条 `TicketOp`，而是单据 fold 的一部分——观察侧的相关 `Pos` 推进时（依据引用的 range 有新记录、被撤回、出现 gap、能力证据变化），单据的 `fit` 被重新算出。于是**"单据是否偏离"成为一个状态字段，不再需要外部触发对账**：没有人"发起对账"，单据始终知道自己与世界的关系。这让提交前的很多问题不存在——§8.2 第 3 条的依据有效性检查退化为 `fit == Fits` 的读取；`Submitted` 期间世界变了，`fit` 变 `Drifted`，审批人看到的就是一张已偏离的单据，不需要另一套失效逻辑；`Unknowable` 时不能送审也不能放行（fail-closed，C12）。
+- **偏离是状态，不是动作（维护者）**：`validity` 与 `fit` 都不是 `TicketOp`，是单据 fold 的一部分——依据引用的 range 推进、被撤回、出现 gap、能力证据变化时重算（作为派生 DAG 节点，§5 解释①）。于是**"单据是否偏离"是状态字段，不需要外部触发对账**：没有人"发起对账"，单据始终知道自己与世界的关系。§8.2 第 3 条的依据有效性检查退化为读 `validity == Fresh`；`Submitted` 期间世界变了，审批人看到的就是一张 `Drifted` 的单据，不需要另一套失效逻辑；`Unknowable` 不能送审也不能放行（fail-closed，C12）。
+- **两层分开的原因**：第一层对任何单据都能算（只看 `Pos`），第二层依赖意图类型与 venue 给不给对应观察。混成一层会让"不能做意图对账"的单据连新鲜度都丢掉。
+- **钩子不一定存在，不一定能对账（维护者）**：第二层是若干检查的乘积，不是一个函数——限价买单要对价格（报价流）、资金（余额流）、持仓（持仓流）、可交易性（能力证据），venue 给报价不给持仓就是"价格能对、持仓不能对"，不是整个钩子消失。所以 `Fit` 逐项记 `Unavailable(缺哪些输入)`，而不是一个全局 `NoHook`。放行策略看的是"哪些检查必须 `Fits`"（按账户 × 操作种类定），不是"有没有钩子"。**`Unavailable` 不得用 `Fits` 冒充**。
+- **`Unavailable` 是可行动的**：缺的输入若 venue 有一次性查询能力，发一次只读查询就产生一条观察记录（§8.2 第 1 条），该项随即可算——读是安全的、可批处理的（§7）。规则可以选"取一次再判"、"无该项对账则人工"、"无该项对账则不发"；真正的"不能对账"= 缺的输入没有任何渠道可得，这由能力证据说了算。
 - **钩子的输入只有观察侧**（派生 `Trace` 的 `integral` 与能力证据），不含执行事实——单据在 `Reserved` 前不与 IO 壳发生关系，对账钩子也不例外。`Reserved` 之后的对账是另一件事（§8.0 IO 壳的证据 gate），两者同名不同物：前者问"我的意图还对不对"，后者问"我的动作发生了没有"。
-- **钩子是纯函数、按 `I` 分派**：下单看价格/数量/持仓/资金/能力，改单额外看原单是否仍在，撤单只看原单是否仍在。新意图类型 = 新 `Reconcile` 实现，核心不变。
+- **检查是纯函数、按 `I` 分派**：下单看价格/资金/持仓/能力，改单额外看原单是否仍在，撤单只看原单是否仍在。新意图类型 = 新的检查集，核心不变。
 - **锁 = `owner` 字段的存在**，不是互斥原语。`Open` 即取锁，`Close` 即释放；期间只有 `owner` 能 `Edit`/`Submit`，其他 principal 的 `Edit` 被拒绝（不排队、不产生分支）。
 - **每个 `TicketOp` 都是一条 append 记录**，带 principal 与依据 `Pos`；`Ticket` 自身是这些记录的 fold（§2 的 `integral`），不是被原地修改的对象。因此"锁"也是记录的解释：`owner` 由最近一次 `Open`/`Handoff` 决定。
 - **转移表穷尽**：`Open --Edit--> Open`、`Open --Submit--> Submitted`、`Submitted --Return--> Open`、`Submitted --Close(Reserved)--> Closed`、任意 `--Close(Withdrawn|Rejected|Expired)--> Closed`、`Open|Submitted --Handoff--> 同态`。`Submitted` 期间 `Edit` 被拒（决定绑定的 head 不能变，C11）。
