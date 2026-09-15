@@ -196,7 +196,7 @@ struct Program { nodes: Vec<Node>, rules: Vec<Step>, state: Vec<NamedProj> }
 
 ## 7. provider：开放实例，能力是有时效的证据
 
-- provider = 开放实例（trait 实现 / 独立集成进程），核心对其多态；加 provider 不改核心（轴 A additive）。核心的**操作种类集合小且闭合**；加一种操作必然改所有 provider（轴 B），显式接受。**[证据：fp-03 命题 8；fp-01 M1 Haxl `DataSource`]**
+- provider = 开放实例，核心对其多态；加 provider 不改核心（轴 A additive）。核心的**操作种类集合小且闭合**；加一种操作必然改所有 provider（轴 B），显式接受。**[证据：fp-03 命题 8；fp-01 M1 Haxl `DataSource`]**
 - 能力 = **运行期握手获得的值**，带范围、来源、观察时间：
   ```rust
   struct Capability { op: OpKind, verdict: Verdict, scope: Scope, source: Source, observed_at: Instant }
@@ -206,6 +206,13 @@ struct Program { nodes: Vec<Node>, rules: Vec<Step>, state: Vec<NamedProj> }
 - 集成输出两层：**raw evidence**（原始字节永远保留，C13）与 **validated payload**（入口解析成内部小词表；parse-don't-validate，构造器隐藏）。venue 状态映射按 venue 枚举输入，输出**必须保留 `Unmapped(raw)`**，不能靠"无 catch-all"伪造穷尽。**[证据：fp-04 命题 15/16；域 C13/F6]**
 - 只读请求可批处理/去重的条件：无可观测副作用 + 稳定 identity + 幂等 + 可接受批窗口。写永不进这条路。**[证据：fp-03 命题 4；fp-02 命题 1/2]**
 - venue 词汇不进核心。**[域 B6]**
+
+### 7.1 集成 = 独立进程，协议 = JSON-RPC（维护者裁决）
+
+- **每个集成是独立 OS 进程**（每 venue × 账户一个），是核心之外的独立故障域与凭据终点：凭据链 `统一路径封存文件 → 核心 → 该集成进程`（§0.1、C7）；集成崩溃只影响它拥有的 range（记 SourceGap），核心不受影响。**[设计：维护者裁决（D1）]**
+- **集成不一定用 Rust 写。** 集成进程的语言不受限（venue SDK 是什么语言就用什么语言）；因此核心↔集成的契约必须是跨语言的：一份 IDL，任何语言按 IDL 实现即可接入。**[设计：维护者裁决]**
+- **核心↔集成、核心↔消费方的传输默认 JSON-RPC**（序列化文本，跨语言、可读、可录制回放）。**特定情况**（高频推送流的吞吐/延迟经实测不达标）**单独考虑二进制序列化 RPC**，作为同一 IDL 的另一种编码，不是第二套协议；触发条件与基准在 spike 中定。**[设计：维护者裁决（D2）]** Windows 上无 UDS（§1.4.2），传输层按 OS 选本地回环 + 本地令牌或命名管道，不影响 IDL。
+- 集成的义务由 IDL 固定：能力握手（§7 `Capability`）、观察记录按 range 位置推进、raw evidence + validated payload 双层输出、投放与对账查询（只由核心 IO 壳调用）、SourceGap 上报。集成**不持有**规则状态、不做决策、不接触 SQLite。
 
 ---
 
