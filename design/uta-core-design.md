@@ -167,7 +167,10 @@ struct Program { nodes: Vec<Node>, rules: Vec<Step>, state: Vec<NamedProj> }
 
 ### 5.1 程序隔离运行时的前提（维护者约束）
 
-**Wasm 只在"三 OS（macOS / Linux / Windows）通用、开箱即用"的方案存在时才可选。**[设计：维护者约束]** 开箱即用的判定：作为普通 Rust 依赖引入即可在三 OS 构建与运行，不需要系统级安装、外部工具链或平台特判；预算手段（fuel/内存上限）与 trap 语义在三 OS 一致；打包为独立二进制时无平台差异。
+**Wasm 只在"三 OS（macOS / Linux / Windows）通用、开箱即用"的方案存在时才可选。**[设计：维护者约束]** 开箱即用的判定：
+1. 作为普通 Rust 依赖引入即可在三 OS 构建与运行，不需要系统级安装、外部工具链或平台特判；
+2. 预算手段（fuel / 内存上限）与 trap 语义在三 OS 一致；
+3. 打包为独立二进制时无平台差异。
 
 - 已知事实：Wasmtime 无 live `Store` 快照/恢复 API，Component Model async ABI 未完成，fuel 是确定性指令预算但管不住阻塞 host 调用（`problem-domain.md` §1.4.2）。这些是能力缺口，不是三 OS 通用性缺口；通用性本身需在 spike 中按上述判定实测。
 - 若判定不成立，程序隔离退回**受监督子进程**：预算靠 OS 进程限制，状态经内部协议显式序列化；§5 的封闭值代数与两种解释不变——隔离运行时只是解释器的宿主，不进入设计中心。
