@@ -68,20 +68,18 @@ flowchart LR
 
 **底层无关的来源**：组合子从不提 venue，只接受三种输入——锚点、注册表里的具名字段（带类型）、经 `payload_schema` 访问器取得的载荷值。访问器本身是组合子（`field::<Price>("px")`），类型随访问器进入表达式。协议差异被压在访问器一层，谓词之上一律纯组合：`InBand(field("px"), lo, hi)` 对任何注册了 `px: Price` 的 venue 都成立。
 
-**四个派生**（取代手写）：
+**一个值表示，四个 fold**。组合子树在 Rust 里是**一个 enum 值**（deep embedding），不是泛型类型——Rust 没有类型级和/积的自动构造，`required_inputs` 与"失败变体之并"从关联类型派不出来；§5 已经为程序选了值树，核心规则、处理器、检查项用同一个表示。四种"派生"因此都是对这棵树的 fold，在**装载/启动期**求出，而不是编译期：**[设计；Rust 可行性评估后收窄]**
 
-| 派生出的东西 | 怎么派生 | 取代 |
+| fold | 结果 | 取代 |
 |---|---|---|
-| 输入需求 `required_inputs` | 组合树里所有 `field` 访问器的 stream kind 之并 | §7.0 推论 1 变为字面意义的推导，不是登记 |
-| 输出类型 | `And<P, Q>: Pred`、`Map<P, F>: Comb<In, F::Out>`、`Scan<C, S>`——从组合形状得出，同 parser combinator | 手写的 `IntentAlignment` / `Event` 类型 |
-| 失败 sum | 每个组合子贡献自己的失败变体，树的失败类型 = 各变体之并 | §4 "每规则封闭 sum"由树保证穷尽，不再手写 |
-| 解释器 | 同一棵树至少四种解释：求值；提取 `required_inputs`；为审批人生成"为何否决"；静态检查"引用了没有集成提供的字段" | 每条规则各写一遍这些逻辑 |
+| `required_inputs` | 树里所有 `field` 访问器的 stream kind 之并；启动期与握手声明比对，缺失即 fail-closed | §7.0 推论 1 变为字面意义的推导，不是登记 |
+| 求值 | 谓词 → `bool`；`Comb` → 值；`Fold` → 状态 | — |
+| 失败 | **单一 kind enum + 路径上下文**（`InBand{field, lo, hi, actual}`、`FieldAbsent(kind)`…，附树中路径），不是各组合子变体的类型级并集 | §4 "每规则封闭 sum"改为"失败按 kind 数据化，穷尽性在 kind 层" |
+| 说明 | 为审批人生成"为何否决"；静态检查"引用了没有集成提供的字段" | 每条规则各写一遍 |
 
-一份项、多种解释。**[证据：fp-01 案例 3 Composing Contracts；fp-03 条目 5 Servant]**
+一份项、多种解释。**[证据：fp-01 案例 3 Composing Contracts；fp-03 条目 5 Servant]** 访问器 `field::<Price>("px")` 在值树里是带类型标签的叶子，类型在装载期校验；类型化的 builder API 可以叠在值树之上，但**值树是唯一权威表示**，builder 只是构造糖。
 
-**两个层级，同一个代数**：
-- **编译期**：核心规则、处理器、钩子检查项是 Rust 泛型组合子，`required_inputs` / `Rejection` / 输出类型在编译期派生。
-- **运行期**：AI 程序（D6）是同一代数的 JSON 值树，装载时做同样的派生——静态检查变成 schema 校验。**[证据：fp-01 M9 Marlowe 闭合构造子]**
+**核心与程序的区别只在谁构造、何时校验**：核心规则由实现者构造，在启动期校验；AI 程序（D6）由程序作者构造，在装载期校验。校验相同、表示相同、解释器相同。**[证据：fp-01 M9 Marlowe 闭合构造子]** 代价：核心规则的错配从编译期移到启动期——与 §7"能力是运行期证据"同一哲学，且规则数量少、由测试覆盖。
 
 **统一的**：处理器触发 = `Pred<Envelope>`；STS guard = `Pred<(Context, RuleState, Input)>`；`AlignmentCheck.eval` = `Comb<Observed, CheckResult>`；程序 `DerivationNode` = 派生流上的 `Comb`；订阅过滤 = `Pred<Envelope>`；投影 = `Fold`。
 
@@ -196,7 +194,7 @@ trait Rule {
 }
 ```
 
-- **规则独立性与显式嵌入**：授权、输入约束、审批、期限、lane、fail-closed 各为独立规则，通过 `embed_subrule` 显式嵌入子规则的 RuleState/Outcome/Rejection，不共同修改单一全局对象。**[证据：fp-01 M8 cardano STS；fp-04 命题 5]**
+- **规则独立、组合具名**：授权、输入约束、审批、期限、lane、fail-closed 各为独立规则，各有自己的 `RuleState`/`Outcome`/`Rejection`，不共同修改单一全局对象。**[证据：fp-01 M8 cardano STS；fp-04 命题 5]** 组合不用 cardano 式泛型 `Embed`（Rust 无类型级和/积自动构造，泛型嵌套是 O(N²) 样板或退化到 `BoxError` catch-all）：规则集本就闭合（授权 → 审批 → lane → 过期），组合状态是**具名 struct**，组合 rejection 是**具名 enum**，每个变体 `From` 一条子规则的 rejection。扩展轴是 venue 与协议，不是规则；加规则改这两个具名类型，显式接受。**[设计；Rust 可行性评估后收窄]**
 - **执行解耦**：规则计算"允许执行" ≠ 调用 venue。所有决定先持久化为记录，再由 §8.1 IO 壳执行。
 - **核心状态最小化**：**核心只持有规则运行所需的状态**。订单投影、持仓投影仅是消费侧对执行事实 `Journal` 的 fold，可表现为具名数据结构，但**不作权威、不被规则修改**。**[证据：fp-03 命题 1]** **[设计]**
 - **记录类型按 stream 参数化**：每条 lane / 账户 stream 拥有独立的 Input 集与 decider（Equinox `Category`/`StreamId` 模式），核心不定义全局 effect enum。**[证据：fp-03 条目 7]**
@@ -293,7 +291,7 @@ Emit(EffectRequest { effect_kind: EffectKind, payload: Bytes, basis: Basis, key:
   - 派生侧 `compact_below_retention` 实现为保留边界之下的 `DELETE`，仅适用于 `RetractableDelta` 表。
 - **事务原子性**："决策 append + 投递 outbox + 规则状态更新"封装在同一个 SQLite 事务内，单文件事务消解了跨存储系统的原子性问题。
 - **单写者**：核心进程独占持有该数据库文件（H10 的 OS 文件锁与 SQLite 锁同向生效）；集成进程与程序隔离域**不接触**数据库，仅通过内部协议与核心交换记录（满足 C7 凭据链与 H2 程序不可信要求）。
-- **快照与版本演进**：快照仅用于加速状态恢复，状态随时可由 `fold_state` 重建；格式版本持久化于 schema 表，升级只前进（C14）。
+- **快照与版本演进**：状态随时可由 `fold_state` 重建，但重建从保留边界扫起、成本随历史增长——快照因此是**重启延迟的必需项**，不只是加速；快照频率与保留边界一起归 S8。格式版本持久化于 schema 表，升级只前进（C14）。
 - **对 spike 的收敛影响**：
   - 该裁决关闭 S8 的"引擎选型"部分，S8 仅保留"引用登记、边界推进审批、留存时长"三项归属。
   - S3（两侧是否共用同一 `Journal` 形状）在 SQLite 方案下退化为"两侧是否共用同一张表结构"，实验成本降低但仍保留为 spike。
@@ -441,7 +439,7 @@ IO 壳的转移表与渠道顺序按这些先例校准，不自创。
 - **单据锁在它之外**（§8.3 属于意图形成期）；因此"UTA 唯一的锁"与"IO 壳内没有锁"两句同时成立。
 
 **本文的选择**：
-- **发 IO 之前用 typestate**：`Prepared → SendBarrier` 的转移静态已知（满足 fp-04 命题 4 条件）；写边界特指**第一次可能使 venue 持久变化的投放调用及其本地持久化交界**，不是任意接口边界。**[证据：fp-06 修正 2]**
+- **发 IO 之前用 move-semantics token，不用泛型 typestate**：`SendBarrier` 是一个无 `Copy`、构造器私有、构造器内完成 durable append 的值；`submit` 只接受 `SendBarrier` 值——"没有 `SendBarrier` 值就不能 `submit`"是可测的不变量。泛型 typestate 在崩溃恢复路径失效（从记录重建不能产回不同类型），所以静态保证只覆盖**首执一次**的调用栈；恢复路径全部是运行期 enum（本就如此）。写边界特指**第一次可能使 venue 持久变化的投放调用及其本地持久化交界**，不是任意接口边界。**[证据：fp-06 修正 2]** **[设计；Rust 可行性评估后收窄]**
 - **发出之后是持久的运行期 enum + 证据 gate**：`Undetermined` 的**唯一恢复责任**归对账通道；`ResolutionEvidence` 是容纳 `{by-key | listing+身份 | fills-positions | 保留期内 replay | 人工}` 的 sum，其结论 `found` / `absent` 才是终态，`inconclusive` 停在人工。同 lane 在 `Undetermined` 未 `Resolved` 时不产生新 Attempt。**[证据：fp-06 修正 4；域 C1/C2/C12]**
 - **恢复协议**：见上文"崩溃恢复与重放"——`SendBarrier` 屏障使"确未发出"与"可能已发出"可区分；只有后者升为 `Undetermined`。**[证据：fp-06 修正 5]**
 - **不宣称"unknown 的可组合代数"**：本次 9 个一手案例未见"多个 unknown 组合成新 unknown"的运算，不写成行业无先例。记录模型细节 → **[spike S1/S10]**。
@@ -609,14 +607,26 @@ enum TicketAction<Intent> {
 
 ---
 
-## 10. Rust 映射（bounded spike，非可行性结论）
+## 10. Rust 映射（经两轮可行性评估；性能与样板量仍待 S6）
 
-所需机制均不依赖 HKT：
-- **reify-then-execute**：`enum` + 解释器 `trait`；
-- **STS**：带 `Context`/`RuleState`/`Input`/`embed_subrule`/`Outcome` 关联类型的 `trait`；
-- **`Journal<Record, Delta>`**：泛型；
-- **typestate**：泛型标记（只到 `Prepared → SendBarrier`）；
-- **capability**：不可伪造的 token 类型。
+所需机制均不依赖 HKT，也不需要 ZIO 式 API——ZIO 解决效应多态与依赖注入，UTA 把效应收敛到"IO 壳是唯一效应处"，依赖注入就是 `Context` 参数，两个问题在设计层已消掉。三档：
+
+| 档 | 机制 | Rust 形状 |
+|---|---|---|
+| 直接 | `Journal<Record, Delta>`、`fold_state`、`compact_below_retention` | 泛型 struct + supertrait；`compact` 是一个 `impl<D: RetractableDelta>` 块 |
+| 直接 | frontier / 三种进度 | 自写 `Antichain<T: PartialOrder>`，不引 timely |
+| 直接 | `Program` 值、`Ticket` 状态机、IO 壳链转移表 | `serde` → enum → 穷尽 match；`Id` 越界与环在装载期校验 |
+| 直接 | 增量 DAG | `salsa`（cycle panic 与 fp-05 案例 9⑤ 同形） |
+| 直接 | §0.3 单向边 | crate 依赖方向，反向不编译 |
+| 直接 | SQLite 单写者 | `rusqlite`，事务即函数 |
+| 变形 | §0.2 组合子四种解释 | 一个 enum 值树 + 四个 fold（启动/装载期），不是泛型关联类型派生 |
+| 变形 | §4 规则组合 | 具名 struct + 具名 enum `#[from]`，不是泛型 `Embed` |
+| 变形 | §5.1/§7.0 处理器注册表 | `HashMap<Kind, Box<dyn Handler>>` + 元数据（schema、`required_inputs`、读/写）；启动期求并集与握手比对；不宣称全局穷尽 |
+| 变形 | §8.1 发送屏障 | move-semantics token（私有构造器 + 内含 fsync），不是泛型 typestate |
+| 变形 | §8.3.1 检查项 | `CheckName` 为 per-`Intent` 闭合 enum；`eval` 为对象安全 trait（`Box<dyn AlignmentCheck>`）；`Hash` 需规定 canonical 序列化 |
+| 变形 | capability | 不可伪造 token 类型只授权不执行 |
+
+痛点全是同一个缺口——Rust 没有类型级和/积的自动构造——的不同面孔；规避一律是"值化 + 启动期校验"或"具名类型 + 显式 `From`"。
 
 增量引擎按指标是否可撤回选节点图（Incremental 式）或 differential，二者不是任选，都不能承载外部 unknown Write。不迁移 tagless-final 多态与 Haxl `<*>` 违反 `ap` 的技巧。reify/解释器的性能代价需实测 → **[spike S6]**。**[证据：fp-05 命题 8/12；fp-03 条目 2/4]**
 
@@ -695,11 +705,11 @@ enum TicketAction<Intent> {
 | S3 | 观察侧与效应侧共用同一存储原语/表结构的成本（§2、§6.1）；抽象已裁决为不共享（§0.3） | fp-05 未覆盖末条 |
 | S4 | 程序状态显式序列化 / 版本化 / 重放边界 | fp-01 M7 前提 |
 | S5 | 小程序语言的表达力与膨胀 | fp-01 M9/M10 |
-| S6 | `enum` + 解释器 + 增量引擎的性能与资源成本 | fp-03 条目 2/4 |
+| S6 | enum 值树 + 四个 fold 的求值开销与代码体量；`dyn Handler`/`dyn AlignmentCheck` 分发成本；`salsa` 在派生 DAG 上的 cutoff 粒度 | fp-03 条目 2/4；Rust 可行性评估 |
 | S7 | lane 的并发协议（多 unknown 叠加、部分收敛）与解除阻塞条件；键已裁决为 `(账户, 子账户)`（§4） | 域 H4 |
-| S8 | 保留边界的引用登记、边界推进审批、原始证据与派生历史留存时长的归属（引擎已裁决为 SQLite，§6.1） | fp-05 命题 13 |
-| S9 | 规则组合的可交换性分类表 | fp-03 命题 6 |
-| S10 | 发出后-持久化前崩溃窗口的恢复协议实测（与 S1 合并） | 域 F5/C1 |
+| S8 | 保留边界的引用登记、边界推进审批、留存时长；`fold_state` 重建成本随历史长度的曲线决定快照频率（§6.1） | fp-05 命题 13；Rust 可行性评估 |
+| S9 | 规则组合的可交换性分类表；具名 struct/enum 组合下三层规则的样板量实测 | fp-03 命题 6；Rust 可行性评估 |
+| S10 | 发出后-持久化前崩溃窗口的恢复协议实测：SQLite WAL/fsync 崩溃注入于 `Prepared`/`SendBarrier`/`submit` 各窗口，验证不重复投放（与 S1 合并） | 域 F5/C1 |
 | S11 | Wasm 三 OS 开箱即用性与预算一致性实测；不成立则退回受监督子进程（§5.2） | 维护者约束；problem-domain §1.4.2 |
 
 ---
