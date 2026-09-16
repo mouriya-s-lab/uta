@@ -24,7 +24,7 @@
 | 步 | 机制 | 章节 |
 |---|---|---|
 | 看到了什么 | 载体 `Trace<R, D>`，派生侧可撤回 | §2 §3 |
-| 可以做什么 | 程序 = 封闭值代数，两种解释 | §5 |
+| 可以做什么 | 程序 = 封闭值代数，两种解释；出口是 effect 锚点 | §5 |
 | 受控执行一次 | 单据 → 决策代数 STS → 唯一 IO 壳 | §8.3 §4 §8.1 |
 | 证据确认发生了什么 | unknown 的证据 gate + 恢复协议 | §8.1 |
 
@@ -223,7 +223,7 @@ trait Rule {
 
 ```rust
 enum Node { Const(V), Input(Cursor), Op1(Op1, Id), Op2(Op2, Id, Id), Scan(ScanOp, Id), Window(Id, W), Join(JoinOp, Vec<Id>) }
-enum Step { On(Pattern, Box<Step>), Emit(IntentT), Require(Guard, OnFail), Expire(Deadline, Box<Step>) }
+enum Step { On(Pattern, Box<Step>), Emit(EffectAnchor), Require(Guard, OnFail), Expire(Deadline, Box<Step>) }   // Emit 见 §5.1
 struct Program { nodes: Vec<Node>, rules: Vec<Step>, state: Vec<NamedProj> }
 ```
 
@@ -231,7 +231,7 @@ struct Program { nodes: Vec<Node>, rules: Vec<Step>, state: Vec<NamedProj> }
 - **解释②（决策）**：`rules` → 对日志的 fold，其纯性由数据结构本身保证而非开发约定。**[证据：fp-01 M7 Mercury Workflow]**
 - **输入与输出**：
   - **输入 = 位置推进**（frontier + cursor 之后的记录），程序可见 gap 与两种时间。
-  - **输出 = (Intent 集, 派生记录集)**。
+  - **输出 = (effect 锚点集, 派生记录集)**；锚点经处理器成为 Intent 或读结果（§5.1）。
 - **状态正交划分**：
   - **可安全重算的数据状态**（`Scan`/`Window` 累加器，归属解释①）。
   - **绑定不可逆外部行为的执行状态**（冷却、lane 等待、审批等待、过期，归属解释②）。
@@ -240,7 +240,29 @@ struct Program { nodes: Vec<Node>, rules: Vec<Step>, state: Vec<NamedProj> }
 - **封闭核心与语法界限**：核心越小且越封闭，穷尽验证、预算控制与静态分析能力越强（如 Marlowe 的 6 个构造子、FPF 非图灵完备特性）；作者面向的语法保持朴素，类型级复杂度封在核心内部。构造子膨胀至 TradingView 当量即退化为 Pine-with-limits。**[证据：fp-01 M9/M10；fp-05 案例 14⑥]**
 - 小语言表达真实策略的能力与抗膨胀 → **[spike S5]**；程序状态序列化/版本化/重放边界 → **[spike S4]**。
 
-### 5.1 程序隔离运行时的前提（维护者约束）
+### 5.1 未知副作用：程序留下锚点，处理器决定响应（维护者）
+
+程序需要请求**核心不认识的副作用**（发通知、拉一次历史 K 线、调一个外部模型、下单）。程序的唯一出口是一个 **effect 锚点**，不是对每种副作用各加一个构造子：
+
+```rust
+Emit(EffectAnchor { kind: Tag, payload: Bytes, basis: PosSet, key: Option<Key> })
+```
+
+- **锚点是值，不是调用**（`IO a` 的纪律，§8.1）：被 append 为记录；核心不解释 `payload`。
+- **响应由处理器决定**：注册了该 `Tag` 的副作用处理器接手；未注册则记录留在日志里为 `Unhandled`——有锚点无处理器**不是错误**，与 §7.0 字段无处理器不触发同理。
+- **处理器在注册时声明自己是读副作用还是写副作用**（§8.2）：
+  - 读处理器：立即执行，结果作为观察记录 append（带 `Pos`），程序按位置推进看到它——闭环走观察侧。
+  - 写处理器：锚点被当作 Intent，进入单据 → STS → IO 壳的完整效应路径；结果是执行事实与决议记录。
+- 核心不需要知道副作用是什么，只保证：写类走两阶段，读类可重试，两类都被记录、都带 `basis`。
+
+**推论**：
+1. **程序的封闭代数不随副作用种类膨胀**：`Emit(EffectAnchor)` 是唯一出口，副作用的种类是注册表的事，`Node`/`Step` 不动——这是上文"构造子膨胀"红线的出路。
+2. **对程序与核心同形，只有处理器不同**：下单 `trade.place`（写）、发通知 `notify.telegram`（写——对外部世界也是写）、拉历史 `fetch.bars`（读）三者对程序是同一个构造子。
+3. **两个注册表对称**：入站字段 → 处理器（§7.0）；出站锚点 → 处理器（本节）。都是"出现了什么，则做什么"。
+
+**必须守住**：写处理器**不得**绕过效应路径。注册为写处理器即意味着经过规则链（至少授权与预算），不因"只是发个消息"就直通；否则程序拿到一条不经审批的外部写通道，H2 的不可信程序前提被破坏。**[设计：维护者定性]**
+
+### 5.2 程序隔离运行时的前提（维护者约束）
 
 **Wasm 仅在"三 OS（macOS / Linux / Windows）通用、开箱即用"的方案存在时才可选为隔离运行时。**[设计：维护者约束]** 开箱即用的判定标准：
 1. 作为普通 Rust 依赖引入即可在三 OS 构建与运行，无需系统级安装、外部工具链或平台特判；
@@ -634,7 +656,7 @@ enum TicketOp<I> {
 | S8 | 保留边界的引用登记、边界推进审批、原始证据与派生历史留存时长的归属（引擎已裁决为 SQLite，§6.1） | fp-05 命题 13 |
 | S9 | 规则组合的可交换性分类表 | fp-03 命题 6 |
 | S10 | 发出后-持久化前崩溃窗口的恢复协议实测（与 S1 合并） | 域 F5/C1 |
-| S11 | Wasm 三 OS 开箱即用性与预算一致性实测；不成立则退回受监督子进程（§5.1） | 维护者约束；problem-domain §1.4.2 |
+| S11 | Wasm 三 OS 开箱即用性与预算一致性实测；不成立则退回受监督子进程（§5.2） | 维护者约束；problem-domain §1.4.2 |
 
 ---
 
