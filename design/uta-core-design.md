@@ -225,7 +225,7 @@ enum DecisionStep { On(Pattern, Box<Step>), Emit(EffectRequest), Require(Guard, 
 struct Program { nodes: Vec<DerivationNode>, rules: Vec<DecisionStep>, state: Vec<NamedProj> }
 ```
 
-- **解释①（派生）**：`nodes` → 增量 DAG，仅重算受影响节点并通过 cutoff 截断；输出写回派生侧 `Journal`——alert 本质上是派生观察，与外部观察同形。**[证据：fp-01 M3 Mu `Work_`；fp-05 案例 7 Incremental；域 B3/P2]**
+- **解释①（派生）**：`nodes` → 增量 DAG，仅重算受影响节点并通过 cutoff 截断；输出写回派生侧 `Journal`——alert 本质上是派生观察，与外部观察同形。**[证据：fp-01 M3 Mu `Work_`；fp-05 案例 7 Incremental；域 B3/P2]** 增量在**节点粒度**（哪些节点因输入变化重跑），不在算法内部：一个节点被触发时可以看它声明的完整窗口，输出相等时 cutoff 仍成立。记录渐进不要求算法渐进（§5.3）。
 - **解释②（决策）**：`rules` → 对日志的 fold，其纯性由数据结构本身保证而非开发约定。**[证据：fp-01 M7 Mercury Workflow]**
 - **输入与输出**：
   - **输入 = 位置推进**（frontier + cursor 之后的记录），程序可见 gap 与两种时间。
@@ -272,6 +272,24 @@ Emit(EffectRequest { effect_kind: EffectKind, payload: Bytes, basis: Basis, key:
 - **运行时状态要求**：无论采用何种运行时，程序状态都必须显式可序列化（S4），不依赖运行时快照。
 
 → **[spike S11]**：依据判定标准实测 Wasm 在三 OS 上的开箱即用性与预算一致性，得出可/不可结论。
+
+### 5.3 原生计算：黑盒读处理器，不进程序值树（维护者约束；详见 `native-computation-design-handoff.md`）
+
+维护者要求一种**黑盒闭包**计算：UTA 不理解其算法，只把已注册的读数据与触发信号交给它，把它产生的值交给程序中已约定的消费者。当前方向是与 UTA **同一地址空间**的小型原生 Rust 计算，借用宿主已物化的类型明确的只读窗口视图，每次触发可见指定输入的**完整最新窗口**而非 delta。**[设计：维护者约束]**
+
+**在核心里的位置**——不新增概念，落在已有三处：
+- 它是 §7.0 注册表里的一种**原生读处理器**：登记项声明输入流、窗口需求、输出流、代码版本；核心不分析闭包源码，`required_inputs` 的 fold 读的是登记声明。属观察侧（§0.3）。
+- 它的输出是一条**派生观察流**；程序只把它当又一条 `DerivationNode::Input`。程序值树、D6 的 JSON 表示、§0.2 的四个 fold 全部不动；"程序不是黑盒函数"对决策（解释②）继续成立，黑盒只存在于派生侧的原生节点。
+- 消费者（如"唤醒对应订单的 AI"）是程序里的 `On(pattern) → Emit(EffectRequest)`；若产生外部写，走单据 → STS → IO 壳，不增设旁路。**[设计：维护者约束]**
+- 完整窗口 = 对若干流上 `LogPosition` 区间的**常驻引用**，进入 §6 保留协议的引用登记；窗口起点落到保留边界之下即 `BeyondRetention`，不伪造连续；gap 按 §3 显式，不降级为 latest。
+
+**代价，显式接受**：
+- **信任边界从运行时移到安装期**：原生路径不提供 hostile-code sandbox（维护者："uta 不保证程序无毒，在追求性能的前提下无法保证"）。值树程序仍不可信、仍受预算（H2/C4 不变）；原生计算是由 principal 经控制面安装的受信任 artifact，安装即授权。**[设计；D11]**
+- **故障域**：同地址空间意味着计算的 panic/OOM 就是核心的 panic/OOM。§7.1 把集成放进独立进程正是为了保护核心；原生计算是有意的例外，换取不搬运完整窗口。
+- **§5.2 的 Wasm 门槛只约束 Wasm 选项**，不是原生路径的门槛；也不因原生放弃无毒保证而删除该门槛。
+- zero-copy 只指同地址空间内从已有视图到调用不发生完整窗口传输；不覆盖网络、解码、连续物化等前置成本。
+
+未决（编译单元、typed SDK、交付/ABI/版本、窗口物化与借用生命周期、调度/背压/触发语义、替换、状态重建、错误与资源）→ **[spike S12–S14]**；交接稿 §6 是逐项清单，本文不复制。
 
 ---
 
@@ -689,6 +707,8 @@ enum TicketAction<Intent> {
 | 归因字段的归属 | **记录**归观察侧：`attribution` 落在订单/成交观察记录上 | **响应**归效应侧：读它的处理器（lane 决议匹配、投影归因）注册在效应侧 | 由谁**填**：集成填（它持有 venue 回执与 `idempotency_key` 的对应），IO 壳在 `VenueAccepted` 时补 `FromAttempt(position)`；集成填不出的为 `Unattributed`，由 IO 壳按键回读补 | §0.3 §7.0 |
 | 锚点 / 处理器字段 | 锚点：缺失 = 畸形记录，链路不成立 | 处理器字段：缺失 = 处理器不触发，不是错误 | 前者闭合、入口即验；后者开放、按注册表 | §7.0 |
 | 入站处理器 / 出站处理器 | §7.0：集成进来的**字段**出现 → 做什么 | §5.1：程序出去的**请求**出现 → 做什么 | 同一形状，方向相反；后者必须声明读/写 | §7.0 §5.1 |
+| 程序值树节点 / 原生计算 | `DerivationNode`：核心可遍历、可解释、可预算的值 | 原生闭包：黑盒，核心只见登记声明与输出流 | 后者不进值树，是注册表里的读处理器；程序把它的输出当 `Input` | §5 §5.3 |
+| 窗口 / delta | 触发时可见的完整 `LogPosition` 区间（常驻引用） | 本次推进的增量记录 | 记录渐进不要求算法渐进；增量在节点粒度 | §5.3 §6 |
 | 读副作用 / 写副作用 | 读：不改变世界，可重试、可批、可丢，结果总可判定 | 写：改变世界，一次，可能 `Undetermined` | 与 §0.3 的对象轴正交；对账取证是**读** | §8.2 |
 | `Program` 值 / 程序运行时 | JSON 值树，核心解释它 | Wasm 或子进程，解释器的宿主 | 运行时选择不改变值；预算靠宿主不靠类型 | §5 §5.2 |
 | `Transfer` / 协作 | 换负责人：单据始终只有一个负责人 | 协作：核心之外（另起单据、给负责人建议） | 单据不支持共同编辑 | §8.3.3 |
@@ -733,6 +753,9 @@ enum TicketAction<Intent> {
 | S9 | 规则组合的可交换性分类表；具名 struct/enum 组合下三层规则的样板量实测 | fp-03 命题 6；Rust 可行性评估 |
 | S10 | 发出后-持久化前崩溃窗口的恢复协议实测：SQLite WAL/fsync 崩溃注入于 `Prepared`/`SendBarrier`/`submit` 各窗口，验证不重复投放（与 S1 合并） | 域 F5/C1 |
 | S11 | Wasm 三 OS 开箱即用性与预算一致性实测；不成立则退回受监督子进程（§5.2） | 维护者约束；problem-domain §1.4.2 |
+| S12 | 原生计算的窗口物化、借用生命周期、保留/并发/替换同时发生时的视图有效性（§5.3） | native-computation-design-handoff §6/§10 |
+| S13 | 原生计算的编译单元、typed SDK、source/预编译交付、ABI/装载/版本耦合、三 OS 产物 | native-computation-design-handoff §6 |
+| S14 | 原生计算的触发语义（edge/level、合并、冷却）、调度/背压/积压、失败/资源超限、状态重建；不承诺 hostile 隔离 | native-computation-design-handoff §6/§7 |
 
 ---
 
@@ -741,6 +764,7 @@ enum TicketAction<Intent> {
 - **`problem-domain.md`**（迁移自原 `uta-design.md` §1 问题域与附录 B）：继续有效；原 `uta-design.md` §3–§6 的"五轴投影 + P6–P11 现象表照抄成类型"的设计中心被本文取代。
 - **`research/fp-00-synthesis.md`**：本文 FP 案例 **[证据]** 的索引；`fp-01`–`fp-05` 是一手出处；`fp-06` 是 §8 写边界 / in-doubt / 对账的一手出处。
 - **[`native-computation-design-handoff.md`](native-computation-design-handoff.md)**：自定义指标计算的独立设计交接稿；从 §0.3、§5.1、§7.0 的观察、挂载与消费关系出发，记录维护者明确的完整窗口访问、原生借用、迭代观察与不保证程序无毒的约束。供设计师据此修订 §0.2、§5、D6 及相关 spike；本次仅登记，尚未将该场景与约束整合进本文正文。
+- **`native-computation-design-handoff.md`**：自定义原生计算的场景/约束/方向交接稿；§5.3 是其在核心里的落点，S12–S14 与 D11 由它登记。
 - **讨论记录**：两位讨论者（steady / divergent）的压力测试、一次外部阅读评审与 `discuss:astra` 两轮讨论的修正已并入正文；历史见 git log。
 
 ---
@@ -761,3 +785,4 @@ enum TicketAction<Intent> {
 | D8 | 读模型位置 | UTA 进程内设**投影模块**：对执行事实 `Journal` 的可重建只读 fold，非权威、不被规则引用，经同一 JSON-RPC 暴露；消费方也可直接订阅原始记录自行 fold。理由：S10 要求 Alice 消费面可实现，且不应让每个消费方重复 fold | §4 |
 | D9 | 时间权威 | 核心是 `LogPosition` 与完备进度的唯一权威；集成只提供证据（venue seq/cursor/事件时间）。有 venue 游标时完备进度由证据推进，无游标时由核心按声明的滞后界从 `received_at` 保守推导 | §3 |
 | D10 | 归因由谁填 | 集成填 `attribution`（持有 venue 回执与 `idempotency_key` 对应）；IO 壳在 `VenueAccepted` 时补 `FromAttempt(position)`；集成填不出的记 `Unattributed`，IO 壳按键回读补。集成 IDL 因此含 `attribution` 字段 | §11.1 §7.1 |
+| D11 | 原生计算的信任边界 | 从运行时移到安装期：原生 artifact 由 principal 经控制面安装，安装即授权，不提供 sandbox；值树程序仍不可信、受预算。若维护者要 AI 也写原生代码，则 H2 对该路径整体作废且与核心同生共死，需另裁 | §5.3 |
