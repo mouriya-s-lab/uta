@@ -801,6 +801,7 @@ enum TicketAction<Intent> {
 - **`problem-domain.md`**（迁移自原 `uta-design.md` §1 问题域与附录 B）：继续有效；原 `uta-design.md` §3–§6 的"五轴投影 + P6–P11 现象表照抄成类型"的设计中心被本文取代。
 - **`research/fp-00-synthesis.md`**：本文 FP 案例 **[证据]** 的索引；`fp-01`–`fp-05` 是一手出处；`fp-06` 是 §8 写边界 / in-doubt / 对账的一手出处。
 - **`native-computation-design-handoff.md`**：自定义原生计算的场景/约束交接稿；§5.3 是其落点，S12–S14 与 D11 由它登记。其"同地址空间"方向被 D12（类型化共享内存段池）取代，交接稿本身作为记录不改。
+- **`decision-log.md`**：本轮对话中维护者原话与裁决的归档（A–E 分主题，F 为已知未对齐处）。正文与其不一致时以更晚条目为准并回写正文；review 与 subagent 以它为查证入口。
 - **讨论记录**：两位讨论者（steady / divergent）的压力测试、一次外部阅读评审与 `discuss:astra` 两轮讨论的修正已并入正文；历史见 git log。
 
 ---
