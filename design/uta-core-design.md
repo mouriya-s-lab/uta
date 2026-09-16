@@ -314,6 +314,9 @@ DerivationNode::Pooled { input: Id, window: Window }   // 输出不再是逐条�
 - **计算预算：默认内部所有计算在 50 ms 内产生（维护者）**。这是段池有效期与调度的隐含上界：一次触发的计算在窗口失效前完成；超过即该 `Pooled` 节点的失败观察（S14 的资源超限分支），不是等待。
 - **延迟量级（维护者）**：`iceoryx2` 的 IPC 延迟以库主页公布的基准为准，本文不复述数字——实际内存形态差异很大，在 50 ms 预算下这一层不需要太关心。段池布局（定长、对齐、无指针）使迁移到 GPU 计算无痛，但代价大，现在不考虑也没有必要。**[设计]**
 - **计算形态：向量化优先（维护者）**。对行情做计算是非常典型的向量化场景——超大的数组做同样的数值计算，最后只有小部分 map 计算。因此这部分很可能可以**充分 SIMD 化**：段布局的内存对齐交给预定义的类型映射（洗入时按 SIMD 通道宽度对齐，这是正常需求，不是特殊优化），计算作者面对的是对齐的定长数组，算法主体是同构数值运算。推论：typed SDK 导出的布局要携带对齐信息；`Pooled` 的输出类型 fold 在推导布局时把 SIMD 对齐作为布局的一部分；GPU 是同一形态的更远延伸。**[设计：维护者定性]**
+- **契约表必须自带结构化 `layout_hash`，不能只靠库的类型校验**：`iceoryx2` 的 `is_compatible_to` 只比 `type_name + variant + size + alignment`，同尺寸同对齐、字段语义不同的布局会误配；结构化 hash 的先例是 RIHS01（SHA256 规范化展开描述）/ DDS EquivalenceHash / stabby `gen_id`。段订阅（service open）时由 UTA 自己比对契约表的 `layout_hash`，不等即 fail-closed。**[证据：fp-07 命题 1/3、S13 关闭建议 ⑤]**
+- **导出格式取"值/schema 分离 + format 码"的形状**：Arrow `ArrowSchema` + format 码（`'tsn:'` = ns 时间戳、`'d:19,10'` = 定点）与 NumPy dtype offsets 是现成模板，直接对应洗入映射（RFC 3339 → i64 ns、十进制 → 定点）；导出物是语言无关的布局描述，生成 Rust 源只是它的一种渲染。**[证据：fp-07 命题 2、S13 关闭建议 ②]**
+- **迭代成本**：cargo 小 crate warm rebuild 亚秒级（实测 0.94 s → 0.12 s，单 OS 最小 crate，不可外推）；三 OS 产物按 target triple 矩阵构建，Windows 需 MSVC、macOS 需 SDK——C/linker/SDK 缺口是独立条件。**[证据：fp-07 命题 5]**
 - **段池用库，不自研（维护者）**：类型化共享内存段池是常见需求，落地应选现成库（方向 `iceoryx2`），不自己开发映射、回收与生命周期簿记；自研只在库实测不满足 §5.3 前置条件时才考虑，且要先记入 S12。**[设计：维护者约束]**
 
 **代价，显式接受**：
@@ -790,7 +793,7 @@ enum TicketAction<Intent> {
 | S10 | 发出后-持久化前崩溃窗口的恢复协议实测：SQLite WAL/fsync 崩溃注入于 `Prepared`/`SendBarrier`/`submit` 各窗口，验证不重复投放（与 S1 合并） | 域 F5/C1 |
 | S11 | Wasm 三 OS 开箱即用性与预算一致性实测；不成立则退回受监督子进程（§5.2） | 维护者约束；problem-domain §1.4.2 |
 | S12 | 类型化段池选库：`iceoryx2` 三 OS 覆盖、变长 `Slice`、history 深度是否满足 §5.3 前置条件；段回收与调用中借用的生命周期；并发/替换同时发生时的段有效性；不自研（§5.3） | native-computation-design-handoff §6/§10；维护者裁决 |
-| S13 | 原生计算的编译单元、typed SDK 的**导出格式与工具**（类型本身由 `Pooled` 节点的输出类型 fold 推导，不另写；导出须携带 SIMD 对齐）、source/预编译交付、布局 hash 版本耦合、三 OS 产物 | native-computation-design-handoff §6；§5.3 |
+| S13 | **收窄**（fp-07）：② 导出格式、③ 交付、⑤ hash 校验三步有充分先例可关闭；剩 ① 组合子树 fold 推导布局的确定性与规范化输出（无先例，与 hash 输入耦合）、三 OS 产物的 C/linker/SDK 缺口 | fp-07 S13 关闭建议；§5.3 |
 | S14 | 原生计算的触发语义（edge/level、合并、冷却）、调度/背压/积压、失败/资源超限、状态重建；不承诺 hostile 隔离 | native-computation-design-handoff §6/§7 |
 | S15 | 高频行情流作为 `Journal` 的持久化策略（全量 / 抽样 / 仅 gap 标记）与保留协议；段池不参与（§2、§6.1、§5.3） | D12 |
 
@@ -801,6 +804,7 @@ enum TicketAction<Intent> {
 - **`problem-domain.md`**（迁移自原 `uta-design.md` §1 问题域与附录 B）：继续有效；原 `uta-design.md` §3–§6 的"五轴投影 + P6–P11 现象表照抄成类型"的设计中心被本文取代。
 - **`research/fp-00-synthesis.md`**：本文 FP 案例 **[证据]** 的索引；`fp-01`–`fp-05` 是一手出处；`fp-06` 是 §8 写边界 / in-doubt / 对账的一手出处。
 - **`native-computation-design-handoff.md`**：自定义原生计算的场景/约束交接稿；§5.3 是其落点，S12–S14 与 D11 由它登记。其"同地址空间"方向被 D12（类型化共享内存段池）取代，交接稿本身作为记录不改。
+- **`research/fp-07-type-export-and-external-compilation.md`**：§5.3 类型导出 / 外部编译 / 装载 / 握手校验的一手出处；S13 据此收窄。
 - **`decision-log.md`**：本轮对话中维护者原话与裁决的归档（A–E 分主题，F 为已知未对齐处）。正文与其不一致时以更晚条目为准并回写正文；review 与 subagent 以它为查证入口。
 - **讨论记录**：两位讨论者（steady / divergent）的压力测试、一次外部阅读评审与 `discuss:astra` 两轮讨论的修正已并入正文；历史见 git log。
 
