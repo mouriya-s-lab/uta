@@ -257,7 +257,7 @@ struct Program { nodes: Vec<Node>, rules: Vec<Step>, state: Vec<NamedProj> }
 - **位置**：单据（§8b）与 STS 决策（§4）在它之前，产出 `Reserved` 记录；投影与消费方在它之后，只读记录。IO 壳是**唯一**把记录变成对 venue 的动作、把 venue 的回应变成记录的地方；核心里没有第二处接触集成进程的写接口。
 - **输入**：按 lane 顺序 tail 执行事实 `Trace` 上的 `Reserved` 记录；以及对账驱动需要的证据回应。
 - **输出**：只有 append——`Sending`、`Accepted(venue_ref)`、`Rejected(reason)`、`Undeterminable(reason)`、`Evidence(channel, found|absent|inconclusive, raw)`、`CapabilityObserved`、`ChannelGap`。它**不修改**任何记录，不持有权威状态；重启后它的全部状态由 `integral` 重建。
-- **代数**：每个 Attempt 是一条线性的阶段链 `Reserved → Sending → (Accepted | Rejected | Undeterminable) → Evidence* → Resolved`；IO 壳是这条链的驱动器，每一步的转移条件是：venue 回应类型 × 该 (venue, op) 的能力证据 × 超时参数。链的形状是闭合 sum，转移表穷尽，没有"其他"分支（C13）。
+- **代数**：每个 Attempt 是一条线性的阶段链 `Reserved → Sending → (Accepted | Rejected | Undeterminable) → Evidence* → Resolved`；`Replace` 在 venue 无原子能力时是同一条链上两个 `Sending` 腿（§8b.1），腿间依赖由链的顺序保证。IO 壳是这条链的驱动器，每一步的转移条件是：venue 回应类型 × 该 (venue, op) 的能力证据 × 超时参数。链的形状是闭合 sum，转移表穷尽，没有"其他"分支（C13）。
   - **`Sending` 是发送屏障**：durable append（fsync）之后才允许调用 `submit`。它把崩溃窗口切成两半：`Reserved` 无 `Sending` = **确未发出**；`Sending` 无后继 = **可能已发出**。先例：PostgreSQL `EndPrepare` 先 `XLogFlush` 再 `MarkAsPrepared`。**[证据：fp-06 修正 5]**
   - **`Accepted` 只认 venue 业务级回执**（订单被受理并给出 venue 身份 / FIX application-level ExecutionReport）。传输 ACK、HTTP 5xx、超时、集成崩溃**都不是** `Accepted`，全部落 `Undeterminable`。先例：Helland "ACK says nothing about delivery, even less about processing"；FIX session 送达 ≠ application 确认；没有一个成熟协议让单个"已发送"同时表达送达、受理、回执。因此集成的 `submit` 只在拿到业务回执时返回 `Ack(venue_id)`，否则 `NoResponse`（§7.1 IDL 义务）。**[证据：fp-06 修正 3]**
 - **对集成的操作集（IDL，小且闭合）**：`handshake → Capabilities`、`submit(attempt) → Ack(venue_id) | Reject(reason) | NoResponse`、`query_by_key(key) → Found(state) | Absent | Unavailable`、`list_open(scope)`、`list_fills(scope, since)`、`cancel(venue_id | key)`、`replay_by_key(key) → Original(response) | Unavailable`（仅在能力证据声明的幂等键保留期内可调）。加一种操作 = 改所有集成（§7 轴 B，显式接受）。`NoResponse`/`Unavailable` 是一等返回值，不是异常。
@@ -306,9 +306,11 @@ struct Program { nodes: Vec<Node>, rules: Vec<Step>, state: Vec<NamedProj> }
 
 ---
 
-## 8b. 单据锁：意图形成期的抽象（与 IO 无关）
+## 8b. 单据锁：意图形成期的抽象（不驱动 IO 壳）
 
-草稿锁**与 IO 壳没有关系**：它不是"事务发起时加的锁"，它在事务之前就存在，覆盖整个意图形成期（起单 → 编辑 → 送审 → 决定 → 进入 `Reserved` 关闭）。IO 壳（§8.0）的模型是 Haskell `IO`，单据锁的模型是**责任持有**；两者各有抽象，互不引用。**[设计：维护者定性]**
+草稿锁**不驱动 IO 壳，IO 壳不知道单据的存在**：它不是"事务发起时加的锁"，它在事务之前就存在，覆盖整个意图形成期（起单 → 编辑 → 送审 → 决定 → 进入 `Reserved` 关闭）。IO 壳（§8.0）的模型是 Haskell `IO`，单据锁的模型是**责任持有**。单据**读** IO 壳 append 的记录（能力证据、`Accepted`、归因后的订单观察）作为依据——这是单向的读，不是耦合。**[设计：维护者定性；astra 第一轮点 2 修正措辞]**
+
+术语：本节的"偏离 / fit"回答"我的意图还对不对"；§8 的"决议 / resolution"回答"我的动作发生了没有"。两者不同名，不共用状态。
 
 ### 8b.1 抽象
 
@@ -319,15 +321,17 @@ struct Ticket<I> {
     owner: Principal,            // 当前负责人；锁 = 这个字段的存在
     head: Hash,                  // 版本链末端（内容寻址，每版带父 hash）
     history: Vec<Version<I>>,    // 只追加；I = 意图类型（下单/改单/撤单…）
-    basis: PosSet,               // head 依据的观察位置集
+    basis: PosSet,               // head 依据的位置集：可含派生侧（观察）与执行事实侧（Accepted / Sending 的键 / 归因记录）
     validity: Validity,          // 第一层：依据有效性（总有）
     fit: Fit,                    // 第二层：意图专属对账，逐项状态（可能全部 Unavailable）
     state: Open | Submitted(Hash) | Closed(Outcome),
 }
 
 /// 第一层：依据有效性。任何单据都有，不依赖意图类型，不需要钩子。
+/// 只回答"引用的记录还能重建吗"；"证据现在还够吗"是第二层各检查项自己的事。
 fn basis_valid(basis: &PosSet, world: &Observed, window: Lag) -> Validity;
 enum Validity { Fresh, Stale(Lag), Retracted(PosSet), BeyondRetention(PosSet) }
+// 按侧区分：Stale / Retracted 只对派生侧（Abelian）位置；BeyondRetention 两侧都有；执行事实侧的引用不会因年龄变假。
 
 /// 第二层：意图专属对账。一组检查，每项声明它需要哪些观察输入。
 /// 由 (意图类型 × 该 venue 当前能力证据) 在评估时解析，不存在单据上；握手变了它就变。
@@ -347,12 +351,16 @@ enum TicketOp<I> {
 }
 ```
 
-- **偏离是状态，不是动作（维护者）**：`validity` 与 `fit` 都不是 `TicketOp`，是单据 fold 的一部分——依据引用的 range 推进、被撤回、出现 gap、能力证据变化时重算（作为派生 DAG 节点，§5 解释①）。于是**"单据是否偏离"是状态字段，不需要外部触发对账**：没有人"发起对账"，单据始终知道自己与世界的关系。§8.2 第 3 条的依据有效性检查退化为读 `validity == Fresh`；`Submitted` 期间世界变了，审批人看到的就是一张 `Drifted` 的单据，不需要另一套失效逻辑；`Unknowable` 不能送审也不能放行（fail-closed，C12）。
+- **偏离是状态，不是动作（维护者）**：`validity` 与 `fit` 都不是 `TicketOp`，是单据 fold 的一部分——依据引用的 range 推进、被撤回、出现 gap、能力证据变化时重算（作为派生 DAG 节点，§5 解释①）。于是**"单据是否偏离"是状态字段，不需要外部触发对账**：没有人"发起对账"，单据始终知道自己与世界的关系。§8.2 第 3 条退化为读 `validity == Fresh` 与策略要求的检查项；`Submitted` 期间世界变了，审批人看到的就是一张 `Drifted` 的单据，不需要另一套失效逻辑。
+- **门只看必要项，advisory 不参与门**：放行策略按 (账户 × 操作种类) 声明哪些检查项是**必要项**；只有必要项的 `Drifted`/`Unknowable`/`Unavailable` 触发 fail-closed（C12）。其余检查项是 **advisory**：它们的结果显示给审批人、写进依据，但不参与门。没有"所有 `Unknowable` 都不能放行"的总门——那会让 advisory 在语义上重新变成 guard。**[astra 第二轮点 4]**
 - **两层分开的原因**：第一层对任何单据都能算（只看 `Pos`），第二层依赖意图类型与 venue 给不给对应观察。混成一层会让"不能做意图对账"的单据连新鲜度都丢掉。
-- **钩子不一定存在，不一定能对账（维护者）**：第二层是若干检查的乘积，不是一个函数——限价买单要对价格（报价流）、资金（余额流）、持仓（持仓流）、可交易性（能力证据），venue 给报价不给持仓就是"价格能对、持仓不能对"，不是整个钩子消失。所以 `Fit` 逐项记 `Unavailable(缺哪些输入)`，而不是一个全局 `NoHook`。放行策略看的是"哪些检查必须 `Fits`"（按账户 × 操作种类定），不是"有没有钩子"。**`Unavailable` 不得用 `Fits` 冒充**。
+- **钩子不一定存在，不一定能对账（维护者）**：第二层是若干检查的乘积，不是一个函数——限价买单要对价格（报价流）、资金（余额流）、持仓（持仓流）、可交易性（能力证据），venue 给报价不给持仓就是"价格能对、持仓不能对"，不是整个钩子消失。所以 `Fit` 逐项记 `Unavailable(缺哪些输入)`，而不是一个全局 `NoHook`。**`Unavailable` 不得用 `Fits` 冒充**。
 - **`Unavailable` 是可行动的**：缺的输入若 venue 有一次性查询能力，发一次只读查询就产生一条观察记录（§8.2 第 1 条），该项随即可算——读是安全的、可批处理的（§7）。规则可以选"取一次再判"、"无该项对账则人工"、"无该项对账则不发"；真正的"不能对账"= 缺的输入没有任何渠道可得，这由能力证据说了算。
-- **钩子的输入只有观察侧**（派生 `Trace` 的 `integral` 与能力证据），不含执行事实——单据在 `Reserved` 前不与 IO 壳发生关系，对账钩子也不例外。`Reserved` 之后的对账是另一件事（§8.0 IO 壳的证据 gate），两者同名不同物：前者问"我的意图还对不对"，后者问"我的动作发生了没有"。
-- **检查是纯函数、按 `I` 分派**：下单看价格/资金/持仓/能力，改单额外看原单是否仍在，撤单只看原单是否仍在。新意图类型 = 新的检查集，核心不变。
+- **钩子的输入是观察值及其出处**（派生 `Trace` 的 `integral`、能力证据、归因后的订单观察）；执行事实记录只作**身份与因果依据**（`basis` 里的 `Accepted`/`Sending` 位置），不进钩子的 `eval`。归因后的订单观察是**记录**（集成或 IO 壳产出，带出处），不是投影；D8 的"规则不引用投影"不放宽。**[astra 第一轮点 4/6]**
+- **撤单与改单：目标身份是构造前提，"仍在"是 advisory**。撤单/改单意图类型在构造时**必须**携带目标身份 `target: VenueRef | IdemKey`——没有目标就构造不出意图（parse-don't-validate），不需要事后规则。身份来源三种，都进 `basis`：本地 `Accepted(venue_ref)`；本地 `Sending` 的幂等键（无回执的提交）；归因后的观察记录里的 venue 身份（外部订单，F9/P11）。构造期只保证"目标存在且与账户作用域匹配"，**不**保证 venue 此刻支持按此身份撤单——那是运行期能力检查项（有幂等键 ≠ 有 cancel-by-key，F6）。"原单仍在"来自观察侧 listing，按 F10 只能是 advisory，永不作为撤单放行的必要项——否则最安全的动作在 listing 滞后时被 fail-closed。**[astra 第一轮点 1、第二轮点 3]**
+- **改单不是两张单据，是一种意图类型 `Replace`**：venue 有原子 cancel/replace 能力就一个操作；没有，IO 壳在**同一条 Attempt 链**里解释为 `Sending(cancel) → 目标订单终态证据 → Sending(new)`，新单数量按意图声明的口径（"剩余量"或绝对量）从撤单腿的终态观察（含累计成交量）算出——这是 `>>=`，第二腿读第一腿的结果，发生在 IO 壳内，不是单据层的两次起单。撤单腿 `Undeterminable` 时整条链停在对账，新单腿不发。**[astra 第二轮点 1/2；设计]**
+- **`Evidence` 的 found/absent 指尝试**（我的提交到达了吗），**目标订单的终态与成交量是观察记录**（集成把撤单回执/订单状态同时产出为带出处的订单观察）。两者来自同一次 venue 交互，落两侧各一条记录：执行侧 `Evidence` 说明尝试的决议，派生侧观察说明世界的样子。共享一次输入是设计事实，写入 S1。**[astra 第一轮点 3；设计]**
+- **检查是纯函数、按 `I` 分派**：下单看价格/资金/持仓/能力；撤单看能力（可按目标身份撤）+ advisory 仍在；`Replace` 看撤单项 + 新单项。新意图类型 = 新的检查集，核心不变。
 - **锁 = `owner` 字段的存在**，不是互斥原语。`Open` 即取锁，`Close` 即释放；期间只有 `owner` 能 `Edit`/`Submit`，其他 principal 的 `Edit` 被拒绝（不排队、不产生分支）。
 - **每个 `TicketOp` 都是一条 append 记录**，带 principal 与依据 `Pos`；`Ticket` 自身是这些记录的 fold（§2 的 `integral`），不是被原地修改的对象。因此"锁"也是记录的解释：`owner` 由最近一次 `Open`/`Handoff` 决定。
 - **转移表穷尽**：`Open --Edit--> Open`、`Open --Submit--> Submitted`、`Submitted --Return--> Open`、`Submitted --Close(Reserved)--> Closed`、任意 `--Close(Withdrawn|Rejected|Expired)--> Closed`、`Open|Submitted --Handoff--> 同态`。`Submitted` 期间 `Edit` 被拒（决定绑定的 head 不能变，C11）。
@@ -369,7 +377,7 @@ enum TicketOp<I> {
 ### 8b.3 权衡
 
 - 锁是 `owner` 字段而非原语：无死锁、无超时释放的复杂性；代价是"负责人失联"必须靠 `Expired` 或带 principal 的强制 `Handoff` 处理——这是策略（§4 规则），不是锁机制。
-- 单据锁与 IO 壳彻底分离：意图形成期可以任意长、任意多次退回，IO 壳完全不感知；代价是 `Close(Reserved)` 与 `Reserved` append 必须在同一 SQLite 事务（§6.1）里，这是两者唯一的耦合点。
+- 单据锁不驱动 IO 壳：意图形成期可以任意长、任意多次退回，IO 壳完全不感知；单据只读 IO 壳的记录作依据；代价是 `Close(Reserved)` 与 `Reserved` append 必须在同一 SQLite 事务（§6.1）里，这是两者唯一的耦合点。
 - 这把锁保护的是**意图形成期的线性与责任归属**，不是任何 venue 域事实；执行阶段与观察侧仍然没有锁（§8.2）。
 
 ---
@@ -432,7 +440,7 @@ enum TicketOp<I> {
 
 | # | 问题 | 依据 |
 |---|---|---|
-| S1 | unknown 写结果 + 证据渠道的记录模型（无先例） | fp-01/02/04/05 未覆盖 |
+| S1 | unknown 写结果 + 证据渠道的记录模型；同一次 venue 交互落执行侧 `Evidence` 与派生侧观察两条记录的共享输入契约（§8b.1） | fp-06 P1–P6 |
 | S2 | 运行期能力证据在 Rust 中是否值得抬进类型 | fp-03 未覆盖 |
 | S3 | 同一 `Trace` 形状统一 differential 派生与 event-sourcing 执行历史（SQLite 下 = 是否共用同一表结构，见 §6.1） | fp-05 未覆盖末条 |
 | S4 | 程序状态显式序列化 / 版本化 / 重放边界 | fp-01 M7 前提 |
