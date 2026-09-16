@@ -220,12 +220,12 @@ trait Rule {
 程序不是黑盒函数 `(State, Input) -> (State, Output)`——无法预算、无法静态检查，且状态可序列化仅依赖作者承诺。程序是 **deep embedding 的小闭合值**：
 
 ```rust
-enum DerivationNode { Const(V), Input(Cursor), Op1(Op1, Id), Op2(Op2, Id, Id), Scan(ScanOp, Id), Window(Id, W), Join(JoinOp, Vec<Id>) }
+enum DerivationNode { Const(V), Input(Cursor), Op1(Op1, Id), Op2(Op2, Id, Id), Scan(ScanOp, Id), Window(Id, W), Join(JoinOp, Vec<Id>), Pooled { input: Id, window: Window } }   // Pooled 见 §5.3
 enum DecisionStep { On(Pattern, Box<Step>), Emit(EffectRequest), Require(Guard, OnFail), Expire(Deadline, Box<Step>) }   // Emit 见 §5.1
 struct Program { nodes: Vec<DerivationNode>, rules: Vec<DecisionStep>, state: Vec<NamedProj> }
 ```
 
-- **解释①（派生）**：`nodes` → 增量 DAG，仅重算受影响节点并通过 cutoff 截断；输出写回派生侧 `Journal`——alert 本质上是派生观察，与外部观察同形。**[证据：fp-01 M3 Mu `Work_`；fp-05 案例 7 Incremental；域 B3/P2]** 增量在**节点粒度**（哪些节点因输入变化重跑），不在算法内部：一个节点被触发时可以看它声明的完整窗口，输出相等时 cutoff 仍成立。记录渐进不要求算法渐进；行情派生的原生节点见 §5.3。
+- **解释①（派生）**：`nodes` → 增量 DAG，仅重算受影响节点并通过 cutoff 截断；输出写回派生侧 `Journal`——alert 本质上是派生观察，与外部观察同形。**[证据：fp-01 M3 Mu `Work_`；fp-05 案例 7 Incremental；域 B3/P2]** 增量在**节点粒度**（哪些节点因输入变化重跑），不在算法内部：一个节点被触发时可以看它声明的完整窗口，输出相等时 cutoff 仍成立。记录渐进不要求算法渐进；`Pooled` 组合子与原生 op 见 §5.3。
 - **解释②（决策）**：`rules` → 对日志的 fold，其纯性由数据结构本身保证而非开发约定。**[证据：fp-01 M7 Mercury Workflow]**
 - **输入与输出**：
   - **输入 = 位置推进**（frontier + cursor 之后的记录），程序可见 gap 与两种时间。
@@ -273,9 +273,17 @@ Emit(EffectRequest { effect_kind: EffectKind, payload: Bytes, basis: Basis, key:
 
 → **[spike S11]**：依据判定标准实测 Wasm 在三 OS 上的开箱即用性与预算一致性，得出可/不可结论。
 
-### 5.3 行情派生的原生计算：黑盒读处理器 + 类型化共享内存池（维护者约束；场景见 `native-computation-design-handoff.md`）
+### 5.3 `Pooled`：把行情派生提升为段池模式的读侧组合子（维护者约束；场景见 `native-computation-design-handoff.md`）
 
-**适用范围（维护者）**：本节是为**行情派生**定制的——高频、定长、线性、只读、可丢的观察流（quote/bar/tick 及其指标）。它是 §0.3 观察侧里的一个**专用子系统**，不是通用类型设施：`Journal`、`LogPosition`、组合子、注册表等通用概念不因它改变含义；效应侧、单据、投影、程序值树、非行情观察流（余额、持仓、订单状态、新闻）**不使用**段池，走原有路径。判断一条流是否属于本节：定长记录、位置线性、无指针、可容忍 ring 回收——四者全满足才进段池。**[设计：维护者约束]**
+**它是组合子代数的一部分，不是旁边的子系统（维护者）**。读侧代数增加**一个**组合子即可把一条派生提升为这种模式：
+
+```rust
+DerivationNode::Pooled { input: Id, window: Window }   // 输出不再是逐条值流，而是可借用的完整窗口段视图
+```
+
+- **前置条件**（装载期校验，不满足即拒绝）：`input` 的记录类型定长、位置线性、无指针、可容忍 ring 回收。这四条就是"为行情定制"的精确含义——quote/bar/tick 及其指标满足，余额/持仓/订单状态/新闻不满足，所以后者**不能**应用 `Pooled`，不是被架构隔离在外。
+- **原生计算不是新节点种类**，是 §7.0 注册表里的一个黑盒 **op**，要求其输入是 `Pooled` 的：在值树里就是 `Op(native_ref, [pooled ids])`，输出是一条派生观察流（自己的段）。核心不分析闭包源码。
+- `Journal`、`LogPosition`、`required_inputs` 四个 fold、注册表的含义不变；`required_inputs` 遇到 `Pooled` 解析到段表得段句柄，其余解析到普通流。效应侧、单据、投影不受影响。**[设计：维护者约束]**
 
 维护者要求一种**黑盒闭包**计算：UTA 不理解其算法，只把已注册的行情读数据与触发信号交给它，把它产生的值交给程序中已约定的消费者；每次触发可见指定输入的**完整最新窗口**而非 delta。**[设计：维护者约束]** 交接稿的"同地址空间"方向由本节取代：零拷贝要求的是**同一物理页**，不是同一地址空间——用只读共享内存映射，计算在独立进程里，既零拷贝又有故障域。**[设计：维护者裁决]**
 
@@ -289,8 +297,8 @@ Emit(EffectRequest { effect_kind: EffectKind, payload: Bytes, basis: Basis, key:
 - **实现方向：`iceoryx2`**——service 名 = 流/段身份，payload `repr(C)` 无指针，`loan → 写 → send`，subscriber 的 sample 是有生命周期的借用，history/buffer = 段深度，单写者多读者；它替核心做三 OS 映射 API 与生命周期簿记。三 OS 覆盖与变长 `Slice` 支持 → **[spike S12 需实测]**
 
 **在核心里的位置**——不新增概念，落在已有三处：
-- 它是 §7.0 注册表里的一种**原生读处理器**：登记项声明输入流（→ 段）、窗口需求（→ 位置范围）、输出流（→ 自己的段）、布局 hash、代码版本；核心不分析闭包源码，`required_inputs` 的 fold 读登记声明。属观察侧（§0.3）。
-- 输出段是一条**派生观察流**；程序只把它当又一条 `DerivationNode::Input`。程序值树、D6 的 JSON 表示、§0.2 的四个 fold 全部不动；"程序不是黑盒函数"对决策（解释②）继续成立，黑盒只在派生侧原生节点。
+- `Pooled` 是 §0.2 值树里的一个读侧组合子；原生 op 在 §7.0 注册表登记（输入段布局 hash、输出段布局 hash、代码版本）。属观察侧（§0.3）。
+- 原生 op 的输出段是一条**派生观察流**；下游节点像读任何派生流一样读它。程序值树、D6 的 JSON 表示、§0.2 的四个 fold 全部不动；"程序不是黑盒函数"对决策（解释②）继续成立，黑盒只在派生侧的原生 op 内部。
 - 消费者（如"唤醒对应订单的 AI"）是程序里的 `On(pattern) → Emit(EffectRequest)`；若产生外部写，走单据 → STS → IO 壳，不增设旁路。**[设计：维护者约束]**
 - 窗口 = 对若干段的**常驻引用**，进入 §6 保留协议的引用登记；保留边界推进 = 段回收；窗口起点落到边界之下即 `BeyondRetention`，不伪造连续；gap 按 §3 显式，不降级为 latest。
 
@@ -723,7 +731,7 @@ enum TicketAction<Intent> {
 | 归因字段的归属 | **记录**归观察侧：`attribution` 落在订单/成交观察记录上 | **响应**归效应侧：读它的处理器（lane 决议匹配、投影归因）注册在效应侧 | 由谁**填**：集成填（它持有 venue 回执与 `idempotency_key` 的对应），IO 壳在 `VenueAccepted` 时补 `FromAttempt(position)`；集成填不出的为 `Unattributed`，由 IO 壳按键回读补 | §0.3 §7.0 |
 | 锚点 / 处理器字段 | 锚点：缺失 = 畸形记录，链路不成立 | 处理器字段：缺失 = 处理器不触发，不是错误 | 前者闭合、入口即验；后者开放、按注册表 | §7.0 |
 | 入站处理器 / 出站处理器 | §7.0：集成进来的**字段**出现 → 做什么 | §5.1：程序出去的**请求**出现 → 做什么 | 同一形状，方向相反；后者必须声明读/写 | §7.0 §5.1 |
-| 程序值树节点 / 原生计算 | `DerivationNode`：核心可遍历、可解释、可预算的值 | 原生闭包：黑盒，核心只见登记声明与输出流 | 后者不进值树，是注册表里的读处理器；程序把它的输出当 `Input` | §5 §5.3 |
+| `Pooled` 组合子 / 原生 op | `Pooled`：值树里的读侧组合子，把线性派生提升为段视图 | 原生 op：注册表里的黑盒，要求输入是 `Pooled` 的 | 前者是代数的一部分，后者是注册项；核心只见 op 的登记声明与输出段 | §5 §5.3 |
 | 窗口 / delta | 触发时可见的完整 `LogPosition` 区间（常驻引用，物化为若干段） | 本次推进的增量记录 | 记录渐进不要求算法渐进；增量在节点粒度 | §5.3 §6 |
 | 段池 / 堆 | 按行情类型切出的定长段，地址 = 位置，无指针 | malloc/free、指针图 | 共享内存里只有前者；后者不进池。段池只服务行情派生 | §5.3 |
 | 读副作用 / 写副作用 | 读：不改变世界，可重试、可批、可丢，结果总可判定 | 写：改变世界，一次，可能 `Undetermined` | 与 §0.3 的对象轴正交；对账取证是**读** | §8.2 |
@@ -803,4 +811,4 @@ enum TicketAction<Intent> {
 | D9 | 时间权威 | 核心是 `LogPosition` 与完备进度的唯一权威；集成只提供证据（venue seq/cursor/事件时间）。有 venue 游标时完备进度由证据推进，无游标时由核心按声明的滞后界从 `received_at` 保守推导 | §3 |
 | D10 | 归因由谁填 | 集成填 `attribution`（持有 venue 回执与 `idempotency_key` 对应）；IO 壳在 `VenueAccepted` 时补 `FromAttempt(position)`；集成填不出的记 `Unattributed`，IO 壳按键回读补。集成 IDL 因此含 `attribution` 字段 | §11.1 §7.1 |
 | D11 | 原生计算的信任边界 | 从运行时移到安装期：原生 artifact 由 principal 经控制面安装，安装即授权，不提供 sandbox；只读映射保证其不能写核心内存，但可任意 syscall。值树程序仍不可信、受预算 | §5.3 |
-| D12 | 行情派生计算的进程与内存模型 | 独立进程 + 只读共享内存映射（同物理页，非同地址空间）；行情段池、无堆、地址即位置、线性可拼接、IPC 只交接段；实现方向 `iceoryx2`。**仅限行情派生**，不泛化为通用类型设施（维护者） | §5.3 |
+| D12 | 行情派生计算的进程与内存模型 | 独立进程 + 只读共享内存映射（同物理页，非同地址空间）；段池、无堆、地址即位置、线性可拼接、IPC 只交接段；实现方向 `iceoryx2`。以读侧组合子 `Pooled` 进入代数，前置条件（定长/线性/无指针/可 ring 回收）限定其只对行情类流可用（维护者） | §5.3 |
