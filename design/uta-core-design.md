@@ -296,7 +296,7 @@ DerivationNode::Pooled { input: Id, window: Window }   // 输出不再是逐条�
 **存储模型：行情段池，不是堆，也不是 `Journal`**。段池与 `Journal` **没有关系**——是两套不同的存储：`Journal` 是记录的载体（§2，持久于 SQLite，§6.1）；段池是为高性能计算设计的**另一个特殊物化**，由 `Pooled` 组合子从其输入流洗入而成。段池不是 `Journal` 的缓存、热层或索引；`Journal` 也不从段池重建。两者的共同点只有一个：都用 `LogPosition` 标定位置。**[设计：维护者定性]**
 - 共享内存是一个可分配边界的大内存池，池内**没有堆模型**：无 malloc/free、无指针；只有按行情类型切出的段。
 - **写在哪由类型决定**：每个行情派生读类型声明自己的扁平布局（`repr(C)`、无指针、定长），并据此拥有自己的段。布局是该类型的一部分；这条要求只对进段池的行情类型成立，不上升为所有派生类型的约束。
-- **地址即位置**：段覆盖某条流上一个 `LogPosition` 区间；位置 → 段内偏移是算术，不是查找。位置标定借自 §2（`LogPosition` 在流内单调递增），存储本身与 `Journal` 无关；增量写只是追加到下一个偏移。
+- **地址即位置**：段覆盖某条流上一个 `LogPosition` 区间；**段内**位置 → 偏移是算术（`base + (pos - from) * stride`），不是查找；**跨段**由核心的契约表把段句柄归一到有序位置区间——`iceoryx2` 的段槽由自由列表分配，没有流内全局位置算术，所以契约表不是可选的簿记，是跨段的唯一真相。位置标定借自 §2（`LogPosition` 在流内单调递增），存储本身与 `Journal` 无关。**[证据：fp-08 §3.1/§3.9]**
 - **线性即可拼接**：指标数据是线性模型；ring 回绕、段满、进程重启都只是把一条流切成若干段，按位置区间拼回即原数据。窗口 = 若干段的有序列表。
 - **IPC 只交接段，不交接数据**：计算的输入 = 段句柄列表 + 位置范围；计算的输出也是一个带类型布局的段 = 一条派生观察流，核心与其他计算零拷贝读它。
 - **契约集中在一张表里**（注册表，不是数据库表）：类型 id、布局 hash、段 id、流 id、位置范围、版本、写者。它是 §7.0 注册表针对行情流的扩展条目；`required_inputs` 的 fold 对行情输入解析到这张表得到段句柄，对其他输入仍解析到普通流。
@@ -317,7 +317,7 @@ DerivationNode::Pooled { input: Id, window: Window }   // 输出不再是逐条�
 - **契约表必须自带结构化 `layout_hash`，不能只靠库的类型校验**：`iceoryx2` 的 `is_compatible_to` 只比 `type_name + variant + size + alignment`，同尺寸同对齐、字段语义不同的布局会误配；结构化 hash 的先例是 RIHS01（SHA256 规范化展开描述）/ DDS EquivalenceHash / stabby `gen_id`。段订阅（service open）时由 UTA 自己比对契约表的 `layout_hash`，不等即 fail-closed。**[证据：fp-07 命题 1/3、S13 关闭建议 ⑤]**
 - **导出格式取"值/schema 分离 + format 码"的形状**：Arrow `ArrowSchema` + format 码（`'tsn:'` = ns 时间戳、`'d:19,10'` = 定点）与 NumPy dtype offsets 是现成模板，直接对应洗入映射（RFC 3339 → i64 ns、十进制 → 定点）；导出物是语言无关的布局描述，生成 Rust 源只是它的一种渲染。**[证据：fp-07 命题 2、S13 关闭建议 ②]**
 - **迭代成本**：cargo 小 crate warm rebuild 亚秒级（实测 0.94 s → 0.12 s，单 OS 最小 crate，不可外推）；三 OS 产物按 target triple 矩阵构建，Windows 需 MSVC、macOS 需 SDK——C/linker/SDK 缺口是独立条件。**[证据：fp-07 命题 5]**
-- **段池用库，不自研（维护者）**：类型化共享内存段池是常见需求，落地应选现成库（方向 `iceoryx2`），不自己开发映射、回收与生命周期簿记；自研只在库实测不满足 §5.3 前置条件时才考虑，且要先记入 S12。**[设计：维护者约束]**
+- **段池用库，不自研（维护者）**：类型化共享内存段池是常见需求，落地应选现成库，不自己开发映射、回收与生命周期簿记。fp-08 横向 14 库后**裁决首选 `iceoryx2`**，备选 `memmap2` + 自研（仅在 S12 实测失败时启用）。核心侧显式接受五条补齐：自建契约表、只经 `Sample` 访问、计算进程是可写控制面 subscriber、随机访问历史由核心持引用集、跨语言以 `layout_hash` 补强。**[设计：维护者约束；证据：fp-08 §7]** 子系统级接口、契约表、生命周期、装载握手与实测闸门见 `hpc-derivation-subsystem.md`。
 
 **代价，显式接受**：
 - **信任边界从运行时移到安装期**：只读映射让计算**不能写核心内存**，但它仍可任意 syscall——这是故障域，不是 sandbox（维护者："uta 不保证程序无毒，在追求性能的前提下无法保证"）。值树程序仍不可信、受预算（H2/C4 不变）；原生计算由 principal 经控制面安装，安装即授权。**[设计；D11]**
@@ -792,9 +792,9 @@ enum TicketAction<Intent> {
 | S9 | 规则组合的可交换性分类表；具名 struct/enum 组合下三层规则的样板量实测 | fp-03 命题 6；Rust 可行性评估 |
 | S10 | 发出后-持久化前崩溃窗口的恢复协议实测：SQLite WAL/fsync 崩溃注入于 `Prepared`/`SendBarrier`/`submit` 各窗口，验证不重复投放（与 S1 合并） | 域 F5/C1 |
 | S11 | Wasm 三 OS 开箱即用性与预算一致性实测；不成立则退回受监督子进程（§5.2） | 维护者约束；problem-domain §1.4.2 |
-| S12 | 类型化段池选库：`iceoryx2` 三 OS 覆盖、变长 `Slice`、history 深度是否满足 §5.3 前置条件；段回收与调用中借用的生命周期；并发/替换同时发生时的段有效性；不自研（§5.3） | native-computation-design-handoff §6/§10；维护者裁决 |
-| S13 | **收窄**（fp-07）：② 导出格式、③ 交付、⑤ hash 校验三步有充分先例可关闭；剩 ① 组合子树 fold 推导布局的确定性与规范化输出（无先例，与 hash 输入耦合）、三 OS 产物的 C/linker/SDK 缺口 | fp-07 S13 关闭建议；§5.3 |
-| S14 | 原生计算的触发语义（edge/level、合并、冷却）、调度/背压/积压、失败/资源超限、状态重建；不承诺 hostile 隔离 | native-computation-design-handoff §6/§7 |
+| S12 | **选库已裁决 `iceoryx2`（fp-08）**；剩实测闸门：macOS/Windows 跨独立进程只读消费、借用期回收、reader 崩溃回收、Slice 重分配快照、契约表归一（`hpc-derivation-subsystem.md` §9） | fp-08 §7.1；维护者裁决 |
+| S13 | **收窄**（fp-07）：② 导出格式、③ 交付、⑤ hash 校验已在 `hpc-derivation-subsystem.md` §3/§6/§7 关闭；剩 ① 组合子树 fold 推导布局的确定性与规范化输出（闸门 6）、三 OS 产物的 C/linker/SDK 缺口（外部条件） | fp-07 S13 关闭建议；§5.3 |
+| S14 | 原生计算的触发通道形式（edge/level、合并、冷却）、背压/积压；50 ms 预算与失败观察已定（`hpc-derivation-subsystem.md` §6.3）；不承诺 hostile 隔离 | native-computation-design-handoff §6/§7 |
 | S15 | 高频行情流作为 `Journal` 的持久化策略（全量 / 抽样 / 仅 gap 标记）与保留协议；段池不参与（§2、§6.1、§5.3） | D12 |
 
 ---
@@ -804,7 +804,9 @@ enum TicketAction<Intent> {
 - **`problem-domain.md`**（迁移自原 `uta-design.md` §1 问题域与附录 B）：继续有效；原 `uta-design.md` §3–§6 的"五轴投影 + P6–P11 现象表照抄成类型"的设计中心被本文取代。
 - **`research/fp-00-synthesis.md`**：本文 FP 案例 **[证据]** 的索引；`fp-01`–`fp-05` 是一手出处；`fp-06` 是 §8 写边界 / in-doubt / 对账的一手出处。
 - **`native-computation-design-handoff.md`**：自定义原生计算的场景/约束交接稿；§5.3 是其落点，S12–S14 与 D11 由它登记。其"同地址空间"方向被 D12（类型化共享内存段池）取代，交接稿本身作为记录不改。
-- **`research/fp-07-type-export-and-external-compilation.md`**：§5.3 类型导出 / 外部编译 / 装载 / 握手校验的一手出处；S13 据此收窄。
+- **`hpc-derivation-subsystem.md`**：§5.3 的子系统级设计（布局推导/导出/身份、契约表、段生命周期、原生 op 装载握手、外部编译、选库裁决、S12 实测闸门）。§5.3 定原则，本文定接口。
+- **`research/fp-07-type-export-and-external-compilation.md`**：类型导出 / 外部编译 / 装载 / 握手校验的一手出处。
+- **`research/fp-08-segment-pool-libraries.md`**：段池选库的一手出处；首选 `iceoryx2`。
 - **`decision-log.md`**：本轮对话中维护者原话与裁决的归档（A–E 分主题，F 为已知未对齐处）。正文与其不一致时以更晚条目为准并回写正文；review 与 subagent 以它为查证入口。
 - **讨论记录**：两位讨论者（steady / divergent）的压力测试、一次外部阅读评审与 `discuss:astra` 两轮讨论的修正已并入正文；历史见 git log。
 
