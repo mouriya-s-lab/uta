@@ -561,7 +561,7 @@
 
 > 状态含义：`已打开（clone）` = 本次 shallow clone 后用 `read/grep` 打开；`已下载并打开` = 通过官方 URL 下载到本地再用 `read` 打开；所有仓库 commit 均是本次实际读取的 `HEAD`。
 
-1. **safe-money** — `https://github.com/k0001/safe-money`；已打开（clone `9960c6102a97786dc219b8ad78a1a978c1f63fef`）；本地 `/tmp/openalice-fp04/safe-money/safe-money/src/Money/Internal.hs`、`README.md`。
+1. **safe-money** — `https://github.com/k0001/safe-money`；已打开（clone `9960c6102a97786dc219b8ad78a1a978c1f63fef`）；本地 `/Users/mouriya/Ext/tmp/uta-research/openalice-fp04/safe-money/safe-money/src/Money/Internal.hs`、`README.md`。
 2. **Squants** — `https://github.com/typelevel/squants`；已打开（clone `29aa57f4a1958daf9a5a397cca8982b1654e164c`）；本地 `shared/src/main/scala/squants/Quantity.scala`、`UnitOfMeasure.scala`、`market/Money.scala`、`README.md`。
 3. **Domain Modeling Made Functional** — `https://github.com/swlaschin/DomainModelingMadeFunctional`；已打开（clone `8153616b1dc0d5a0bb9e965cbe14a46b0dd4f3cf`）；本地 `src/OrderTaking/PlaceOrder.Implementation.fs`、`README.md`。
 4. **F# for Fun and Profit（作者源码）** — `https://github.com/swlaschin/fsharpforfunandprofit.com`；已打开（clone `15b0a0d2b503aa297f4f5a789ebff00ba53e75b5`）；本地 `content/posts/designing-with-types-making-illegal-states-unrepresentable/index.md`、`.../designing-with-types-representing-states/index.md`。网站 canonical 路径在本次环境返回 404，故以作者仓库为一手打开来源。
@@ -572,18 +572,18 @@
 9. **Cats** — `https://github.com/typelevel/cats`；已打开（clone `f0c5f1b450b3250db4f6b819ebd9db4d583843bd`）；本地 `core/src/main/scala/cats/data/Validated.scala`、`Ior.scala`。
 10. **cats-effect Clock** — `https://github.com/typelevel/cats-effect`；已打开（clone `f219988a0c8821105da8a29e30d731bab39e2ba4`）；本地 `kernel/shared/src/main/scala/cats/effect/kernel/Clock.scala`。
 11. **Apache Flink** — `https://github.com/apache/flink`；已打开（clone `bd0a65afb943d56a8afb13c20a1ba57d1bfc30d5`）；本地 `docs/content/docs/concepts/time.md`。
-12. **Dataflow Model paper** — Akidau et al., `https://www.vldb.org/pvldb/vol8/p1792-Akidau.pdf`；已下载并打开 `/tmp/openalice-fp04/dataflow-model.pdf`；引用 abstract、§2–§4、pp.1792–1805。
-13. **Lamport, “Time, Clocks, and the Ordering of Events in a Distributed System”** — `https://lamport.azurewebsites.net/pubs/time-clocks.pdf`；已下载并打开 `/tmp/openalice-fp04/lamport-time-clocks.pdf` / `.txt`；引用 pp.558–560、§“Logical Clocks”。论文 DOI：`https://doi.org/10.1145/359545.359563`。
+12. **Dataflow Model paper** — Akidau et al., `https://www.vldb.org/pvldb/vol8/p1792-Akidau.pdf`；已下载并打开 `/Users/mouriya/Ext/tmp/uta-research/openalice-fp04/dataflow-model.pdf`；引用 abstract、§2–§4、pp.1792–1805。
+13. **Lamport, “Time, Clocks, and the Ordering of Events in a Distributed System”** — `https://lamport.azurewebsites.net/pubs/time-clocks.pdf`；已下载并打开 `/Users/mouriya/Ext/tmp/uta-research/openalice-fp04/lamport-time-clocks.pdf` / `.txt`；引用 pp.558–560、§“Logical Clocks”。论文 DOI：`https://doi.org/10.1145/359545.359563`。
 14. **Apache Pekko VectorClock** — `https://github.com/apache/pekko`；已打开（clone `6db9cafd59b8e3567106747557e23ee511390d02`）；本地 `cluster/src/main/scala/org/apache/pekko/cluster/VectorClock.scala`。
 15. **Haskell time** — `https://github.com/haskell/time`；已打开（clone `24ddc629d3da321f4d6bf36ea7b329ffc7978032`）；本地 `lib/Data/Time/Clock/Internal/UTCTime.hs`、`lib/Data/Time/Clock.hs`。仅作为未展开的 UTC/nominal time 交叉证据。
-16. **Alexis King, “Parse, don’t validate”** — `https://lexi-lambda.github.io/blog/2019/11/05/parse-don-t-validate/`；已下载并打开 `/tmp/openalice-fp04/parse-dont-validate.html` / `.txt`；引用 `NonEmpty`、parse/validate、shotgun parsing 段落。
-17. **Alexis King, “Names are not type safety”** — `https://lexi-lambda.github.io/blog/2020/11/01/names-are-not-type-safety/`；已下载并打开 `/tmp/openalice-fp04/names-not-type-safety.html` / `.txt`；引用 newtype、constructive data、trust boundary 和维护代价段落。
-18. **Stripe, low-level errors** — `https://docs.stripe.com/error-low-level`；已下载并打开 `/tmp/openalice-fp04/stripe-low-level.html` / `.txt`；引用 network error、500 indeterminate、idempotency key、webhook correlation 段落。
-19. **PayPal idempotency** — `https://developer.paypal.com/reference/guidelines/idempotency/`；已下载并打开 `/tmp/openalice-fp04/paypal-idempotency.html`；引用 `PayPal-Request-Id` 与 timeout/capture 示例。
+16. **Alexis King, “Parse, don’t validate”** — `https://lexi-lambda.github.io/blog/2019/11/05/parse-don-t-validate/`；已下载并打开 `/Users/mouriya/Ext/tmp/uta-research/openalice-fp04/parse-dont-validate.html` / `.txt`；引用 `NonEmpty`、parse/validate、shotgun parsing 段落。
+17. **Alexis King, “Names are not type safety”** — `https://lexi-lambda.github.io/blog/2020/11/01/names-are-not-type-safety/`；已下载并打开 `/Users/mouriya/Ext/tmp/uta-research/openalice-fp04/names-not-type-safety.html` / `.txt`；引用 newtype、constructive data、trust boundary 和维护代价段落。
+18. **Stripe, low-level errors** — `https://docs.stripe.com/error-low-level`；已下载并打开 `/Users/mouriya/Ext/tmp/uta-research/openalice-fp04/stripe-low-level.html` / `.txt`；引用 network error、500 indeterminate、idempotency key、webhook correlation 段落。
+19. **PayPal idempotency** — `https://developer.paypal.com/reference/guidelines/idempotency/`；已下载并打开 `/Users/mouriya/Ext/tmp/uta-research/openalice-fp04/paypal-idempotency.html`；引用 `PayPal-Request-Id` 与 timeout/capture 示例。
 20. **CCXT** — `https://github.com/ccxt/ccxt`；已打开（clone `e1cd3a681bff89560ac3f8c68f317fcc34683e57`）；本地 `README.md`、`python/ccxt/base/types.py`、`python/ccxt/base/exchange.py`、`CONTRIBUTING.md`。
 21. **CCXT maintainer issue #1027** — `https://github.com/ccxt/ccxt/issues/1027`；已打开 GitHub issue resource；引用 @kroitor 2018-01-12 对 quirks 维护范围的原话。
 22. **QuantLib** — `https://github.com/lballabio/QuantLib`；已打开（clone `e34c461de96e1f3afe55b8d94f2e0d6fc418a399`）；本地 `README.md`、`ql/instrument.hpp`、`ql/pricingengine.hpp`。
-23. **QuantLib QuEP 5（Luigi Ballabio）** — `https://www.quantlib.org/quep/quep005.html`；已下载并打开 `/tmp/openalice-fp04/quep005.html`；引用 abstract、Current implementation、Disadvantages、Proposed implementation、Conclusion。
-24. **Implementing QuantLib Observer（Luigi Ballabio）** — `https://www.implementingquantlib.com/2017/09/odds-and-ends-observer.html`；已下载并打开 `/tmp/openalice-fp04/ql-observer.html`；引用 exceptions/lifetime/GC/notification storm/post-mortem 段落。
+23. **QuantLib QuEP 5（Luigi Ballabio）** — `https://www.quantlib.org/quep/quep005.html`；已下载并打开 `/Users/mouriya/Ext/tmp/uta-research/openalice-fp04/quep005.html`；引用 abstract、Current implementation、Disadvantages、Proposed implementation、Conclusion。
+24. **Implementing QuantLib Observer（Luigi Ballabio）** — `https://www.implementingquantlib.com/2017/09/odds-and-ends-observer.html`；已下载并打开 `/Users/mouriya/Ext/tmp/uta-research/openalice-fp04/ql-observer.html`；引用 exceptions/lifetime/GC/notification storm/post-mortem 段落。
 25. **thiserror（补充错误 ADT 对比）** — `https://github.com/dtolnay/thiserror`；已打开（clone `5a306c7d0a8588caaaaa6a7567aeb25c1c10719b`）；本地 `src/lib.rs`；本报告正文未展开为独立案例，避免偏离 Haskell/Scala/F# 主线。
 26. **Scala 3 opaque types（未展开，供同批次交叉）** — `https://github.com/scala/docs.scala-lang`；已打开（clone `f9b365a886739d2f7e56216e92f261fc1cf55b1f`）；本地 `_overviews/scala3-book/types-opaque-types.md`；正文未展开，避免与 Scala JVM 案例重复。

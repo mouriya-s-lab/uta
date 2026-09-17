@@ -187,7 +187,7 @@ trait DataSource[F[_], I, A] {
 
 - [观察] ZIO 源码定义 `ZIO[R,E,A]` 是 immutable effect，描述 async/concurrent workflow；形式上可看作 `ZEnvironment[R] => Either[E,A]`，Runtime 才执行，fibers 支持高并发（[S6] `ZIO.scala:L33-L55`）。
 - [观察] 官方 adopters 页面只说是“partial list of companies happily using ZIO in production to craft concurrent applications”，列 Bank of America、CurrencyCloud、Tinkoff、Tranzzo、Unit 等，但不提供产品、版本、团队或规模（[S7] `docs/adopters.md:L7-L9,L24-L25,L38-L39,L94-L97`）。
-- [观察] T‑Bank 官方 Scala 页面提供了强金融上下文：T‑Business 法人结算/工资支付/账户/operations feed，最多约 15 million client operations/month；T‑Investments 管用户资产、资产操作和交易所信息，tens of thousands requests/second，并列出 ZIO、Cats、Kafka、K8S 及多类数据库；Scala 开发者超过 250 人（[S8] `/tmp/tbank-scala-page.txt:L45-L49,L57-L75,L121-L129,L163-L181`）。
+- [观察] T‑Bank 官方 Scala 页面提供了强金融上下文：T‑Business 法人结算/工资支付/账户/operations feed，最多约 15 million client operations/month；T‑Investments 管用户资产、资产操作和交易所信息，tens of thousands requests/second，并列出 ZIO、Cats、Kafka、K8S 及多类数据库；Scala 开发者超过 250 人（[S8] `/Users/mouriya/Ext/tmp/uta-research/tbank-scala-page.txt:L45-L49,L57-L75,L121-L129,L163-L181`）。
 - [边界] T‑Bank 页面没有把 ZIO 逐服务绑定到 T‑Business 或 T‑Investments；可说“公司生产 Scala stack 包含 ZIO 且公司公开了这些金融规模”，不能说这些系统全部由 ZIO 实现。
 
 #### ②设计中心与实际定义
@@ -221,16 +221,16 @@ trait DataSource[F[_], I, A] {
 
 - [观察] ZIO docs 对裸 fiber 使用给出明显警告：优先 `zipPar`/`raceWith` 等高层组合；daemon 改变生命周期，误用会泄漏或脱离父 scope（[S6] `ZIO.scala:L764-L779`；`fiber.md:L47-L59`）。
 - [观察] race 可能等待 loser clean termination；Layer 默认 sharing、环境 collision preference 和 Scope 都是需要理解的语义成本（[S6] `ZIO.scala:L1310-L1328`；`ZLayer.scala:L35-L42`；`ZEnvironment.scala:L278-L294`）。
-- [作者原话] De Goes 在《A Brief History of ZIO》中说教学中 monad transformers “painful”，用户为 higher-kinded types 牺牲 type inference，并把 ZIO 从 “purely functional IO monad” 改成更易销售的 async/concurrent programming；作者原文已打开（[S9] `https://degoes.net/articles/zio-history`，`/tmp/degoes-zio-history.html:L181-L217`）。
-- [作者原话] De Goes 的 ZIO Environment 文章把 tagless-final 的代价命名为 “Massive Ramp-Up”“Big Bang”“Tedious Repetition”“Completely Uninferrable”，并称 ReaderT 最高约 4x、ReaderT+EitherT 最高约 8x；这些是作者估计而非本次 benchmark（[S10] `/tmp/degoes-zio-environment.html:L323-L415,L619-L623,L765-L799`）。
+- [作者原话] De Goes 在《A Brief History of ZIO》中说教学中 monad transformers “painful”，用户为 higher-kinded types 牺牲 type inference，并把 ZIO 从 “purely functional IO monad” 改成更易销售的 async/concurrent programming；作者原文已打开（[S9] `https://degoes.net/articles/zio-history`，`/Users/mouriya/Ext/tmp/uta-research/degoes-zio-history.html:L181-L217`）。
+- [作者原话] De Goes 的 ZIO Environment 文章把 tagless-final 的代价命名为 “Massive Ramp-Up”“Big Bang”“Tedious Repetition”“Completely Uninferrable”，并称 ReaderT 最高约 4x、ReaderT+EitherT 最高约 8x；这些是作者估计而非本次 benchmark（[S10] `/Users/mouriya/Ext/tmp/uta-research/degoes-zio-environment.html:L323-L415,L619-L623,L765-L799`）。
 - [未找到] 没有 ZIO 金融事故 post-mortem、金融 benchmark 或维护者对 T‑Bank 具体部署的 regret。
 
 #### 设计比较：tagless-final、Free 与 ZIO environment 的一手原话
 
-- [作者原话] De Goes 先给 Free 的定义：“A Free monad is basically just a way to stuff a sequential computation in a data structure, so you can inspect that data structure and ‘interpret’ it later”；并说 `Free f a` 是由 operational algebra 描述的 program（[S11] `/tmp/degoes-modern-fp.html:L204-L239`）。
-- [作者原话] 同一作者的 tagless-final 示例是 `trait Console[F[_]]` 与 `def program[F[_]: Console: Monad]: F[String]`；他明确列出类型类参数的 ramp-up、big-bang refactor、重复 context bounds 与 inference 限制（[S10] `/tmp/degoes-zio-environment.html:L258-L343,L357-L415`）。
+- [作者原话] De Goes 先给 Free 的定义：“A Free monad is basically just a way to stuff a sequential computation in a data structure, so you can inspect that data structure and ‘interpret’ it later”；并说 `Free f a` 是由 operational algebra 描述的 program（[S11] `/Users/mouriya/Ext/tmp/uta-research/degoes-modern-fp.html:L204-L239`）。
+- [作者原话] 同一作者的 tagless-final 示例是 `trait Console[F[_]]` 与 `def program[F[_]: Console: Monad]: F[String]`；他明确列出类型类参数的 ramp-up、big-bang refactor、重复 context bounds 与 inference 限制（[S10] `/Users/mouriya/Ext/tmp/uta-research/degoes-zio-environment.html:L258-L343,L357-L415`）。
 - [作者原话] 他随后给出 `ZIO[R,E,A]`，称它只用额外环境参数和 `provide/accessM` 就可达到比 tagless-final 更低的学习成本，并主张 fully inferable、modular、incremental（[S10] `L623-L683,L765-L812,L897-L911`）。
-- [作者原话] Fabio Labella 的公开 gist 给出 `trait KVS[A]`、`Free[Instr[_],A]`、`foldMap[G](translator: F ~> G): G[A]`，并强调 “A Free monad is always translated into another Monad; the other Monad then does what's needed to produce an A”；他还说副作用要等 Task/IO 明确 run（[S12] `/tmp/fabio-free-deb56/Free conversation.md:L59-L79,L105-L145,L217-L250,L314-L320`）。
+- [作者原话] Fabio Labella 的公开 gist 给出 `trait KVS[A]`、`Free[Instr[_],A]`、`foldMap[G](translator: F ~> G): G[A]`，并强调 “A Free monad is always translated into another Monad; the other Monad then does what's needed to produce an A”；他还说副作用要等 Task/IO 明确 run（[S12] `/Users/mouriya/Ext/tmp/uta-research/fabio-free-deb56/Free conversation.md:L59-L79,L105-L145,L217-L250,L314-L320`）。
 - [判断] 这三者不是同一层竞争：Free 的中心是可检查的 instruction program；tagless-final 的中心是按 `F` 参数化的 capability interface；ZIO 的中心是带 environment/error/result 的 effect carrier。作者原话支持“选择取舍”，不支持把任一者宣传成金融正确性方案。
 
 ### 案例 4A：Adrian Filip 的 money application / `MultiLaneSequencer`
@@ -483,41 +483,41 @@ trait DataSource[F[_], I, A] {
 
 ## 来源清单（固定快照、打开状态与本地路径）
 
-1. **gvolpe/trading**；URL `https://github.com/gvolpe/trading/tree/e38afe019eda8c97185371de228002047a5ae890`；已打开固定 commit；本地 `/tmp/gvolpe-trading`；关键 `README.md`、domain/core/feed/processor/alerts/snapshots/ws/tracing 源码。
+1. **gvolpe/trading**；URL `https://github.com/gvolpe/trading/tree/e38afe019eda8c97185371de228002047a5ae890`；已打开固定 commit；本地 `/Users/mouriya/Ext/tmp/uta-research/gvolpe-trading`；关键 `README.md`、domain/core/feed/processor/alerts/snapshots/ws/tracing 源码。
 2. **gvolpe/trading PR #179**；URL `https://github.com/gvolpe/trading/pull/179`；已打开 PR 正文；本地缓存 `issue/pr`；用于 “hacky bug-fix” 原话。
 3. **gvolpe/trading PR #55**；URL `https://github.com/gvolpe/trading/pull/55` 及 discussion/issuecomment anchors；已打开；本地缓存；用于 Scala.js linking/人因原话。
 4. **gvolpe/trading PR #122/#114**；URL `https://github.com/gvolpe/trading/pull/122`、`/pull/114`；已打开；本地缓存；用于 transaction/dedup 修复主题。
-5. **gvolpe/scalar-feda**；URL `https://github.com/gvolpe/scalar-feda/tree/de07909580fb3a7bf507fed649b442b8bf1075e0`；已打开固定 commit；本地 `/tmp/scalar-feda`；用于 PriceEvent/State/FSM 教学对照。
-6. **47deg Fetch**；URL `https://github.com/47degrees/fetch/tree/290c0a4e991553e98c4a7359247195feaed03162`；已打开固定 commit；本地 `/tmp/47degrees-fetch`；关键 `datasource.scala`、`fetch.scala`、`cache.scala`、examples。
+5. **gvolpe/scalar-feda**；URL `https://github.com/gvolpe/scalar-feda/tree/de07909580fb3a7bf507fed649b442b8bf1075e0`；已打开固定 commit；本地 `/Users/mouriya/Ext/tmp/uta-research/scalar-feda`；用于 PriceEvent/State/FSM 教学对照。
+6. **47deg Fetch**；URL `https://github.com/47degrees/fetch/tree/290c0a4e991553e98c4a7359247195feaed03162`；已打开固定 commit；本地 `/Users/mouriya/Ext/tmp/uta-research/47degrees-fetch`；关键 `datasource.scala`、`fetch.scala`、`cache.scala`、examples。
 7. **Fetch issue #305**；URL `https://github.com/47degrees/fetch/issues/305#issuecomment-760391265`；已打开 issue/comment；本地缓存；用于 dedup/random source 代价。
 8. **Fetch issue #306**；URL `https://github.com/47degrees/fetch/issues/306#issuecomment-760400904`；已打开 issue/comment；本地缓存；用于 cache 文档人因代价。
 9. **Fetch PR #538**；URL `https://github.com/xebia-functional/fetch/pull/538#issuecomment-926032541`；已打开 issue/PR material；本地缓存；用于 timeout/deadlock 修复。
-10. **Twitter Stitch**；URL `https://github.com/twitter/stitch/tree/2e32bf50221d4ba5ac0afe962f3196a421c19223`；已打开固定 commit；本地 `/tmp/twitter-stitch`；关键 Stitch/Group/Runner/cache/docs。
-11. **Stitch paper / Strato**；URL `https://doi.org/10.1145/3241653.3241654`，作者链接 `https://drive.google.com/file/d/1aYupExDuAbUheDX4aycrxZDrc6stTcig/view`；已打开 PDF；本地 `/tmp/strato-paper.pdf`；引用 §4 p.8–9 与 §5 p.10。
-12. **Jake Donham/Twitter University Stitch video**；URL `https://www.youtube.com/watch?v=VVpmMfT8aYw`；已打开页面 metadata；本地 `/tmp/VVpmMfT8aYw.metadata.txt`；无可用字幕，未伪造 transcript。
-13. **John A. De Goes, A Brief History of ZIO**；URL `https://degoes.net/articles/zio-history`；已抓取并实际打开；本地 `/tmp/degoes-zio-history.html`；用于作者设计动机/痛点。
-14. **John A. De Goes, Beautiful, Simple, Testable Functional Effects for Scala**；URL `https://degoes.net/articles/zio-environment`；已抓取并实际打开；本地 `/tmp/degoes-zio-environment.html`；用于 tagless-final/ZIO Environment 原话。
-15. **John A. De Goes, A Modern Architecture for FP**；URL `https://degoes.net/articles/modern-fp`；已抓取并实际打开；本地 `/tmp/degoes-modern-fp.html`；用于 Free/orthogonal algebra/interpreter 原话。
-16. **Fabio Labella/SystemFw Free conversation gist**；URL `https://gist.github.com/SystemFw/deb56c93e37af6a1fb1b48f878256b6b`；已打开固定 gist commit `6a4d4471a5979c0d22285292099e7ae5624c6615`；本地 `/tmp/fabio-free-deb56`；用于 `Free`/`foldMap`/natural transformation 原话。
-17. **ZIO 2.x**；URL `https://github.com/zio/zio/tree/43d439febd7a595ef6bd0a5ce538ef607267c6ee`；已打开固定 commit；本地 `/tmp/zio-research-43d`（另有 `/tmp/scala-zio`）；关键 ZIO/ZLayer/ZEnvironment/Cause/docs。
-18. **ZIO adopters**；URL `https://github.com/zio/zio/blob/43d439febd7a595ef6bd0a5ce538ef607267c6ee/docs/adopters.md`；已打开固定源码；本地 `/tmp/zio-research-43d/docs/adopters.md`；partial list，弱生产证据。
-19. **T‑Bank Scala developers official page**；URL `https://www.tbank.ru/career/it/scala/`；已抓取并实际打开；本地 `/tmp/tbank-scala-page.txt`；金融规模和 ZIO stack；未作 per-service ZIO 绑定。
+10. **Twitter Stitch**；URL `https://github.com/twitter/stitch/tree/2e32bf50221d4ba5ac0afe962f3196a421c19223`；已打开固定 commit；本地 `/Users/mouriya/Ext/tmp/uta-research/twitter-stitch`；关键 Stitch/Group/Runner/cache/docs。
+11. **Stitch paper / Strato**；URL `https://doi.org/10.1145/3241653.3241654`，作者链接 `https://drive.google.com/file/d/1aYupExDuAbUheDX4aycrxZDrc6stTcig/view`；已打开 PDF；本地 `/Users/mouriya/Ext/tmp/uta-research/strato-paper.pdf`；引用 §4 p.8–9 与 §5 p.10。
+12. **Jake Donham/Twitter University Stitch video**；URL `https://www.youtube.com/watch?v=VVpmMfT8aYw`；已打开页面 metadata；本地 `/Users/mouriya/Ext/tmp/uta-research/VVpmMfT8aYw.metadata.txt`；无可用字幕，未伪造 transcript。
+13. **John A. De Goes, A Brief History of ZIO**；URL `https://degoes.net/articles/zio-history`；已抓取并实际打开；本地 `/Users/mouriya/Ext/tmp/uta-research/degoes-zio-history.html`；用于作者设计动机/痛点。
+14. **John A. De Goes, Beautiful, Simple, Testable Functional Effects for Scala**；URL `https://degoes.net/articles/zio-environment`；已抓取并实际打开；本地 `/Users/mouriya/Ext/tmp/uta-research/degoes-zio-environment.html`；用于 tagless-final/ZIO Environment 原话。
+15. **John A. De Goes, A Modern Architecture for FP**；URL `https://degoes.net/articles/modern-fp`；已抓取并实际打开；本地 `/Users/mouriya/Ext/tmp/uta-research/degoes-modern-fp.html`；用于 Free/orthogonal algebra/interpreter 原话。
+16. **Fabio Labella/SystemFw Free conversation gist**；URL `https://gist.github.com/SystemFw/deb56c93e37af6a1fb1b48f878256b6b`；已打开固定 gist commit `6a4d4471a5979c0d22285292099e7ae5624c6615`；本地 `/Users/mouriya/Ext/tmp/uta-research/fabio-free-deb56`；用于 `Free`/`foldMap`/natural transformation 原话。
+17. **ZIO 2.x**；URL `https://github.com/zio/zio/tree/43d439febd7a595ef6bd0a5ce538ef607267c6ee`；已打开固定 commit；本地 `/Users/mouriya/Ext/tmp/uta-research/zio-research-43d`（另有 `/Users/mouriya/Ext/tmp/uta-research/scala-zio`）；关键 ZIO/ZLayer/ZEnvironment/Cause/docs。
+18. **ZIO adopters**；URL `https://github.com/zio/zio/blob/43d439febd7a595ef6bd0a5ce538ef607267c6ee/docs/adopters.md`；已打开固定源码；本地 `/Users/mouriya/Ext/tmp/uta-research/zio-research-43d/docs/adopters.md`；partial list，弱生产证据。
+19. **T‑Bank Scala developers official page**；URL `https://www.tbank.ru/career/it/scala/`；已抓取并实际打开；本地 `/Users/mouriya/Ext/tmp/uta-research/tbank-scala-page.txt`；金融规模和 ZIO stack；未作 per-service ZIO 绑定。
 20. **Tinkoff functional effects article**；URL `https://medium.com/its-tinkoff/aspects-of-functional-effects-execution-in-scala-runtimes-89cf415c7153`；已打开文章章节；网页抓取路径未保留为 clone；用于 Operations Feed/ZIO runtime 语境；未把它扩写成完整业务审计设计。
 21. **Adrian Filip money application**；URL `https://adrianfilip.com/2020/04/07/moving-from-kotlin-spring-reactor-arrow-to-scala-zio/`；已打开作者博客；网页抓取；用于 money app 语境和作者主观比较。
-22. **Adrian Filip MultiLaneSequencer**；URL `https://github.com/adrianfilip/multilane/tree/eb827b2980cb51223a335e0e733154cfc066b074`；已打开固定 commit；本地 `/tmp/multilane-research-eb827`；用于 STM lane queue 源码。
+22. **Adrian Filip MultiLaneSequencer**；URL `https://github.com/adrianfilip/multilane/tree/eb827b2980cb51223a335e0e733154cfc066b074`；已打开固定 commit；本地 `/Users/mouriya/Ext/tmp/uta-research/multilane-research-eb827`；用于 STM lane queue 源码。
 23. **Decathlon Digital POSLog article**；URL `https://medium.com/decathlondigital/why-combine-asynchronous-and-distributed-calculations-to-tackle-the-biggest-data-quality-challenges-2e04dfc51401`；已打开作者/公司文章；网页抓取；用于 retail 邻近规模，非金融证据。
 24. **ZIO World 2023 schedule**；URL `https://www.zioworld.com/`；已打开页面 schedule；网页抓取；用于 Decathlon talk 描述，未把无关视频当证据。
-25. **Cats Effect**；URL `https://github.com/typelevel/cats-effect/tree/f219988a0c8821105da8a29e30d731bab39e2ba4`；已打开固定 commit；本地 `/tmp/evidence-cats-effect` 或 `/tmp/scala-cats-effect`；Resource/Async/IO docs。
-26. **FS2**；URL `https://github.com/typelevel/fs2/tree/8aa47aba38454789ce206ad282ed30d45dcbae26`；已打开固定 commit；本地 `/tmp/evidence-fs2` 或 `/tmp/scala-fs2`；Stream/Pull docs/source。
-27. **fs2-kafka**；URL `https://github.com/typelevel/fs2-kafka/tree/abebcaa3a84324df275984625d68070ff9a4ca8d`；已打开固定 commit；本地 `/tmp/evidence-fs2-kafka` 或 `/tmp/scala-fs2-kafka`；Consumer/Producer/commit/transaction source。
-28. **http4s 0.23**；URL `https://github.com/http4s/http4s/tree/ff4e64f4a88da729e909912928d67b4ca63affe7`；已打开固定 commit；本地 `/tmp/evidence-http4s` 或 `/tmp/scala-http4s`；EntityBody/Client Resource source。
-29. **Skunk 2.0**；URL `https://github.com/typelevel/skunk/tree/1045d3b2317ed21d7554c92676cc77edb3d1cd18`；已打开固定 commit；本地 `/tmp/evidence-skunk` 或 `/tmp/scala-skunk`；Session/Query/Command/cursor source。
-30. **Akka core**；URL `https://github.com/akka/akka-core/tree/e0f2eff299576fbfc06052e5c6a28b51ef160aee`；已打开固定 commit；本地 `/tmp/akka-core-evidence`；Graph/Source/GraphStage/Behavior/ActorRef source。
-31. **ING Baker**；URL `https://github.com/ing-bank/baker/tree/9c732d7ec48b5d04da21da64ea9194c59b13e502`；已打开固定 commit；本地 `/tmp/ing-baker-evidence`（另有 `/tmp/ing-baker`）；Recipe/Type/Value/Petri/runtime/docs。
-32. **ING Baker race-fix document**；URL `https://github.com/ing-bank/baker/blob/9c732d7ec48b5d04da21da64ea9194c59b13e502/docs/awaitCompleted-race-condition-fix.md`；已打开仓库文档；本地 `/tmp/ing-baker-evidence/docs/awaitCompleted-race-condition-fix.md`；状态 Ready for review，按此限制解释。
-33. **PayPal squbs/Pekko-neighbor**；URL `https://github.com/paypal/squbs/tree/86d6a7bf2e92ecc6f825f496a393c1db1e1ff293`；已打开固定 commit；本地 `/tmp/paypal-squbs-015-evidence`；pipeline、PerpetualStream、design principles；当前仓库迁移 Pekko，未作 Akka 生产指标。
-34. **Scala 3 compiler/reference**；URL `https://github.com/scala/scala3/tree/2e0fea38441dd29dd887a712c49f055159f0d8a4`；已打开固定 commit；本地 `/tmp/scala3-uta-20260916`；opaque/enum/union/match reference。
-35. **Scala opaque-types SIP**；URL `https://github.com/scala/docs.scala-lang/tree/f9b365a886739d2f7e56216e92f261fc1cf55b1f/_sips/sips/035-opaque-types.md`；已打开固定 docs commit；本地 `/tmp/scala-docs-uta-20260916`；目标、boxing、benchmark caveat。
-36. **Scala SIP minutes**；URL `https://github.com/scala/docs.scala-lang/blob/f9b365a886739d2f7e56216e92f261fc1cf55b1f/_sips/minutes/2018-09-24-sip-minutes.md`；已打开固定 docs commit；本地 `/tmp/scala-docs-uta-20260916`；union types 讨论。
-37. **Iron**；URL `https://github.com/Iltotore/iron/tree/b8bdda9f2f4cc3a77acfb5171614bf78644c56e2`；已打开固定 commit；本地 `/tmp/iron-uta-20260916`；opaque refined type、constraints、integrations、issues/PRs。
-38. **refined v0.11.4**；URL `https://github.com/fthomas/refined/tree/f7b891288a021958310480636ef3905ed749cce9`；已打开 tag commit；本地 `/tmp/refined-v0114-uta-20260916`；Refined/Validate/time aliases/release notes。
+25. **Cats Effect**；URL `https://github.com/typelevel/cats-effect/tree/f219988a0c8821105da8a29e30d731bab39e2ba4`；已打开固定 commit；本地 `/Users/mouriya/Ext/tmp/uta-research/evidence-cats-effect` 或 `/Users/mouriya/Ext/tmp/uta-research/scala-cats-effect`；Resource/Async/IO docs。
+26. **FS2**；URL `https://github.com/typelevel/fs2/tree/8aa47aba38454789ce206ad282ed30d45dcbae26`；已打开固定 commit；本地 `/Users/mouriya/Ext/tmp/uta-research/evidence-fs2` 或 `/Users/mouriya/Ext/tmp/uta-research/scala-fs2`；Stream/Pull docs/source。
+27. **fs2-kafka**；URL `https://github.com/typelevel/fs2-kafka/tree/abebcaa3a84324df275984625d68070ff9a4ca8d`；已打开固定 commit；本地 `/Users/mouriya/Ext/tmp/uta-research/evidence-fs2-kafka` 或 `/Users/mouriya/Ext/tmp/uta-research/scala-fs2-kafka`；Consumer/Producer/commit/transaction source。
+28. **http4s 0.23**；URL `https://github.com/http4s/http4s/tree/ff4e64f4a88da729e909912928d67b4ca63affe7`；已打开固定 commit；本地 `/Users/mouriya/Ext/tmp/uta-research/evidence-http4s` 或 `/Users/mouriya/Ext/tmp/uta-research/scala-http4s`；EntityBody/Client Resource source。
+29. **Skunk 2.0**；URL `https://github.com/typelevel/skunk/tree/1045d3b2317ed21d7554c92676cc77edb3d1cd18`；已打开固定 commit；本地 `/Users/mouriya/Ext/tmp/uta-research/evidence-skunk` 或 `/Users/mouriya/Ext/tmp/uta-research/scala-skunk`；Session/Query/Command/cursor source。
+30. **Akka core**；URL `https://github.com/akka/akka-core/tree/e0f2eff299576fbfc06052e5c6a28b51ef160aee`；已打开固定 commit；本地 `/Users/mouriya/Ext/tmp/uta-research/akka-core-evidence`；Graph/Source/GraphStage/Behavior/ActorRef source。
+31. **ING Baker**；URL `https://github.com/ing-bank/baker/tree/9c732d7ec48b5d04da21da64ea9194c59b13e502`；已打开固定 commit；本地 `/Users/mouriya/Ext/tmp/uta-research/ing-baker-evidence`（另有 `/Users/mouriya/Ext/tmp/uta-research/ing-baker`）；Recipe/Type/Value/Petri/runtime/docs。
+32. **ING Baker race-fix document**；URL `https://github.com/ing-bank/baker/blob/9c732d7ec48b5d04da21da64ea9194c59b13e502/docs/awaitCompleted-race-condition-fix.md`；已打开仓库文档；本地 `/Users/mouriya/Ext/tmp/uta-research/ing-baker-evidence/docs/awaitCompleted-race-condition-fix.md`；状态 Ready for review，按此限制解释。
+33. **PayPal squbs/Pekko-neighbor**；URL `https://github.com/paypal/squbs/tree/86d6a7bf2e92ecc6f825f496a393c1db1e1ff293`；已打开固定 commit；本地 `/Users/mouriya/Ext/tmp/uta-research/paypal-squbs-015-evidence`；pipeline、PerpetualStream、design principles；当前仓库迁移 Pekko，未作 Akka 生产指标。
+34. **Scala 3 compiler/reference**；URL `https://github.com/scala/scala3/tree/2e0fea38441dd29dd887a712c49f055159f0d8a4`；已打开固定 commit；本地 `/Users/mouriya/Ext/tmp/uta-research/scala3-uta-20260916`；opaque/enum/union/match reference。
+35. **Scala opaque-types SIP**；URL `https://github.com/scala/docs.scala-lang/tree/f9b365a886739d2f7e56216e92f261fc1cf55b1f/_sips/sips/035-opaque-types.md`；已打开固定 docs commit；本地 `/Users/mouriya/Ext/tmp/uta-research/scala-docs-uta-20260916`；目标、boxing、benchmark caveat。
+36. **Scala SIP minutes**；URL `https://github.com/scala/docs.scala-lang/blob/f9b365a886739d2f7e56216e92f261fc1cf55b1f/_sips/minutes/2018-09-24-sip-minutes.md`；已打开固定 docs commit；本地 `/Users/mouriya/Ext/tmp/uta-research/scala-docs-uta-20260916`；union types 讨论。
+37. **Iron**；URL `https://github.com/Iltotore/iron/tree/b8bdda9f2f4cc3a77acfb5171614bf78644c56e2`；已打开固定 commit；本地 `/Users/mouriya/Ext/tmp/uta-research/iron-uta-20260916`；opaque refined type、constraints、integrations、issues/PRs。
+38. **refined v0.11.4**；URL `https://github.com/fthomas/refined/tree/f7b891288a021958310480636ef3905ed749cce9`；已打开 tag commit；本地 `/Users/mouriya/Ext/tmp/uta-research/refined-v0114-uta-20260916`；Refined/Validate/time aliases/release notes。

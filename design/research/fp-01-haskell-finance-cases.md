@@ -18,7 +18,7 @@
 
 ## 案例 1：Facebook / Meta **Haxl**（多 provider 副作用组合的核心案例）
 
-> 源码：`git clone --depth 1 https://github.com/facebook/Haxl`，commit `b33c1c1f132fa1d704cc0f7b6233f9c86bb50afe`（本次 clone 于 /tmp/haxl，已打开）。论文：Marlow, Brandy, Coens, Purdy, *There is no Fork: an Abstraction for Efficient, Concurrent, and Concise Data Access*, ICFP 2014（abstract 页已打开，PDF 仅凭搜索摘要）。
+> 源码：`git clone --depth 1 https://github.com/facebook/Haxl`，commit `b33c1c1f132fa1d704cc0f7b6233f9c86bb50afe`（本次 clone 于 /Users/mouriya/Ext/tmp/uta-research/haxl，已打开）。论文：Marlow, Brandy, Coens, Purdy, *There is no Fork: an Abstraction for Efficient, Concurrent, and Concise Data Access*, ICFP 2014（abstract 页已打开，PDF 仅凭搜索摘要）。
 
 ### ① 做什么、规模与生产使用证据
 
@@ -586,11 +586,11 @@ type RpcHandler (JsonRpc method p e r) m = p -> m (Either (JsonRpcErr e) r)  -- 
 
 | # | 来源 | URL | 打开状态 | 本地路径/commit |
 |---|---|---|---|---|
-| S1 | facebook/Haxl 源码 | github.com/facebook/Haxl | ✅ clone 并逐文件读 | /tmp/haxl @ `b33c1c1f132fa1d704cc0f7b6233f9c86bb50afe` |
+| S1 | facebook/Haxl 源码 | github.com/facebook/Haxl | ✅ clone 并逐文件读 | /Users/mouriya/Ext/tmp/uta-research/haxl @ `b33c1c1f132fa1d704cc0f7b6233f9c86bb50afe` |
 | S2 | Marlow et al., *There is no Fork*, ICFP 2014 | simonmar.github.io/bib/nofork-2014_abstract.html | ⚠️ abstract 页经搜索摘要打开；PDF 正文未逐页读 | — |
-| S3 | Dijkstra/Magalhães/Néron, *Functional Programming in Financial Markets*, ICFP 2024 | dreixel.net/research/pdf/fpfm.pdf | ✅ 全文已打开（curl→PDF） | /tmp/scmu.pdf |
-| S4 | Frankau et al., *Going functional on exotic trades*, JFP 2009 | www2.dmst.aueb.gr/dds/pubs/jrnl/2008-JFP-ExoticTrades/html/FSNB08.html | ✅ 作者托管 HTML 全文已打开 | /tmp/fpf.html |
-| S5 | Peyton Jones/Eber/Seward, *Composing Contracts*, ICFP 2000 | www.cs.tufts.edu/comp/150FP/archive/simon-peyton-jones/contracts.pdf | ✅ canonical PDF 逐页打开、核对 Figure 2/3 | /tmp/cc1.pdf |
+| S3 | Dijkstra/Magalhães/Néron, *Functional Programming in Financial Markets*, ICFP 2024 | dreixel.net/research/pdf/fpfm.pdf | ✅ 全文已打开（curl→PDF） | /Users/mouriya/Ext/tmp/uta-research/scmu.pdf |
+| S4 | Frankau et al., *Going functional on exotic trades*, JFP 2009 | www2.dmst.aueb.gr/dds/pubs/jrnl/2008-JFP-ExoticTrades/html/FSNB08.html | ✅ 作者托管 HTML 全文已打开 | /Users/mouriya/Ext/tmp/uta-research/fpf.html |
+| S5 | Peyton Jones/Eber/Seward, *Composing Contracts*, ICFP 2000 | www.cs.tufts.edu/comp/150FP/archive/simon-peyton-jones/contracts.pdf | ✅ canonical PDF 逐页打开、核对 Figure 2/3 | /Users/mouriya/Ext/tmp/uta-research/cc1.pdf |
 | S6 | *How to write a financial contract*（修订章节，标注版本边界用） | www.cs.utexas.edu/~novak/pj-eber.pdf | ✅ 已打开（委派） | — |
 | S7 | LexiFi 官方：CDL 博客 / Algebra / FAQ / About / Lifecycle | lexifi.com/blog/structured-thoughts/contract-description-language/ 等 | ✅ 已打开（委派 curl） | — |
 | S8 | LexiFi MLFiPaper.pdf | lexifi.com/files/resources/MLFiPaper.pdf | ❌ curl 返回 `AccessDenied`，未打开，非依据 | — |

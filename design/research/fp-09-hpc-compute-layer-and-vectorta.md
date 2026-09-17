@@ -18,7 +18,7 @@
 ## 2. 范围与方法
 
 - **只读来源**：`hpc-derivation-subsystem.md` 全文、`uta-core-design.md` §0.2/§5/§5.3。不读本仓库其他文件。
-- **一手取证**：VectorTA 以 crates.io 发布 tarball `vector-ta-0.3.1` 为源代码锚（SHA-256 `b530eeccbf2577e6c5e583f85a9e5f7b75042379d77936bdf5eed2116210af4f`，`.cargo_vcs_info.json` 指向 git commit `802518e2392c5d011744b75e56e108e97a0682b4`），双路独立解包核验（`/tmp/hpc-verify/vector-ta-0.3.1` 与 `/tmp/hpc-research-vectorta/vector-ta-0.3.1`）。对照库与 SIMD 库各 clone 并 pin commit（§12）。README/docs.rs/benchmark/issue 用 `curl`（crates.io 需 User-Agent，首次无 UA 返回 403）取原文。
+- **一手取证**：VectorTA 以 crates.io 发布 tarball `vector-ta-0.3.1` 为源代码锚（SHA-256 `b530eeccbf2577e6c5e583f85a9e5f7b75042379d77936bdf5eed2116210af4f`，`.cargo_vcs_info.json` 指向 git commit `802518e2392c5d011744b75e56e108e97a0682b4`），双路独立解包核验（`/Users/mouriya/Ext/tmp/uta-research/hpc-verify/vector-ta-0.3.1` 与 `/Users/mouriya/Ext/tmp/uta-research/hpc-research-vectorta/vector-ta-0.3.1`）。对照库与 SIMD 库各 clone 并 pin commit（§12）。README/docs.rs/benchmark/issue 用 `curl`（crates.io 需 User-Agent，首次无 UA 返回 403）取原文。
 - **本机运行**：`rustc 1.95.0 (59807616e 2026-04-14)`，host/target `aarch64-apple-darwin`，Apple M4，LLVM 22.1.2，`cargo build --release`（`opt-level=3`, `lto=true`）。所有计时不代表 x86 AVX。
 - **裁决门槛**（每库对照，来自子系统 §1.3/§3/§6.3 与 mentor 校准）：① 直接借共享完整窗口，不做 AoS→SoA 或 i64→f64 全窗物化；② 写调用方输出区或所有权模型兼容 op ABI；③ warm-up/无效值/gap 可表达且不错误串接 gap 两侧递归态；④ `aarch64-apple-darwin` release 有可查证执行路径（"无 AVX"≠"必然标量"）；⑤ 指标语义（周期边界、EMA seed、RSI 零分母、NaN 传播）不凭同名假定一致；⑥ 完整适配+计算 ≤ 50 ms（与"直接契合"分开裁决）。
 - **分级口径**：直接可用 / 需薄封装 / 需全窗物化 / 语义不兼容。
@@ -54,9 +54,9 @@ crate `vector-ta` 0.3.1（`github.com/VectorAlpha-dev/VectorTA`）。license Apa
 - [INFERENCE] 子系统 `Layout` 中某价格字段的相邻记录地址间隔 `sizeof(Layout)`，`zerocopy`/`bytemuck` 只能借出整条记录 `&[Layout]`，不能把跨记录同字段拼成连续 `&[f64]`；必须逐列 gather/转置。此项已使门槛①失败。
 
 **问二：能否写入调用方输出区？——条件通过。** [OBSERVED]
-- **源码审计**：353 个 `src/indicators/**/*.rs` 中，340 个含 `pub fn *_into`；无 `_into` 的 13 个全是基础设施文件（`dispatch/`、`registry`、`ma_batch`、`ma_stream`、`param_schema`、`utility_functions`），非指标——即**每个指标文件都有 `_into` 入口**。示例：`rsi_into(input, out: &mut [f64])`（`rsi.rs:230`）、`rsi_into_slice`（`rsi.rs:274`）、`sma_into`（`sma.rs`）、`ema_into`/`ema_into_slice`、`atr_into`（`atr.rs:279`）、`bollinger_bands_into`（`bollinger_bands.rs:413`）；底层 `xxx_compute_into(..., out: &mut [f64])`。要求 output 与 input 等长、连续。
+- **源码审计**：353 个 `src/indicators/**/*.rs` 中，340 个含 `pub fn *_into`；无 `_into` 的 13 个全是基础设施文件（`dispatch/`、`registry`、`ma_batch`、`ma_stream`、`param_schema`、`utility_functions`）——即**所有算法模块均提供 `_into` 入口**（registry↔逐指标 1:1 导出未交叉核对，故说"算法模块"而非"每个 registry 指标"）。示例：`rsi_into(input, out: &mut [f64])`（`rsi.rs:230`）、`rsi_into_slice`（`rsi.rs:274`）、`sma_into`（`sma.rs`）、`ema_into`/`ema_into_slice`、`atr_into`（`atr.rs:279`）、`bollinger_bands_into`（`bollinger_bands.rs:413`）；底层 `xxx_compute_into(..., out: &mut [f64])`。要求 output 与 input 等长、连续。
 - 默认返回路径分配 `Vec<f64>`：`RsiOutput{values: Vec<f64>}`（`rsi.rs:54-55`）、`BollingerBandsOutput{upper_band/middle_band/lower_band: Vec<f64>}`（`bollinger_bands.rs:52-56`）；经 `alloc_with_nan_prefix`（`src/utilities/helpers.rs:103-134`）建 `Vec`。
-- 本机实测（**范围限于 RSI/ATR/BBands 三项 single 路径**，非全部指标）：`rsi_into` 写入调用方 buffer 成功，首个有效值 @ idx14（=period）。VectorTAProbe 的 allocator 计数：`_into` 路径 `allocs=(0,0)`（计数窗口排除输入/输出预建，含指标内部工作区），返回 Vec 路径 `allocs=(1,0)`（`/tmp/hpc-research-vectorta/harness-run-default.log:3-6`）。batch/param-sweep/多输出/派生输入的内部 scratch 未逐一审计（§11）。
+- 本机实测（**范围限于 RSI/ATR/BBands 三项 single 路径**，非全部指标）：`rsi_into` 写入调用方 buffer 成功，首个有效值 @ idx14（=period）。VectorTAProbe 的 allocator 计数：`_into` 路径 `allocs=(0,0)`（计数窗口排除输入/输出预建，含指标内部工作区），返回 Vec 路径 `allocs=(1,0)`（`/Users/mouriya/Ext/tmp/uta-research/hpc-research-vectorta/harness-run-default.log:3-6`）。batch/param-sweep/多输出/派生输入的内部 scratch 未逐一审计（§11）。
 - [INFERENCE] `_into` 使输出所有权兼容 op ABI——**前提是输入已是连续 f64**。它不能写回只读输入段，也不支持带 stride 的输出 view，且不是 `impl Iterator<Item=Output>` 形状。
 
 **问三：warm-up/无效值/gap 能否表达且不串接两侧？——部分通过；契约待系统定义。** [OBSERVED]+[需实测]
@@ -68,7 +68,7 @@ crate `vector-ta` 0.3.1（`github.com/VectorAlpha-dev/VectorTA`）。license Apa
 **问四：`aarch64-apple-darwin` release 有可查证执行路径？——scalar 通过；加速路径不通过。** [OBSERVED]
 - `Kernel` enum 只有 `Auto/Scalar/Avx2/Avx512/+Batch`，无 NEON 变体（`src/utilities/enums.rs:2-9`）。`detect_best_kernel()`（`helpers.rs:10-25`）的 AVX 检测整块 `#[cfg(all(feature="nightly-avx", target_arch="x86_64"))]`，其余 target 返回 `Kernel::Scalar`；aarch64 恒 Scalar。
 - 所有 SIMD 内核门 `#[cfg(all(feature="nightly-avx", target_arch="x86_64"))]`：202/282 顶层指标文件含该门。`portable_simd`（`core::simd`）只在 `lib.rs:9` `#![cfg_attr(all(feature="nightly-avx", rustc_is_nightly), feature(portable_simd))]` 启用——**仅作 x86 AVX 载体，aarch64 从不用**。递归指标即便 x86+AVX 也走标量：`rsi.rs:258-259` `Kernel::Avx2 => rsi_compute_into_scalar`。NEON 字面仅 `pivot.rs`（疑似命名，非 SIMD）。
-- 本机实测：默认与 `--features nightly-avx` 两种 release build 均成功，运行时均打印 `single=Scalar batch=ScalarBatch`（`/tmp/hpc-research-vectorta/harness-run-{default,nightly-avx}.log:1-2`）；`cfg!` 报告 `target_arch="aarch64"`, `target_feature="neon"`。
+- 本机实测：默认与 `--features nightly-avx` 两种 release build 均成功，运行时均打印 `single=Scalar batch=ScalarBatch`（`/Users/mouriya/Ext/tmp/uta-research/hpc-research-vectorta/harness-run-{default,nightly-avx}.log:1-2`）；`cfg!` 报告 `target_arch="aarch64"`, `target_feature="neon"`。
 - [INFERENCE] "无 AVX"不能推出编译器不对 scalar loop 自动向量化；但本库无可查证 aarch64/NEON/portable-SIMD 算法路径。x86 AVX 文本扫描不是 M4 加速证明。
 
 **问五：指标语义与 50 ms 能否直接假定？——语义需适配；50 ms [需实测]。** [OBSERVED]
@@ -80,7 +80,7 @@ crate `vector-ta` 0.3.1（`github.com/VectorAlpha-dev/VectorTA`）。license Apa
 ### 3.2 五个深挖子项
 
 **(a) 输入形状 zero-copy 冲突量化。** [OBSERVED]+[本机实测]
-签名确证为 `from_slice(&[f64])` / 多个 `&[f64]`，无 `&[Layout]+stride` 形状（`sma.rs:96-113`, `atr.rs:71-90`, `adx.rs:67-85`）。真实不匹配是"strided i64 AoS ↔ contiguous f64 columns"整体输入 ABI。本机测得**融合 gather+scale+convert（AoS-i64→SoA-f64）3 列 100k = 88.9 µs/call**（≈ 转置-only 86.4µs，i64→f64 缩放融合进同一内存受限 pass、几乎免费；分项相加会高估约 40µs，见 §7）——与单指标计算同量级（RSI 100k=91.7µs）。这不是"加一个 unsafe zerocopy cast"能消除的 mismatch。
+签名确证为 `from_slice(&[f64])` / 多个 `&[f64]`，无 `&[Layout]+stride` 形状（`sma.rs:96-113`, `atr.rs:71-90`, `adx.rs:67-85`）。真实不匹配是"strided i64 AoS ↔ contiguous f64 columns"整体输入 ABI。本机实测融合 gather+scale+convert（AoS-i64→SoA-f64，中位数/100k）：**C=1 列 58.5µs、C=3 列 88.5µs、C=4 列 163.2µs**——i64→f64 缩放融合进同一 pass 几乎免费（转置-only 3 列 86.4µs）；**成本对列数非线性**：C=1 已 58.5µs 因为 strided AoS 读按整条 64B 记录触达 cache line，与取几列无关，额外列主要加写压力。与单指标计算同量级（RSI 100k=91.7µs）。这不是"加一个 unsafe zerocopy cast"能消除的 mismatch。
 
 **(b) 输出写入调用方段。** [OBSERVED] `_into(&mut [f64])` 是最接近子系统 `fn compute(windows) -> impl Iterator<Item=Output>` 的路径，但不是 iterator、不支持输出 stride、不能写只读输入段。零分配观察只覆盖简单 single indicator + 5 点样本，不证明全部 340 指标/batch/大窗口无 scratch 分配。
 
@@ -94,9 +94,9 @@ crate `vector-ta` 0.3.1（`github.com/VectorAlpha-dev/VectorTA`）。license Apa
 
 ### 3.3 本机 harness（可复现）
 
-- 两套 harness：我方独立 harness `/tmp/hpc-verify/harness`（依赖 `vector-ta = "=0.3.1"`，`opt-level=3 lto=true`），VectorTAProbe 另有 `/tmp/hpc-research-vectorta/harness`（`default-features=false`，另测 `--features nightly-avx`）。两套结论一致：backend 恒 `single=Scalar batch=ScalarBatch`。
-- 我方计时（M4, scalar, 100k 样本, 200/500 iter 均值，消费输出防 DCE）：**RSI(14)=91.7 µs、ATR(14)=154 µs、BBands(20)=25.5 µs；融合 AoS-i64→SoA-f64 3 列=88.9 µs**（转置-only 86.4µs、i64→f64 单列 13.9µs，仅作分项解释，不加总）。VectorTAProbe 官方 x86 对照（AMD 9950X, nightly）：rsi 100k=0.208ms、sma=0.037ms、ema=0.103ms（README benchmark 表）——RSI 两处都标量，M4 单核反快于 9950X。
-- 我方 harness 运行输出（节选，`/tmp/hpc-verify/harness` 运行结果）：
+- 两套 harness：我方独立 harness `/Users/mouriya/Ext/tmp/uta-research/hpc-verify/harness`（依赖 `vector-ta = "=0.3.1"`，`opt-level=3 lto=true`），VectorTAProbe 另有 `/Users/mouriya/Ext/tmp/uta-research/hpc-research-vectorta/harness`（`default-features=false`，另测 `--features nightly-avx`）。两套结论一致：backend 恒 `single=Scalar batch=ScalarBatch`。
+- 我方计时（M4, scalar, 100k 样本, 200/500 iter，多次取中位数，消费输出防 DCE）：**RSI(14)=91.7 µs、ATR(14)=154 µs、BBands(20)=25.5 µs；融合 AoS-i64→SoA-f64：C=1 列 58.5µs、C=3 列 88.5µs、C=4 列 163.2µs**（非线性，见 (a)；分项转置 86.4/i64→f64 13.9 仅作解释不加总）。VectorTAProbe 官方 x86 对照（AMD 9950X, nightly）：rsi 100k=0.208ms、sma=0.037ms、ema=0.103ms（README benchmark 表）——RSI 两处都标量，M4 单核反快于 9950X。
+- 我方 harness 运行输出（节选，`/Users/mouriya/Ext/tmp/uta-research/hpc-verify/harness` 运行结果）：
   ```text
   RSI(period=3) on monotone 1..8 -> [NaN, NaN, NaN, 100.0, 100.0, 100.0, 100.0, 100.0]
   RSI on constant 5.0 (zero-denominator) -> [NaN, NaN, NaN, 50.0, 50.0, 50.0, 50.0, 50.0]
@@ -105,8 +105,9 @@ crate `vector-ta` 0.3.1（`github.com/VectorAlpha-dev/VectorTA`）。license Apa
   RSI(14) recur     91.7 us/call  (100000 samples)
   ATR(14) recur    154.0 us/call  (100000 samples)
   BBands(20) win    25.5 us/call  (100000 samples)
-  AoS->SoA transpose 3col   98.4 us/call
-  i64 fixed->f64 convert    14.3 us/call
+  AoS->SoA transpose 3col           86.4 us/call   # 分项解释，非成本加总
+  i64 fixed->f64 convert            13.9 us/call   # 分项解释，非成本加总
+  FUSED AoS-i64->SoA-f64  C=1: 58.5  C=3: 88.5  C=4: 163.2 us/call (中位数, 非线性; ← 采用值)
   ```
 - VectorTAProbe harness 运行输出（default 与 nightly-avx 逐行相同，`harness-run-{default,nightly-avx}.log:1-14`）：
   ```text
@@ -217,7 +218,7 @@ crate `vector-ta` 0.3.1（`github.com/VectorAlpha-dev/VectorTA`）。license Apa
 | 直接契合 | **最契合固定契约**；性能靠真实访问模式验证 | 内部候选/sidecar，非从 AoS 每次转换的直接 op | 架构候选，须先获准改段抽象 |
 
 ### 5.3 对子系统三处的影响（洗入 / 契约表 / `Pooled` 输出 fold）[INFERENCE]
-- **洗入（§0/§1.2）**：A 单记录写入最简单；B 须多流或 AoS+sidecar，增加容量/写入复杂度；C 须多列同步发布、任一列缺失破坏记录语义。**关键**：无论哪案，若价格存定点 i64 而算法层要 f64，i64→f64 是数值轴的独立根因；当布局已强制物化时它可融合进 gather pass（本机 fused 3 列=88.9µs，§7），无独立增量成本。
+- **洗入（§0/§1.2）**：A 单记录写入最简单；B 须多流或 AoS+sidecar，增加容量/写入复杂度；C 须多列同步发布、任一列缺失破坏记录语义。**关键**：无论哪案，若价格存定点 i64 而算法层要 f64，i64→f64 是数值轴的独立根因；当布局已强制物化时它可融合进 gather pass（本机 fused C=3 列=88.5µs，§7），无独立增量成本。
 - **契约表（§4）与身份（§3.3/§3.4）**：A 的 Arrow format 码（`'l'`/`'tsn:'`/`'d:19,10'`/`'C'`）+ NumPy offsets 准确描述一条 record，但**它是布局描述不是"Arrow 列 buffer"证明，也不是一次转换许可证**——定点 i64 不能静默按 f64 读。B/C 要求 `layout_hash` 从"字段名/偏移"升级到覆盖真实物理布局（块宽、padding、lane 排布、validity 表示、定点尺度），否则同 hash 物理不同。
 - **`Pooled` 输出类型 fold（§0.2/§5.3）**：A 每 op 读同一 `Layout` 窗口、输出区由调用方提供，字段带宽可能浪费；B fold 按列/块聚合、需输出物理布局与转换责任、已有 AoS op 需适配；C 从"记录流"变多 buffer 对齐/合并，`fn compute(windows: &[&[Input]])` 的 `Input` 须从单条 `Layout` 重建为列集合——属 ABI/模型变化，非库适配细节。
 
@@ -225,7 +226,7 @@ crate `vector-ta` 0.3.1（`github.com/VectorAlpha-dev/VectorTA`）。license Apa
 两者须分别计价、分别排名，不可混为一谈：
 - **布局轴（AoS stride vs 连续列）**：现成库全要连续 `&[f64]`/`double*`/`Series`；AoS 段每次触发付适配成本。
 - **数值轴（定点 i64 vs f64）**：VectorTA 及全部对照库价格类型是 f64；定点 i64 须整列 i64→f64 + 精度语义变化。**即便改成 SoA，只要仍存 i64 定点，此轴依旧冲突**。
-- **成本可融合但根因不可合并**：当布局已强制物化时，i64→f64 缩放可融合进同一 gather pass（本机 fused 3 列 100k=88.9µs ≈ 转置-only 86.4µs，缩放几乎免费，§7）——因此两轴的**边界成本融合为一个 pass**；但它们是两个**可分别修复**的根因：段布局 与 价格数值表示，整改任一方不自动解决另一方（若改成 SoA-f64 段则两轴同时消除；若只改 SoA 仍存 i64 则数值轴仍在，只是它已无独立增量成本）。分项基准（转置 0.328/列、i64→f64 0.143/列）仅用于**解释**两条独立契约，不用于加总。
+- **成本可融合但根因不可合并**：当布局已强制物化时，i64→f64 缩放可融合进同一 gather pass（本机 fused C=3 列 100k=88.5µs ≈ 转置-only 86.4µs，缩放几乎免费，§7）——因此两轴的**边界成本融合为一个 pass**；但它们是两个**可分别修复**的根因：段布局 与 价格数值表示，整改任一方不自动解决另一方（若改成 SoA-f64 段则两轴同时消除；若只改 SoA 仍存 i64 则数值轴仍在，只是它已无独立增量成本）。分项基准（转置 0.328/列、i64→f64 0.143/列）仅用于**解释**两条独立契约，不用于加总。
 
 ---
 
@@ -257,30 +258,30 @@ crate `vector-ta` 0.3.1（`github.com/VectorAlpha-dev/VectorTA`）。license Apa
 T_total(N, C, K) = T_ipc + T_adapt(N, C) + Σ_k T_indicator(N, k) + T_output(N)
 ```
 - `N`=窗口样本数，`C`=需物化的输入列数，`K`=指标集合，`T_ipc`=IPC/调度/借用 [需实测]。
-- **`T_adapt` 是一个融合 pass**：从 strided i64 AoS 一次性 gather+scale+convert 到连续 f64 列——gather 与 i64→f64 缩放**融合在同一内存受限 pass 内**，不叠加。本机实测 **fused AoS-i64→SoA-f64 3 列 100k = 88.9 µs**（≈ 转置-only 86.4µs，缩放几乎免费）；naive 分项相加（转置 86.4 + 3×i64转换 13.9 = 128µs）**高估约 40µs**，本文不采分项相加。
-- 单位成本（µs/1000 样本）：**融合物化 0.296/列**（=88.9/3/100）、RSI(14) **0.917**、ATR(14) **1.54**、BBands(20) **0.255**。分项基准（转置 0.328/列、i64→f64 0.143/列）**仅用于解释布局与数值是两条独立契约冲突**（§5.4），不用于加总成本。
+- **`T_adapt(N,C)` 是一个融合 pass 且对列数 C 非线性**：从 strided i64 AoS 一次性 gather+scale+convert 到连续 f64 列——gather 与 i64→f64 缩放**融合在同一内存受限 pass 内**，不叠加。本机实测中位数（/100k）：**C=1=58.5µs、C=3=88.5µs、C=4=163.2µs**。非线性根因：strided AoS 读按整条 64B 记录触达 cache line，C=1 已付大部分读成本（58.5µs），增列主要加写压力；因此**不可用"每列固定成本×C"线性外推**。naive 分项相加（转置 86.4 + 3×i64转换 13.9 = 128µs）也高估约 40µs，本文均不采。
+- 单位成本（µs/1000 样本）：融合适配按上列实测值（**不线性拆列**）；RSI(14) **0.917**、ATR(14) **1.54**、BBands(20) **0.255**。分项基准（转置 0.328/列、i64→f64 0.143/列）**仅用于解释布局与数值是两条独立契约冲突**（§5.4），不用于加总或按列外推。
 
 **单条 (stream × indicator) 从 AoS+i64 融合物化的合计成本与 50 ms（=50000µs，未扣 IPC）内可容份数**：
 
 | 场景 | N=1k | N=10k | N=100k | N=1M | 物化占比 |
 |---|---|---|---|---|---|
-| close→RSI (C=1) 合计 | 1.2µs | 12.1µs | 121.3µs | 1213µs | 24% |
-| 　50ms 可容 | ~41000 | ~4100 | ~412 | ~41 | |
-| HLC→ATR (C=3) 合计 | 2.4µs | 24.3µs | 242.9µs | 2429µs | 37% |
-| 　50ms 可容 | ~20500 | ~2050 | ~205 | ~20 | |
-| close→BBands (C=1) 合计 | 0.6µs | 5.5µs | 55.1µs | 551µs | 54% |
-| 　50ms 可容 | ~90000 | ~9000 | ~906 | ~90 | |
+| close→RSI (C=1) 合计 | 1.5µs | 15.0µs | 150.2µs | 1502µs | 39% |
+| 　50ms 可容 | ~33000 | ~3300 | ~332 | ~33 | |
+| HLC→ATR (C=3) 合计 | 2.4µs | 24.2µs | 242.5µs | 2425µs | 36% |
+| 　50ms 可容 | ~20600 | ~2060 | ~206 | ~20 | |
+| close→BBands (C=1) 合计 | 0.8µs | 8.4µs | 84.0µs | 840µs | 70% |
+| 　50ms 可容 | ~59500 | ~5950 | ~595 | ~59 | |
 
 **读法与告诫**：
-- 融合物化占合计：RSI ~24%、ATR ~37%、BBands ~54%——**AoS/i64 融合适配不可忽略，与计算同量级**。这是"直接契合失败"的定量代价：改成能零拷贝借用 f64 SoA 段可省掉这部分（RSI 约 1/4、BBands 约一半）。
+- 融合适配占合计：RSI ~39%、ATR ~36%、BBands ~70%——**AoS/i64 融合适配不可忽略，与计算同量级甚至更大**。这是"直接契合失败"的定量代价：改成能零拷贝借用 f64 SoA 段可省掉这部分。sanity 上界（kernel=0）：C=1 单窗 100k 最多约 854 份、C=3 约 564 份——上表 BBands C=1=595 < 854、ATR C=3=206 < 564，自洽。
 - 上表是 **kernel/adapter calibration，不是含 IPC 的端到端保证**；**未含 `T_ipc`**（iceoryx2 借用/触发/写回/调度）[需实测]。子系统 §1.3 称 50ms 下 IPC 层"不需关心"，但物化+计算已占可观预算，须在真实链路复核 IPC 是否仍可忽略。
 - 计时方法：release、有 warm-up、200/500 iter 均值、消费输出防 DCE（`acc` 累加/guard 打印）；报告均值，未采分位数——正式验收须取分位数/最坏窗口。
 - 数字是 **M4 标量**；不代表 x86 AVX（VectorTA 官方 rsi 100k=0.208ms 是 9950X，反而慢于我方 M4 标量 0.092ms，因 RSI 两处都标量、M4 单核更快）。
 - 递归指标沿时间不可平行化，K 个指标近似线性叠加；窗口 N 与指标组合未定时，以"每 1000 样本 µs"和上表参数化上界为准，不擅自选生产规模。
 
-**多指标同窗摊薄的工作示例**（[INFERENCE]，融合物化）：一条 OHLC 流窗口 N=100k，同时算 RSI+ATR+BBands，融合物化 OHLC 4 列一次（`4×0.296×100 ≈ 118µs`），计算 `91.7+154+25.5=271µs`；合计 ≈ 389µs（未含 IPC）。若每指标独立物化则物化按需列重复多次——同窗复用把物化从"每指标一次"降到"每窗一次"，是唯一在不改布局下压缩物化占比的杠杆。据此 50ms 内约可容 128 组"OHLC 窗口 × 3 指标"（未含 IPC，[需实测]）。
+**多指标同窗摊薄的工作示例**（[INFERENCE]，融合物化）：一条 OHLC 流窗口 N=100k，同时算 RSI+ATR+BBands，融合物化 OHLC 4 列一次（本机 C=4=163.2µs），计算 `91.7+154+25.5=271.2µs`；合计 ≈ 434µs（未含 IPC）。若每指标独立物化则各自付一次 C=1/C=3 适配、总适配远高于一次 C=4——同窗复用把物化从"每指标一次"降到"每窗一次"，是唯一在不改布局下压缩适配占比的杠杆。据此 50ms 内约可容 115 组"OHLC 窗口 × 3 指标"（未含 IPC，[需实测]）。
 
-**参数化上界**（去掉 IPC，仅 CPU 侧）：单指标可容份数 ≈ `50000 / ( C·0.296·N_k + t_indic·N_k )`，`N_k` 为千样本数、`t_indic` 为该指标 µs/千样本。此式给出的是**乐观上界**：真实系统须叠加 `T_ipc`、并发调度抖动、cache 竞争，且以分位数/最坏窗口而非均值验收。
+**参数化上界**（去掉 IPC，仅 CPU 侧）：单指标可容份数 ≈ `50000 / ( T_adapt(N_k, C) + t_indic·N_k )`，其中 `T_adapt` 取上列实测（**按列数 C 查表，非线性，不按列外推**）、`N_k` 为千样本数、`t_indic` 为该指标 µs/千样本。此式给出**乐观上界**：真实系统须叠加 `T_ipc`、并发调度抖动、cache 竞争，且以分位数/最坏窗口而非均值验收。
 
 ---
 
@@ -334,7 +335,7 @@ T_total(N, C, K) = T_ipc + T_adapt(N, C) + Σ_k T_indicator(N, k) + T_output(N)
 
 5. **§5 / §6.3 输出段 = `loan_slice_uninit` 写满即发** —— **支持**。依据 [OBSERVED]：VectorTA/TA-Lib/Tulip 的 `_into`/预分配 `double[]` 输出与"调用方提供输出段、一次写满"完全对齐（本机 `_into` 零额外分配）。唯一约束：输出段须**连续、等长、f64、无 stride**。建议补注"输出段布局须满足算法库的连续等长 f64 要求;多输出指标（如 Bollinger 三带）产生多列，需相应多段或多列布局"。
 
-6. **§1.3 "默认内部所有计算在 50 ms 内产生……这一层不需关心 IPC"** —— **需改（补测量前提）**。依据 [OBSERVED]+[需实测]：本机测得"融合物化+计算"对 100k 窗口/单指标为 55–243µs（融合物化占 24–54%）；50ms 内单指标 100k 约可容 205–906 份（kernel/adapter calibration，未含 IPC）。IPC 是否仍可忽略[需实测]。建议改为"50ms 预算须按 `T_ipc + 融合适配 + 计算 + 写回` 分项核算（§fp-09 §7 给 M4 参数化上界）；IPC 可忽略性须在真实 iceoryx2 链路复核，不默认成立"。
+6. **§1.3 "默认内部所有计算在 50 ms 内产生……这一层不需关心 IPC"** —— **需改（补测量前提）**。依据 [OBSERVED]+[需实测]：本机测得"融合适配+计算"对 100k 窗口/单指标为 84–243µs（融合适配占 36–70%，对列数非线性）；50ms 内单指标 100k 约可容 206–595 份（kernel/adapter calibration，未含 IPC）。IPC 是否仍可忽略[需实测]。建议改为"50ms 预算须按 `T_ipc + 融合适配 + 计算 + 写回` 分项核算（§fp-09 §7 给 M4 参数化上界）；IPC 可忽略性须在真实 iceoryx2 链路复核，不默认成立"。
 
 7. **§0.2 / §5.3 "`Pooled` 节点的输出类型即段布局，导出给原生计算作者" + 五个 fold** —— **支持（fold 语义），但需补物理布局条件**。依据 [OBSERVED]+[INFERENCE]："输出类型 fold → 段布局 → 导出"的机制成立且与库无关。但若未来采方案 B/C，`layout_hash`/Arrow format 码须从"字段名+偏移"升级到覆盖**真实物理布局**（块宽、padding、lane 排布、validity 表示、定点尺度）——否则同 hash 物理不同（§5.3）。建议在 §3.4 补注"layout_hash 须覆盖物理布局全量;若采 SoA/AoSoA/列段,字段名+偏移不足以唯一标定"。
 
@@ -362,10 +363,10 @@ T_total(N, C, K) = T_ipc + T_adapt(N, C) + Σ_k T_indicator(N, k) + T_output(N)
 格式：编号 · URL · 打开状态 · 本地路径/commit 或 version。
 
 **VectorTA（我方 + VectorTAProbe 双路核验）**
-1. `https://crates.io/api/v1/crates/vector-ta/0.3.1/download` · 成功（需 UA，无 UA 首次 403） · tarball SHA-256 `b530eeccbf2577e6c5e583f85a9e5f7b75042379d77936bdf5eed2116210af4f`；`/tmp/hpc-verify/vector-ta-0.3.1`、`/tmp/hpc-research-vectorta/vector-ta-0.3.1`；git provenance `802518e2392c5d011744b75e56e108e97a0682b4`
+1. `https://crates.io/api/v1/crates/vector-ta/0.3.1/download` · 成功（需 UA，无 UA 首次 403） · tarball SHA-256 `b530eeccbf2577e6c5e583f85a9e5f7b75042379d77936bdf5eed2116210af4f`；`/Users/mouriya/Ext/tmp/uta-research/hpc-verify/vector-ta-0.3.1`、`/Users/mouriya/Ext/tmp/uta-research/hpc-research-vectorta/vector-ta-0.3.1`；git provenance `802518e2392c5d011744b75e56e108e97a0682b4`
 2. `https://crates.io/api/v1/crates/vector-ta` · 成功 · metadata（default_version 0.3.1, downloads 820, updated 2026-07-18）
 3. `https://raw.githubusercontent.com/VectorAlpha-dev/VectorTA/802518e2.../README.md` · 成功 · 340 indicators, Tulip benchmark 表, CUDA VRAM-resident 原话
-4. `https://docs.rs/crate/vector-ta/0.3.1` · 成功 · `/tmp/hpc-research-vectorta/sources/docsrs-0.3.1.{html,txt}`
+4. `https://docs.rs/crate/vector-ta/0.3.1` · 成功 · `/Users/mouriya/Ext/tmp/uta-research/hpc-research-vectorta/sources/docsrs-0.3.1.{html,txt}`
 5. `https://vectoralpha.dev/projects/ta/benchmarks/` · 成功 · benchmark 页
 6–8. `https://api.github.com/repos/VectorAlpha-dev/VectorTA/issues/{57,58,59}` · 成功 · CUDA 13 `<cfloat>` / `CUDA_ARCH=120` 误规整（环境标 0.2.9）
 
@@ -394,9 +395,9 @@ T_total(N, C, K) = T_ipc + T_adapt(N, C) + Σ_k T_indicator(N, k) + T_output(N)
 28. multiversion · `github.com/calebzulawski/multiversion` commit `357638046dd3834815b34df80403d1050c30e1c7` · 0.9.0
 
 **本机运行证据（无外部 URL）**
-29. 我方 harness `/tmp/hpc-verify/harness`（RSI/ATR/BBands 计时、AoS→SoA 转置、i64→f64 转换、gap/warm-up 观测）· rustc 1.95.0 aarch64-apple-darwin release
-30. VectorTAProbe harness `/tmp/hpc-research-vectorta/harness`（default + nightly-avx，backend=Scalar/ScalarBatch，allocator 计数）
-31. CompareLibs smoke `/tmp/hpc-research-CompareLibs/smoke`（ta/yata Rust）+ Tulip C smoke（Apple clang 17 arm64 -O2）
-32. AoSSoASimd `/tmp/hpc-research-AoSSoASimd/runtime`（4 库 release build、dispatch smoke、AoS/SoA toy 汇编与计时、Apple sysctl/target-feature probe、stable std::simd 失败）
+29. 我方 harness `/Users/mouriya/Ext/tmp/uta-research/hpc-verify/harness`（RSI/ATR/BBands 计时、AoS→SoA 转置、i64→f64 转换、gap/warm-up 观测）· rustc 1.95.0 aarch64-apple-darwin release
+30. VectorTAProbe harness `/Users/mouriya/Ext/tmp/uta-research/hpc-research-vectorta/harness`（default + nightly-avx，backend=Scalar/ScalarBatch，allocator 计数）
+31. CompareLibs smoke `/Users/mouriya/Ext/tmp/uta-research/hpc-research-CompareLibs/smoke`（ta/yata Rust）+ Tulip C smoke（Apple clang 17 arm64 -O2）
+32. AoSSoASimd `/Users/mouriya/Ext/tmp/uta-research/hpc-research-AoSSoASimd/runtime`（4 库 release build、dispatch smoke、AoS/SoA toy 汇编与计时、Apple sysctl/target-feature probe、stable std::simd 失败）
 
 **只读设计来源**：`hpc-derivation-subsystem.md`、`uta-core-design.md` §0.2/§5/§5.3。

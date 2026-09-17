@@ -9,7 +9,7 @@
 - **对象**：UTA 核心设计 §5.3（`Pooled` 组合子 + 行情段池 + 独立进程原生计算，实现方向 iceoryx2）、§7.0/§7.1、S12–S14、D11/D12。本文只做一手案例调查，不做 UTA 设计。
 - **调查链（五步）**：宿主从组合子树**推导**对齐布局类型 →**导出**给外部作者 → 作者**外部编译**小型原生计算单元 → 独立进程经共享内存零拷贝**装载**读窗口 → 握手时按布局 hash/类型身份**校验版本**。
 - **五组案例**：① 类型导出格式（Arrow C Data Interface、FlatBuffers、Cap'n Proto、PEP 3118+NumPy+Numba、WIT）；② 类型身份与版本校验（ROS 2 RIHS01、DDS-XTypes、iceoryx2、Protobuf descriptor）；③ 外部编译与 ABI 耦合 + 装载（Rust ABI、abi_stable/stabby、PostgreSQL、DuckDB、Linux kernel、QuantConnect Lean）；④ 迭代成本与工具链（cargo 增量、sccache、三 OS 工具链、cargo-binstall/dist、Cranelift/rustc/Numba/Julia JIT）；⑤ 共享内存零拷贝生命周期（iceoryx2 sample/history、Aeron、Chronicle、Arrow release）。
-- **证据规则**：[OBSERVED] = 在 pinned commit 源码 / 官方规范原文中直接读到；[INFERENCE] = 据此作出的限定推断；缺证据写"未找到"，不补成事实。仓库均 clone 到 `/tmp/uta-fp07*/` 并 pin commit。
+- **证据规则**：[OBSERVED] = 在 pinned commit 源码 / 官方规范原文中直接读到；[INFERENCE] = 据此作出的限定推断；缺证据写"未找到"，不补成事实。仓库均 clone 到 `/Users/mouriya/Ext/tmp/uta-research/uta-fp07*/` 并 pin commit。
 - **固定五问**（每案例）：① 系统是什么、在链的哪一步；② 类型导出/身份的实际格式或定义；③ 外部编译单元与宿主的耦合点与版本校验机制；④ 零拷贝/生命周期/释放契约；⑤ 维护者原话的已知问题。
 - **重要边界**：没有单一案例贯穿五步；下文逐案标明其实际覆盖的步骤，不暗示存在完整同构系统。三个关键仓库（iceoryx2、Arrow、rosidl）由主代理亲自复核 pinned 路径+行号。
 
@@ -245,7 +245,7 @@ if (magic_data_ptr->len != sizeof(Pg_magic_struct) || memcmp(&magic_data_ptr->ab
 
 ### 案例 4.1 — Cargo/rustc 增量编译与 warm rebuild
 
-① **系统/步**：作者改源码后宿主再调本地 Cargo/rustc 的编译迭代；解释"改一个小计算→再看结果"为何快，不覆盖类型导出/独立进程/零拷贝/握手。② 非导出协议，是编译器内部 cache：`<build-dir>/debug/incremental/` 含 `dep-graph.bin`/`work-products.bin`/`query-cache.bin`（`rustc_incremental/persist/fs.rs`），`dev` profile 默认 `incremental=true`（`cargo_profiles.txt:80-101`）；red/green 依赖图 + `DefPathHash`(128-bit) + `Fingerprint`(128-bit)——是编译复用机制非类型身份。③ 无外部编译单元；耦合点 = profile/依赖图/config/target triple/`RUSTFLAGS`/linker；`CARGO_INCREMENTAL` 开关（`cargo_environment.txt:19-90`）；增量只用于 workspace member + path dep。④ 磁盘 cache，copy-on-write + lock file；非共享内存数据面。⑤ **[OBSERVED，主代理确认] 组四在 Apple M4 macOS arm64 实测最小 crate：cold 0.938s → 改一行 warm 0.118s（≈1/8）→ noop 0.031s（Fresh）**（`/tmp/uta-fp07-g4/mini/experiment.txt`，cargo 1.95.0）。rustc dev guide："Computing fingerprints is quite costly"，增量可能比非增量慢；issue #159932/#158789/#162601 记录 aarch64-apple-darwin 上 `unstable fingerprints`/LTO work product ICE，维护者："If you corrupt the incr comp cache, anything can happen"、"Rustc and Cargo provide no fine-grained, usage-based GC"。[INFERENCE] 支撑快速迭代，不能充当发布格式或布局身份。
+① **系统/步**：作者改源码后宿主再调本地 Cargo/rustc 的编译迭代；解释"改一个小计算→再看结果"为何快，不覆盖类型导出/独立进程/零拷贝/握手。② 非导出协议，是编译器内部 cache：`<build-dir>/debug/incremental/` 含 `dep-graph.bin`/`work-products.bin`/`query-cache.bin`（`rustc_incremental/persist/fs.rs`），`dev` profile 默认 `incremental=true`（`cargo_profiles.txt:80-101`）；red/green 依赖图 + `DefPathHash`(128-bit) + `Fingerprint`(128-bit)——是编译复用机制非类型身份。③ 无外部编译单元；耦合点 = profile/依赖图/config/target triple/`RUSTFLAGS`/linker；`CARGO_INCREMENTAL` 开关（`cargo_environment.txt:19-90`）；增量只用于 workspace member + path dep。④ 磁盘 cache，copy-on-write + lock file；非共享内存数据面。⑤ **[OBSERVED，主代理确认] 组四在 Apple M4 macOS arm64 实测最小 crate：cold 0.938s → 改一行 warm 0.118s（≈1/8）→ noop 0.031s（Fresh）**（`/Users/mouriya/Ext/tmp/uta-research/uta-fp07-g4/mini/experiment.txt`，cargo 1.95.0）。rustc dev guide："Computing fingerprints is quite costly"，增量可能比非增量慢；issue #159932/#158789/#162601 记录 aarch64-apple-darwin 上 `unstable fingerprints`/LTO work product ICE，维护者："If you corrupt the incr comp cache, anything can happen"、"Rustc and Cargo provide no fine-grained, usage-based GC"。[INFERENCE] 支撑快速迭代，不能充当发布格式或布局身份。
 
 ### 案例 4.2 — Mozilla sccache（sccache @ `0f9467c`）
 
@@ -362,26 +362,26 @@ S13 = "原生计算的编译单元、typed SDK 导出格式与工具、source/�
 
 > 状态：已打开 = 主代理或子代理以 pinned commit clone / `curl` HTTP 200 / read 工具取得原文；未打开 = URL reader 不可用或 HTTP 404，已显式标注、不作主要依据。行号对应各自 pinned commit / 本地抓取副本。iceoryx2/Arrow/rosidl 的关键结构由主代理亲自复核（见正文 [主代理复核]）。
 
-### 组一（clone 于 `/tmp/uta-fp07-g1/`）
+### 组一（clone 于 `/Users/mouriya/Ext/tmp/uta-research/uta-fp07-g1/`）
 1. Apache Arrow — 已打开；`arrow @ b27423828326fb3047b59626fd5ff3093347de38`；`cpp/src/arrow/c/abi.h:46-81`、`docs/source/format/CDataInterface.rst:27-60,95-267,329-557,713-718,993-1005`。URL: https://arrow.apache.org/docs/format/CDataInterface.html
 2. FlatBuffers — 已打开；`flatbuffers @ b8431fbcd7a5c71817f314e18b332c0648554efa`；`docs/source/schema.md:8-76`、`evolution.md:1-276`、`languages/cpp.md:48-461`、`internals.md:45-113`、`include/flatbuffers/{base.h:324-350,table.h:26-61}`。URL: https://flatbuffers.dev/evolution/
 3. Cap'n Proto — 已打开；`capnproto @ 0de72d8d8cec6b69edaa29de51d3bd490341f9c2`；`doc/{language.md:44-824,index.md:19-73,encoding.md:19-126,cxx.md:169-244,_posts/2023-07-28-capnproto-1.0.md:10-74}`、`c++/src/capnp/layout.h:503-611`。URL: https://capnproto.org/language.html
-4. PEP 3118 — 已打开（HTTP 200）；`/tmp/uta-fp07-g1/web/pep-3118.rst:230-823`。URL: https://peps.python.org/pep-3118/
-5. NumPy structured dtype — 已打开（HTTP 200）；`/tmp/uta-fp07-g1/web/numpy-structured.html:531-928`。URL: https://numpy.org/doc/stable/user/basics.rec.html
-6. Numba jit/cfunc/types/pysupported — 已打开（HTTP 200）；`/tmp/uta-fp07-g1/web/numba-{jit,cfunc,types,pysupported}.*:见正文`。URL: https://numba.readthedocs.io/en/stable/user/{jit,cfunc}.html
+4. PEP 3118 — 已打开（HTTP 200）；`/Users/mouriya/Ext/tmp/uta-research/uta-fp07-g1/web/pep-3118.rst:230-823`。URL: https://peps.python.org/pep-3118/
+5. NumPy structured dtype — 已打开（HTTP 200）；`/Users/mouriya/Ext/tmp/uta-research/uta-fp07-g1/web/numpy-structured.html:531-928`。URL: https://numpy.org/doc/stable/user/basics.rec.html
+6. Numba jit/cfunc/types/pysupported — 已打开（HTTP 200）；`/Users/mouriya/Ext/tmp/uta-research/uta-fp07-g1/web/numba-{jit,cfunc,types,pysupported}.*:见正文`。URL: https://numba.readthedocs.io/en/stable/user/{jit,cfunc}.html
 7. WIT / Component Model — 已打开；`component-model @ 67fb8ac6289e7cd4e74d41192437414be3479efa`；`design/mvp/WIT.md:1-2115`。URL: https://github.com/WebAssembly/component-model/blob/main/design/mvp/WIT.md
 
-### 组二（clone 于 `/tmp/uta-fp07-g2/`）
+### 组二（clone 于 `/Users/mouriya/Ext/tmp/uta-research/uta-fp07-g2/`）
 8. rosidl — 已打开；`@ 00d13c5139b5eb2000b5b190a558cac5eb9e8bf2`；`rosidl_generator_type_description/.../__init__.py:26-33,150-206,468-518`、`rosidl_runtime_c/{include/.../type_hash.h:25-80,src/type_hash.c:21-151,test/test_type_hash.cpp}`、`rosidl_generator_c/resource/full__description.c.em:63-160`。URL: https://github.com/ros2/rosidl/tree/00d13c5
 9. REP-2011 proposal branch — 已打开（clone/curl）；`rep @ a4e1ef57d460b83a9f59c7e979774a5d1fffa1b2:rep-2011.rst:1-860`。URL: https://github.com/wjwwood/rep/blob/evolving_message_types_rep/rep-2011.rst
 10. REP-2011 官方渲染页 — **未打开（HTTP 404）**；改用第 9 项。URL: https://ros.org/reps/rep-2011.html
-11. OMG DDS-XTypes 1.3 PDF — 已打开（HTTP 200）；`/tmp/uta-fp07-g2/DDS-XTypes-1.3.txt:2963-5758`。URL: https://www.omg.org/spec/DDS-XTypes/1.3/PDF
-12. OMG DDS-XTypes TypeObject IDL — 已打开（HTTP 200）；`/tmp/uta-fp07-g2/dds-xtypes_typeobject.idl:1-1027`。URL: https://www.omg.org/spec/DDS-XTypes/20190301/dds-xtypes_typeobject.idl
+11. OMG DDS-XTypes 1.3 PDF — 已打开（HTTP 200）；`/Users/mouriya/Ext/tmp/uta-research/uta-fp07-g2/DDS-XTypes-1.3.txt:2963-5758`。URL: https://www.omg.org/spec/DDS-XTypes/1.3/PDF
+12. OMG DDS-XTypes TypeObject IDL — 已打开（HTTP 200）；`/Users/mouriya/Ext/tmp/uta-research/uta-fp07-g2/dds-xtypes_typeobject.idl:1-1027`。URL: https://www.omg.org/spec/DDS-XTypes/20190301/dds-xtypes_typeobject.idl
 13. Fast-DDS — 已打开；`@ 65010b234f171a837d0850e201e6406aee5462c0`；`src/cpp/.../TypeObjectRegistry.cpp:609-723`、`include/fastdds/.../{ITypeObjectRegistry.hpp,QosPolicies.hpp:2134-2210}`、`examples/cpp/benchmark/types/*`。URL: https://github.com/eProsima/Fast-DDS/tree/65010b2
 14. iceoryx2 — 已打开（主代理独立 pin 同 commit）；`@ aec1ed8554463488981d01e607cce81a0ed7fa2a`；`iceoryx2/src/service/static_config/message_type_details.rs:24-224`、`builder/publish_subscribe.rs:406-1045`、`service/resource/type_definition.rs`、`iceoryx2-bb/elementary-traits/src/{type_name.rs,zero_copy_send.rs,placement_default.rs}`、`FAQ.md:609-629`、`README.md:114-148`。URL: https://github.com/eclipse-iceoryx/iceoryx2/tree/aec1ed8
-15. Protocol Buffers — 已打开；`@ fa153cf32201dc5156b320591f2cd9153a7b40b8`；`src/google/protobuf/descriptor.proto:12-163`；proto3 guide 已打开（HTTP 200）`/tmp/uta-fp07-g2/proto3-guide.txt:69-872`。URL: https://protobuf.dev/programming-guides/proto3/#updating
+15. Protocol Buffers — 已打开；`@ fa153cf32201dc5156b320591f2cd9153a7b40b8`；`src/google/protobuf/descriptor.proto:12-163`；proto3 guide 已打开（HTTP 200）`/Users/mouriya/Ext/tmp/uta-research/uta-fp07-g2/proto3-guide.txt:69-872`。URL: https://protobuf.dev/programming-guides/proto3/#updating
 
-### 组三（clone 于 `/tmp/uta-fp07-g3/`）
+### 组三（clone 于 `/Users/mouriya/Ext/tmp/uta-research/uta-fp07-g3/`）
 16. Rust Reference / Nomicon — 已打开（curl）；type-layout.html、items/external-blocks.html、nomicon ffi/repr-rust。URL: https://doc.rust-lang.org/reference/type-layout.html ; https://doc.rust-lang.org/nomicon/
 17. abi_stable — 已打开；`@ 9966b8f0084fc768e3fb557bf81affea0b5868d8`；`stable_abi_trait.rs`、`AbiHeader`/`LibHeader`/`RootModule::load_from`（正文引原文）。URL: https://github.com/rodrimati1992/abi_stable_crates/tree/9966b8f
 18. stabby — 已打开；`@ 3ff0b3e2cec47cf8de558396729f08b9987e57e3`；`IStable`/`TypeReport`/`gen_id`/`#[stabby::export]`（正文引原文）。URL: https://github.com/ZettaScaleLabs/stabby/tree/3ff0b3e
@@ -390,18 +390,18 @@ S13 = "原生计算的编译单元、typed SDK 导出格式与工具、source/�
 21. Linux kernel — 已打开（shallow clone）；`@ 9b87fdc9af2fbfcdb5c24a64139685ef80f6573f`；`include/linux/vermagic.h:5-46`、`scripts/module-common.c`、`kernel/module/main.c`（`check_modinfo`/`same_magic`）、`include/linux/{moduleparam.h,module.h}`。URL: https://github.com/torvalds/linux/tree/9b87fdc
 22. QuantConnect Lean — 已打开；`@ f9107abdf26121c5ce159f561bd27fead01d30e1`；`Launcher/`、`Common/Util/Loader.cs`、`Engine/AlgorithmManager.cs`。URL: https://github.com/QuantConnect/Lean/tree/f9107ab
 
-### 组四（clone 于 `/tmp/uta-fp07-g4/`）
-23. Cargo Book / rustc dev guide 增量 — 已打开（curl）；`/tmp/uta-fp07-g4/web/{cargo_profiles,cargo_build_cache,cargo_environment,rustc_incremental,rustc_incremental_detail}.txt`、rustdoc `rustc_incremental/persist/fs.rs`。URL: https://doc.rust-lang.org/cargo/reference/{profiles,build-cache,environment-variables}.html
+### 组四（clone 于 `/Users/mouriya/Ext/tmp/uta-research/uta-fp07-g4/`）
+23. Cargo Book / rustc dev guide 增量 — 已打开（curl）；`/Users/mouriya/Ext/tmp/uta-research/uta-fp07-g4/web/{cargo_profiles,cargo_build_cache,cargo_environment,rustc_incremental,rustc_incremental_detail}.txt`、rustdoc `rustc_incremental/persist/fs.rs`。URL: https://doc.rust-lang.org/cargo/reference/{profiles,build-cache,environment-variables}.html
 24. rust-lang/rust issues #159932 / #158789 / #162601 — 已打开（issue reader）。URL: https://github.com/rust-lang/rust/issues/159932
-25. 本地 cargo smoke experiment — 已运行（主代理确认结果）；`/tmp/uta-fp07-g4/mini/experiment.txt`（cold 0.938382s / warm 0.117540s / noop 0.031327s，cargo 1.95.0）。
+25. 本地 cargo smoke experiment — 已运行（主代理确认结果）；`/Users/mouriya/Ext/tmp/uta-research/uta-fp07-g4/mini/experiment.txt`（cold 0.938382s / warm 0.117540s / noop 0.031327s，cargo 1.95.0）。
 26. sccache — 已打开；`@ 0f9467c40e012ef7ea103ac11e0c6935830b18f0`；`README.md`、`docs/{Caching,Local,Distributed,DistributedQuickstart,Rust}.md`、`src/compiler/rust.rs:1493-1597`。URL: https://github.com/mozilla/sccache/tree/0f9467c
-27. rustup / rustc platform-support — 已打开（curl）；`/tmp/uta-fp07-g4/web/{rustup_cross,rustc_platform,apple-darwin,windows-msvc,windows-gnu,aarch64-linux-gnu,rustc_codegen_options}.txt`。URL: https://doc.rust-lang.org/rustc/platform-support.html
+27. rustup / rustc platform-support — 已打开（curl）；`/Users/mouriya/Ext/tmp/uta-research/uta-fp07-g4/web/{rustup_cross,rustc_platform,apple-darwin,windows-msvc,windows-gnu,aarch64-linux-gnu,rustc_codegen_options}.txt`。URL: https://doc.rust-lang.org/rustc/platform-support.html
 28. cargo-binstall — 已打开；`@ 94dc7fe43d6ed7bfa6a6ea24f60f85e3f41dd104`；`README.md`、`SUPPORT.md`、`SIGNING.md`、`crates/binstalk*/...`（`target_triple.rs`/`resolve.rs`/`download.rs`/`signing.rs`）。URL: https://github.com/cargo-bins/cargo-binstall/tree/94dc7fe
 29. cargo-dist（dist） — 已打开；`@ f5026ab266c294a100bff7e087758f59f8d0b3fd`；`README.md`、`book/src/{reference/{concepts,config},artifacts/{archives,checksums},installers,ci,supplychain-security}.md`。URL: https://github.com/axodotdev/cargo-dist/tree/f5026ab
 30. wasmtime cranelift-jit — 已打开（sparse clone）；`@ c07af319ce8538898cfa5fa72573a1c0c8197cd0`；`cranelift/jit/{README.md,src/backend.rs:28-391,examples/jit-minimal.rs,Cargo.toml}`。URL: https://github.com/bytecodealliance/wasmtime/tree/c07af31
-31. rustc_driver / Numba architecture / Julia JIT — 已打开（curl）；`/tmp/uta-fp07-g4/web/{rustc_driver,rustc_driver_external,numba_arch,numba_jit,julia_jit,julia_llvm}.txt`。URL: https://rustc-dev-guide.rust-lang.org/rustc-driver.html ; https://docs.julialang.org/en/v1/devdocs/jit/
+31. rustc_driver / Numba architecture / Julia JIT — 已打开（curl）；`/Users/mouriya/Ext/tmp/uta-research/uta-fp07-g4/web/{rustc_driver,rustc_driver_external,numba_arch,numba_jit,julia_jit,julia_llvm}.txt`。URL: https://rustc-dev-guide.rust-lang.org/rustc-driver.html ; https://docs.julialang.org/en/v1/devdocs/jit/
 
-### 组五（clone 于 `/tmp/uta-fp07-g5/`）
+### 组五（clone 于 `/Users/mouriya/Ext/tmp/uta-research/uta-fp07-g5/`）
 32. iceoryx2（生命周期） — 已打开；`@ aec1ed8554463488981d01e607cce81a0ed7fa2a`；`iceoryx2/src/{sample.rs:52-139,sample_mut.rs,sample_mut_uninit.rs,port/publisher.rs:217-591,port/details/{chunk_details.rs,chunk_mut_shared_state.rs,sender.rs,receiver.rs},service/static_config/publish_subscribe.rs:42-127,config.rs}`。URL: https://github.com/eclipse-iceoryx/iceoryx2/tree/aec1ed8
 33. Aeron — 已打开；`@ 52f52adf005114ad974662af99a2a3b19034b80d`；`aeron-client/src/main/java/io/aeron/{logbuffer/LogBufferDescriptor.java:26-814,ConcurrentPublication.java:83-139,Publication.java,Image.java:219-382,LogBuffers.java:84-161}`。URL: https://github.com/real-logic/aeron/tree/52f52ad
 34. Chronicle Queue — 已打开；`@ 0a0295f60c2230b70659985233059ee6c60d8270`；`src/main/java/net/openhft/chronicle/queue/{RollCycle.java,ExcerptAppender.java,ExcerptTailer.java,impl/single/{SingleChronicleQueueStore.java,RollCycleEncodeSequence.java,StoreTailer.java,StoreAppender.java}}`。URL: https://github.com/OpenHFT/Chronicle-Queue/tree/0a0295f

@@ -65,7 +65,7 @@ Rust 一等 ｜ 三 OS（声明 + CI 证据等级：仅编译 / 单测 / 跨进�
 发布侧：`publisher.rs:855 loan_slice(n)` / `:909 loan_slice_uninit(n)` → `:919 impl` → `:654-661 loan_chunk` = `sender.allocate(chunk_layout(slice_len))`（`chunk_layout` = header + `align(payload.size,align)*n`，`message_type_details.rs:200-212`，即 n 个等 stride 元素连续数组）→ `sender.rs:472/482 data_segment.allocate` → `data_segment.rs:169` → `iceoryx2-cal/src/shm_allocator/pool_allocator.rs:82-97`（`:94-96 PointerOffset::new(chunk_ptr-start_address)`，offset=相对段起始字节距离）→ `iceoryx2-bb/memory/src/pool_allocator.rs:214 acquire_raw_index()`（bucket 由自由列表栈顶决定，非位置推导）。
 读者侧：subscriber 从连接队列收 `PointerOffset`（`sender.rs:246/271`），地址翻译 `data_segment.rs:299` Static 段 `offset.offset()+payload_start_address()`（纯加法）；`segment_state.rs:46-49 chunk_index(distance)=distance/payload_size()` 佐证 offset 恒为 bucket_size 整数倍。`sample.rs:113-125` slice Deref = `slice_from_raw_parts(payload_ptr, n)`，第 i 元素 = `payload_ptr+i*stride`。
 
-**本机 macOS 实测**（`/tmp/fp08-seg/track1-priv/slice_exp`，rc=0）[OBSERVED]：发布 `Sample<[u64]>`（8 元素），`PUB base=0x100d840b8`、`elem[i]==base+i*8`（8/8 命中）；两个独立 subscriber 各自 `receive()` 到 `SUB_A base=0x100d8c0b8`/`SUB_B base=0x100d940b8`（**虚拟基址各异** → relocatable `PointerOffset`），内容逐元素相同。含义：iceoryx2 用「本地 base + 位置无关 offset」还原到同一物理字节，base 每映射者私有、offset 由控制面携带，**非由 `LogPosition` 推导**。
+**本机 macOS 实测**（`/Users/mouriya/Ext/tmp/uta-research/fp08-seg/track1-priv/slice_exp`，rc=0）[OBSERVED]：发布 `Sample<[u64]>`（8 元素），`PUB base=0x100d840b8`、`elem[i]==base+i*8`（8/8 命中）；两个独立 subscriber 各自 `receive()` 到 `SUB_A base=0x100d8c0b8`/`SUB_B base=0x100d940b8`（**虚拟基址各异** → relocatable `PointerOffset`），内容逐元素相同。含义：iceoryx2 用「本地 base + 位置无关 offset」还原到同一物理字节，base 每映射者私有、offset 由控制面携带，**非由 `LogPosition` 推导**。
 
 ### 3.3 类型化 payload 与校验 [OBSERVED]
 `message_type_details.rs:71-77 TypeDetail{variant,type_name,size,alignment}`，`:82-97 new::<T>` 用 `size_of/align_of` 填 size/align、`type_name` 取 `ZeroCopySend::type_name()`；`TypeVariant`（`:41-62`）区分 `FixedSize`（doc:「self-contained structs（without pointer members or heap-usages）」）与 `Dynamic`（slice）。open 时校验：`service/builder/publish_subscribe.rs:513-517 is_compatible_to`，不兼容 → `IncompatibleTypes`（`:58/115/142`）；`message_type_details.rs:214-224` 逐字段比较 payload 的 `type_name==`、`variant==`、`size==`、`alignment<=`。payload 必须 `unsafe trait ZeroCopySend`（`iceoryx2-bb/elementary-traits/src/zero_copy_send.rs:35`），safety 契约（`:20-33`）要求 self-contained、无 pointer/reference/fd、`repr(C)`；derive 经 `__is_zero_copy_send`（`:47-50`）编译期确保所有字段 impl。
@@ -285,19 +285,19 @@ flowchart TD
 
 | # | 库 | URL | 打开状态 | 本地路径 / pinned commit |
 |---|---|---|---|---|
-| 1 | iceoryx2 | github.com/eclipse-iceoryx/iceoryx2 | 已 clone（一手源码 + 本机 build/run） | `/tmp/fp08-seg/iceoryx2` @ `aec1ed8554463488981d01e607cce81a0ed7fa2a`（v0.9.999-dev，2026-09-16，MIT OR Apache-2.0） |
-| 2 | iceoryx-rs（绑 iceoryx C++ v2.0.3） | github.com/eclipse-iceoryx/iceoryx-rs | 已 clone | `/tmp/fp08-seg/track1-priv/iceoryx-rs` @ `61f740c800d435aebedbd180d1fdbf53cafcf778`（v0.1.0，2024-04-22，Apache-2.0） |
-| 3 | shared_memory | github.com/elast0ny/shared_memory-rs | 已 clone | `/tmp/fp08-seg/track2-rust-priv/shared_memory` @ `fda413410857e295fa7440691a79296e84bed525`（0.12.5，2023-01-30，MIT OR Apache-2.0） |
-| 4 | shm-ringbuf | github.com/fengys1996/shm-ringbuf | 已 clone | `/tmp/fp08-seg/track2-rust-priv/shm_ringbuf` @ `cde847ed3576fd83da9a6fb5f2028a8295b47792`（0.1.0，2025-12-26，Apache-2.0） |
-| 5 | raw_sync | github.com/elast0ny/raw_sync-rs | 已 clone | `/tmp/fp08-seg/track2-rust-priv/raw_sync` @ `f1c7666337e9665999afd22896819d62bcd333a2`（0.1.5，2021-11-12，MIT OR Apache-2.0） |
-| 6 | ipc-channel | github.com/servo/ipc-channel | 已 clone | `/tmp/fp08-seg/track2-rust-priv/ipc-channel` @ `6326a1a7f42320c5ce544d448f49ac3a19619962`（tag v0.23.0，2026-09-01，MIT OR Apache-2.0） |
-| 7 | memmap2 | github.com/RazrFalcon/memmap2-rs | 已 clone | `/tmp/fp08-seg/track2-rust-priv/memmap2` @ `a02e2a48a56f6d4708fbbfa3ab6dbbc27d717148`（0.9.11，2026-08-20，MIT OR Apache-2.0） |
-| 8 | zerocopy | github.com/google/zerocopy | 已 clone | `/tmp/fp08-seg/track2-rust-priv/zerocopy` @ `4fbb0b6cc6b4ab484a206d9c21f586dc6485d0f9`（0.8.57，2026-09-14，BSD-2 OR Apache-2.0 OR MIT） |
-| 9 | bytemuck | github.com/Lokathor/bytemuck | 已 clone | `/tmp/fp08-seg/track2-rust-priv/bytemuck` @ `ea3616110b0134e9991fdb66be8892dbc427c5ac`（1.25.2，2026-09-11，Zlib OR Apache-2.0 OR MIT） |
-| 10 | rkyv | github.com/rkyv/rkyv | 已 clone | `/tmp/fp08-seg/track2-rust-priv/rkyv` @ `4845668ae9730a3987966769f6872d86b822dc41`（0.8.18，2026-09-09，MIT） |
-| 11 | aeron-rs | github.com/UnitedTraders/aeron-rs | 已 clone | `/tmp/fp08-seg/track3/aeron-rs` @ `66b8f252ac365360eb9b67309e61c3f58ea22e7a`（0.1.8，2026-04-08，Apache-2.0） |
-| 12 | disruptor-rs | github.com/nicholassm/disruptor-rs | 已 clone | `/tmp/fp08-seg/track3/disruptor-rs` @ `08b469143ac8e2db9bdc7c1aba0b143fefd25807`（v4.4.0，2026-08-08，MIT） |
-| 13 | arrow-rs | github.com/apache/arrow-rs | 已 clone | `/tmp/fp08-seg/track3/arrow-rs` @ `8e517524bcc7854587b49790ae87482f94420f3e`（2026-09-16，Apache-2.0） |
+| 1 | iceoryx2 | github.com/eclipse-iceoryx/iceoryx2 | 已 clone（一手源码 + 本机 build/run） | `/Users/mouriya/Ext/tmp/uta-research/fp08-seg/iceoryx2` @ `aec1ed8554463488981d01e607cce81a0ed7fa2a`（v0.9.999-dev，2026-09-16，MIT OR Apache-2.0） |
+| 2 | iceoryx-rs（绑 iceoryx C++ v2.0.3） | github.com/eclipse-iceoryx/iceoryx-rs | 已 clone | `/Users/mouriya/Ext/tmp/uta-research/fp08-seg/track1-priv/iceoryx-rs` @ `61f740c800d435aebedbd180d1fdbf53cafcf778`（v0.1.0，2024-04-22，Apache-2.0） |
+| 3 | shared_memory | github.com/elast0ny/shared_memory-rs | 已 clone | `/Users/mouriya/Ext/tmp/uta-research/fp08-seg/track2-rust-priv/shared_memory` @ `fda413410857e295fa7440691a79296e84bed525`（0.12.5，2023-01-30，MIT OR Apache-2.0） |
+| 4 | shm-ringbuf | github.com/fengys1996/shm-ringbuf | 已 clone | `/Users/mouriya/Ext/tmp/uta-research/fp08-seg/track2-rust-priv/shm_ringbuf` @ `cde847ed3576fd83da9a6fb5f2028a8295b47792`（0.1.0，2025-12-26，Apache-2.0） |
+| 5 | raw_sync | github.com/elast0ny/raw_sync-rs | 已 clone | `/Users/mouriya/Ext/tmp/uta-research/fp08-seg/track2-rust-priv/raw_sync` @ `f1c7666337e9665999afd22896819d62bcd333a2`（0.1.5，2021-11-12，MIT OR Apache-2.0） |
+| 6 | ipc-channel | github.com/servo/ipc-channel | 已 clone | `/Users/mouriya/Ext/tmp/uta-research/fp08-seg/track2-rust-priv/ipc-channel` @ `6326a1a7f42320c5ce544d448f49ac3a19619962`（tag v0.23.0，2026-09-01，MIT OR Apache-2.0） |
+| 7 | memmap2 | github.com/RazrFalcon/memmap2-rs | 已 clone | `/Users/mouriya/Ext/tmp/uta-research/fp08-seg/track2-rust-priv/memmap2` @ `a02e2a48a56f6d4708fbbfa3ab6dbbc27d717148`（0.9.11，2026-08-20，MIT OR Apache-2.0） |
+| 8 | zerocopy | github.com/google/zerocopy | 已 clone | `/Users/mouriya/Ext/tmp/uta-research/fp08-seg/track2-rust-priv/zerocopy` @ `4fbb0b6cc6b4ab484a206d9c21f586dc6485d0f9`（0.8.57，2026-09-14，BSD-2 OR Apache-2.0 OR MIT） |
+| 9 | bytemuck | github.com/Lokathor/bytemuck | 已 clone | `/Users/mouriya/Ext/tmp/uta-research/fp08-seg/track2-rust-priv/bytemuck` @ `ea3616110b0134e9991fdb66be8892dbc427c5ac`（1.25.2，2026-09-11，Zlib OR Apache-2.0 OR MIT） |
+| 10 | rkyv | github.com/rkyv/rkyv | 已 clone | `/Users/mouriya/Ext/tmp/uta-research/fp08-seg/track2-rust-priv/rkyv` @ `4845668ae9730a3987966769f6872d86b822dc41`（0.8.18，2026-09-09，MIT） |
+| 11 | aeron-rs | github.com/UnitedTraders/aeron-rs | 已 clone | `/Users/mouriya/Ext/tmp/uta-research/fp08-seg/track3/aeron-rs` @ `66b8f252ac365360eb9b67309e61c3f58ea22e7a`（0.1.8，2026-04-08，Apache-2.0） |
+| 12 | disruptor-rs | github.com/nicholassm/disruptor-rs | 已 clone | `/Users/mouriya/Ext/tmp/uta-research/fp08-seg/track3/disruptor-rs` @ `08b469143ac8e2db9bdc7c1aba0b143fefd25807`（v4.4.0，2026-08-08，MIT） |
+| 13 | arrow-rs | github.com/apache/arrow-rs | 已 clone | `/Users/mouriya/Ext/tmp/uta-research/fp08-seg/track3/arrow-rs` @ `8e517524bcc7854587b49790ae87482f94420f3e`（2026-09-16，Apache-2.0） |
 | 14 | Chronicle Queue | github.com/OpenHFT/Chronicle-Queue ; chronicle.software | **web 文档，未 clone**（JVM，只对照） | — |
 
 > crates.io / docs.rs 的 URL 抓取在本环境被禁；所有一手论断来自本地 clone 的源码（含行号）与仓库内 README/CI/FAQ/doc。Chronicle 无一手源码，标 [web]。

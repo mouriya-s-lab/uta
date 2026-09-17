@@ -327,7 +327,7 @@
 1. PostgreSQL 18.6 官方《PREPARE TRANSACTION》 <https://www.postgresql.org/docs/current/sql-prepare-transaction.html>（curl **OK**）。
 2. 官方《pg_prepared_xacts》 <https://www.postgresql.org/docs/current/view-pg-prepared-xacts.html>（**OK**）。
 3. 官方《COMMIT PREPARED》/《ROLLBACK PREPARED》 <https://www.postgresql.org/docs/current/sql-commit-prepared.html>、<https://www.postgresql.org/docs/current/sql-rollback-prepared.html>（**OK**）。
-4. 源码 `github.com/postgres/postgres`，commit `862092932c9479b79732f3b441da05453ea5e06d`，`/tmp/fp06-A/postgres`：`src/backend/access/transam/twophase.c`（150-191, 391-412, 531-553, 703-797, 963-1009, 1147-1270, 1501-1693, 2074-2180, 2506-2613）、`src/include/access/xact.h:353-371`（**OK**）。
+4. 源码 `github.com/postgres/postgres`，commit `862092932c9479b79732f3b441da05453ea5e06d`，`/Users/mouriya/Ext/tmp/uta-research/fp06-A/postgres`：`src/backend/access/transam/twophase.c`（150-191, 391-412, 531-553, 703-797, 963-1009, 1147-1270, 1501-1693, 2074-2180, 2506-2613）、`src/include/access/xact.h:353-371`（**OK**）。
 
 ### 案例 2/3 Oracle + MySQL（底稿 `local://fp06-B.md`）
 5. Oracle Database Administrator's Guide Release 19《Distributed Transactions Concepts》 <https://docs.oracle.com/en/database/oracle/oracle-database/19/admin/distributed-transactions-concepts.html>（curl **OK**）。
@@ -344,14 +344,14 @@
 14. IETF `draft-ietf-httpapi-idempotency-key-header-07`（Datatracker 状态页 + 归档纯文本 <https://www.ietf.org/archive/id/draft-ietf-httpapi-idempotency-key-header-07.txt>，**Expired Internet-Draft，非 RFC**，**OK**）。
 
 ### 案例 5 Binance + FIX（底稿 `local://fp06-D.md`）
-15. Binance 官方 `binance/binance-spot-api-docs` clone，commit `b8a0f61e088c65d18a157f2e11a8e273826b6c08`，`/tmp/fp06-binance-full`：`rest-api.md`/`errors.md`/`enums.md`/`web-socket-api.md`/`user-data-stream.md`（**OK**；开发者门户 REST 入口 HTTP 202 空 body → 用 pinned GitHub 快照）。
+15. Binance 官方 `binance/binance-spot-api-docs` clone，commit `b8a0f61e088c65d18a157f2e11a8e273826b6c08`，`/Users/mouriya/Ext/tmp/uta-research/fp06-binance-full`：`rest-api.md`/`errors.md`/`enums.md`/`web-socket-api.md`/`user-data-stream.md`（**OK**；开发者门户 REST 入口 HTTP 202 空 body → 用 pinned GitHub 快照）。
 16. FIX Protocol Ltd.《FIX Session Layer Technical Specification》June 2020（PDF→文本，**OK**）。
 17. FIX 4.4 current renderer（FIXimate 兼容 Orchimate）`OrderStatusRequest(H)`/`ExecutionReport(8)`/`OrdStatus(39)`/`ExecType(150)`/`OrderMassStatusRequest(AF)`（**PARTIAL**：旧 FIXimate 根路径重定向，已记录）。
 18. Nasdaq《FIX DROP RASH Format》v1.00（2024-10，**OK**）。CME Drop Copy FAQ（**FAIL**：HTTP/2 INTERNAL_ERROR）。
 
 ### 案例 6/7 Temporal + Kafka（底稿 `local://fp06-E.md`）
 19. Temporal 官方 docs：`/activities`、`/activity-definition`、`/activity-execution`、`/encyclopedia/detecting-activity-failures`、`/encyclopedia/retry-policies`、`/develop/typescript/activities/timeouts`（`.md` 原文，**OK**）；`/encyclopedia/activities`（**FAIL** 404，已降级）。
-20. Temporal server clone，commit `8e653fa74ae70cf21208aef33d5ef0b02d72ff14`，`/tmp/fp06-E/temporal`：`chasm/lib/activity/activity.go`、`.../gen/activitypb/v1/activity_state.pb.go`、`.../tasks.go`、`.../statemachine.go`、`service/history/api/recordactivitytaskheartbeat/api.go`、`.../respondactivitytaskcompleted/api.go`（**OK**）。
+20. Temporal server clone，commit `8e653fa74ae70cf21208aef33d5ef0b02d72ff14`，`/Users/mouriya/Ext/tmp/uta-research/fp06-E/temporal`：`chasm/lib/activity/activity.go`、`.../gen/activitypb/v1/activity_state.pb.go`、`.../tasks.go`、`.../statemachine.go`、`service/history/api/recordactivitytaskheartbeat/api.go`、`.../respondactivitytaskcompleted/api.go`（**OK**）。
 21. Apache KIP-98 <https://cwiki.apache.org/confluence/display/KAFKA/KIP-98+-+Exactly+Once+Delivery+and+Transactional+Messaging>（page version 75, Adopted）+ Confluence REST body.storage（**OK**）。
 
 ### 案例 8 Saga/Helland/Seata（底稿 `local://fp06-F.md`）
@@ -359,8 +359,8 @@
 23. Pat Helland《Life beyond Distributed Transactions》CIDR 2007（PDF，**OK**）。
 24. Pat Helland《Idempotence Is Not a Medical Condition》CACM 2012-05（CACM 期刊 PDF 镜像，**OK**；queue.acm.org 版 **FAIL** 403 Cloudflare）。
 25. Seata 官方 TCC 文档 <https://seata.apache.org/docs/user/mode/tcc/>、`/dev/mode/tcc-mode`、`/blog/seata-tcc-fence/`、`/blog/tcc-mode-design-principle/`（**OK**）。
-26. Seata 源码 `github.com/apache/incubator-seata`，commit `41694e140b40894aa3aae4cfe6ecffed9b321a36`，`/tmp/fp06-F/seata`：`BranchStatus.java`、`GlobalStatus.java`、`CommonFenceConstant.java`、`CommonFenceDO.java`、`SpringFenceHandler.java`、`ActionInterceptorHandler.java`、`TCCResourceManager.java`、`AbstractCore.java`、`DefaultCore.java`、`DefaultCoordinator.java`、`script/server/db/mysql.sql`、`script/client/tcc/db/mysql.sql`（**OK**）。
+26. Seata 源码 `github.com/apache/incubator-seata`，commit `41694e140b40894aa3aae4cfe6ecffed9b321a36`，`/Users/mouriya/Ext/tmp/uta-research/fp06-F/seata`：`BranchStatus.java`、`GlobalStatus.java`、`CommonFenceConstant.java`、`CommonFenceDO.java`、`SpringFenceHandler.java`、`ActionInterceptorHandler.java`、`TCCResourceManager.java`、`AbstractCore.java`、`DefaultCore.java`、`DefaultCoordinator.java`、`script/server/db/mysql.sql`、`script/client/tcc/db/mysql.sql`（**OK**）。
 
 ### 案例 9 MongoDB（底稿 `local://fp06-G.md`）
 27. MongoDB Manual 8.3：《Handle Transactions in Applications》《Retryable Writes》《Server Sessions》《Transactions》《Production Considerations》《$currentOp》《serverStatus》（curl **OK**）。
-28. MongoDB `github.com/mongodb/specifications`，commit `908c58e48788ff34e92a3bea38dcac79ec7ddeea`，`/tmp/fp06-G/specifications`：`source/transactions/transactions.md`（322-367, 431-432, 576-580, 609-623, 700-714, 722-785, 1031-1109, 1183-1186）、`source/retryable-writes/retryable-writes.md`（14-19, 140-146, 221-312, 567-583）（**OK**）。
+28. MongoDB `github.com/mongodb/specifications`，commit `908c58e48788ff34e92a3bea38dcac79ec7ddeea`，`/Users/mouriya/Ext/tmp/uta-research/fp06-G/specifications`：`source/transactions/transactions.md`（322-367, 431-432, 576-580, 609-623, 700-714, 722-785, 1031-1109, 1183-1186）、`source/retryable-writes/retryable-writes.md`（14-19, 140-146, 221-312, 567-583）（**OK**）。
