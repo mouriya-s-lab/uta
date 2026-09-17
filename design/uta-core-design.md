@@ -773,6 +773,7 @@ enum TicketAction<Intent> {
 - **`research/fp-08-segment-pool-libraries.md`**：段池选库的一手出处；首选 `iceoryx2`。
 - **`research/fp-09-hpc-compute-layer-and-vectorta.md`**：原生 op 算法层的一手出处：VectorTA 0.3.1 深挖与 6 对照库、AoS/SoA 一手依据、Rust SIMD 现状、50 ms 容量估算；子系统列式段裁决（`hpc-derivation-subsystem.md` §3.0）的证据。
 - **`research/fp-10-array-middle-layer.md`**：原生 op 作者面"数组中间层"的一手出处：11 库 ABI 往返闸门、真实 SPY + Pine 级指标 M4 实测、autovec 对照、六个跨生态放置先例；子系统 §8.1 原语集裁决的证据。
+- **`research/fp-11-gate9-primitives-demo.md`**（+ 附录 prims/naive/align）：子系统闸门 9 的一手实证——原语中间层 vs 三种手写 vs 零优化写法的 LOC 与 µs，对齐对照，debug 量级。
 - **`decision-log.md`**：本轮对话中维护者原话与裁决的归档（A–E 分主题，F 为已知未对齐处）。正文与其不一致时以更晚条目为准并回写正文；review 与 subagent 以它为查证入口。
 - **讨论记录**：两位讨论者（steady / divergent）的压力测试、一次外部阅读评审与 `discuss:astra` 两轮讨论的修正已并入正文；历史见 git log。
 
