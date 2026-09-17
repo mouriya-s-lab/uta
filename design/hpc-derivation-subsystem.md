@@ -97,6 +97,8 @@ flowchart LR
 ### 3.2 对齐
 段基址与每列起点对齐到 **64 B（cache line）**，它同时满足目标向量宽度：aarch64 NEON 为 16 B（首要平台），x86 AVX2 为 32 B。**AVX-512 不是设计目标**——64 B 只是 cache-line 对齐，不暗示 512-bit 向量路径。对齐是 `Layout` 的一部分，进入 hash。**[设计：E8、E11、E12]** **[证据：fp-09 §6、修正 1]**
 
+**对齐不是自动向量化的前提。** fp-10 的标量基线数据是普通 `Vec<f64>`（分配器 16 B 对齐），release 汇编已出现 `fadd/fmul/fmla.2d` **[证据：fp-10 §4.3]**；NEON/AVX2 非对齐向量加载无故障、惩罚仅在跨 cache line 时 [推断]。对齐的作用是 cache line 边界、避免相邻列 false sharing、给显式 SIMD 干净起点。真正决定 Rust kernel 能否被 LLVM 向量化的是四条写法纪律，集中在原语 crate 内（§8.1），不要求 op 作者掌握：① 连续 stride-1 访问且无别名（`&`/`&mut` 已保证）；② 消掉边界检查（`Zip`/迭代器或循环前 `assert_eq!(len)`）；③ 无循环携带依赖（递归类永远标量）；④ 浮点归约默认不向量化（Rust 无 fast-math，LLVM 不重结合 `fadd`），`sum` 类要手动多累加器——fp-10 朴素 rolling max/min 未被 autovec 即此类。
+
 ### 3.3 导出格式
 语言无关的布局描述，形状取 Arrow `ArrowSchema` format 码 + 列偏移：每字段 `(name, format, column_offset, element_size)`，format 码覆盖洗入映射（`'g'` f64、`'l'` i64、`'tsn:'` ns 时间戳、`'C'` u8 枚举）；附 `capacity`、`alignment`、validity 位图布局、`layout_hash`。列式段与 Arrow 的对应比记录数组直接：每列就是一条 Arrow buffer。Rust 源（列切片视图结构，见 §7）与 C 头是它的两种渲染，由工具生成。**[证据：fp-07 命题 2；S13 关闭建议 ②；fp-09 §5.3]**
 
