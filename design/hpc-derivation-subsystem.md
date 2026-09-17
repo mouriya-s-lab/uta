@@ -178,7 +178,7 @@ op 收到触发 → 借用当前窗口的段列表 → 按导出布局取各列�
 
 ### 8.1 中间层裁决：子系统拥有的原语集，建在 `ndarray` 视图上
 
-**结论（[设计：fp-10 后裁决，待维护者确认，decision-log F7]）**：不选任何现成指标库作算法层（E10，fp-09）；也不把某个数组库整个 bless 给作者了事。中间层 = **`ndarray` 视图作容器 + 子系统自有的、词汇取自 pandas/numpy 的一小组原语 + 标量逃逸口**。作者写数组表达式与惯用 `for` 循环，不写 SIMD。
+**结论（[设计：fp-10 后的假设，须先由 §9 闸门 9 的 demo 证明值得——开发体验简洁多少、相比标量快多少；未过 demo 不成立；decision-log F7]）**：不选任何现成指标库作算法层（E10，fp-09）；也不把某个数组库整个 bless 给作者了事。中间层 = **`ndarray` 视图作容器 + 子系统自有的、词汇取自 pandas/numpy 的一小组原语 + 标量逃逸口**。作者写数组表达式与惯用 `for` 循环，不写 SIMD。
 
 三条一手事实决定了这个形状 **[证据：fp-10 §1、§4、§6]**：
 1. **没有单一 Rust 库同时满足**"numpy 式 + 作者不碰 SIMD + 借外部列/写调用方列 + 有 rolling/ewm/validity"：`ndarray` 过 ABI、词汇最近 numpy，但无 rolling/scan/ewm/where/validity；`polars` 词汇最近 pandas、有 `rolling_*`/`ewm`/位图，但 kernel 只能返回新 `Series`，复杂指标慢 1.5–2.3× 且分配；`arrow-rs`/`candle`/`burn` 同样违 ABI；`faer`/`pulp` 分工最自然但要作者写 `WithSimd`。
