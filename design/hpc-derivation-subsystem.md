@@ -1,6 +1,6 @@
 # 行情派生高性能计算子系统：`Pooled` → 段池 → 原生 op
 
-状态：子系统设计 v1，闭合。**定位：可选项，独立于核心，不属于核心**——核心在没有它时完整可运行；它与核心的唯一接口是 `DerivationNode::Pooled`（`uta-core-design.md` §5.3）。依赖核心概念：§0.2 值树与五个 fold、§7.0 注册表、`Journal`/`LogPosition`（§2）。裁决：D11/D12，`decision-log.md` E1–E9。证据：`research/fp-07`（类型导出与外部编译）、`research/fp-08`（段池选库）、`research/fp-09`（算法层与 VectorTA、AoS/SoA、Rust SIMD 现状、50 ms 容量）。标注：**[证据]** / **[设计]** / **[spike]** 同核心设计。
+状态：子系统设计 v1，闭合。**定位：可选项，独立于核心，不属于核心**——核心在没有它时完整可运行；它与核心的唯一接口是 `DerivationNode::Pooled`（`uta-core-design.md` §5.3）。依赖核心概念：§0.2 值树与五个 fold、§7.0 注册表、`Journal`/`LogPosition`（§2）。裁决：D11/D12，`decision-log.md` E1–E9。证据：`research/fp-07`（类型导出与外部编译）、`research/fp-08`（段池选库）、`research/fp-09`（算法层与 VectorTA、AoS/SoA、Rust SIMD 现状、50 ms 容量）、`research/fp-10`（数组中间层、真实 SPY 实测、autovec 对照）。标注：**[证据]** / **[设计]** / **[spike]** 同核心设计。
 
 ---
 
@@ -61,7 +61,7 @@ flowchart LR
 
 - **50 ms**：默认内部所有计算在 50 ms 内产生，是段有效期与调度的隐含上界；超过即该 op 的失败观察，不是等待。**[设计：E7]** 预算按 `T_ipc + T_convert + T_compute + T_writeback` 分项核算：本机 M4 标量实测单指标 100 k 样本 25–154 µs、每列 i64→f64 转换 14 µs、AoS→SoA 转置 98 µs/3 列——若按触发做转置/转换，物化占合计 34–65 %，与计算同量级；§3 的列式段与洗入期转换把 `T_convert` 从每触发降为零，剩余 `T_ipc` 与真实链路 [需实测]（§9 闸门 7）。**[证据：fp-09 §7]**
 - **延迟**：IPC 延迟以 `iceoryx2` 主页基准为准，本文不复述；其在 50 ms 内可忽略是待验假设，不是前提。**[设计：E7]** **[spike：§9 闸门 7]**
-- **向量化是自然收益，不是目标**：不追求 SIMD 利用率或高度向量化 **[设计：E11]**。行情计算的主体是超大浮点数组的同构数值运算，末尾少量 map；对齐交给类型映射，作者面对对齐定长数组，**作者不碰 SIMD**（E10）。**[设计：E8]** **平台优先级：aarch64 NEON 首要（OpenAlice 用户主流是 ARM macOS），x86 AVX2 第二，AVX-512 不作目标** **[设计：E12]**——AVX2/NEON 对浮点有大幅加速、对整数收益小，故段内数值列取 `f64`（§3.5）。收益条件 **[证据：fp-09 §3.1 问四、§6]**：窗口/归约类指标（SMA、Bollinger、rolling 统计）沿时间可向量化；递归类（EMA/RSI/ATR）有 loop-carried 依赖，沿时间不可平行化，走标量是合理的（VectorTA 对 RSI 即便在 x86 AVX 也走标量）；递归指标若要并行，维度是跨流/跨参数，不是跨时间。平台事实：`std::simd` 仍 nightly-only（#86656 open）；Apple M4 只有 128-bit NEON（f64 = 2 lane）；**现成指标库在 aarch64 上无显式 NEON 内核**，"库自带 SIMD"在首要平台上不成立，中间层选库以 NEON 实测收益为准（fp-10）。GPU 是同一形态的更远延伸，代价大，现在不做。
+- **向量化是自然收益，不是目标**：不追求 SIMD 利用率或高度向量化 **[设计：E11]**。行情计算的主体是超大浮点数组的同构数值运算，末尾少量 map；对齐交给类型映射，作者面对对齐定长数组，**作者不碰 SIMD**（E10）。**[设计：E8]** **平台优先级：aarch64 NEON 首要（OpenAlice 用户主流是 ARM macOS），x86 AVX2 第二，AVX-512 不作目标** **[设计：E12]**——AVX2/NEON 对浮点有大幅加速、对整数收益小，故段内数值列取 `f64`（§3.5）。收益条件 **[证据：fp-09 §3.1 问四、§6]**：窗口/归约类指标（SMA、Bollinger、rolling 统计）沿时间可向量化；递归类（EMA/RSI/ATR）有 loop-carried 依赖，沿时间不可平行化，走标量是合理的（VectorTA 对 RSI 即便在 x86 AVX 也走标量）；递归指标若要并行，维度是跨流/跨参数，不是跨时间。平台事实：`std::simd` 仍 nightly-only（#86656 open）；Apple M4 只有 128-bit NEON（f64 = 2 lane）；**现成指标库在 aarch64 上无显式 NEON 内核**，"库自带 SIMD"在首要平台上不成立；但 release 默认基线里 elementwise/密集窗口已被 LLVM autovec 成 NEON `.2d`，显式 SIMD 的增量收益只在朴素 rolling max/min 显著（3.3×，且 O(n) 单调队列标量可能反超）——"作者不碰 SIMD"在首要平台靠惯用写法 + 中间层即可达成（§8.1）**[证据：fp-10 §4.3]**。GPU 是同一形态的更远延伸，代价大，现在不做。
 
 ## 1.4 代价，显式接受
 
@@ -159,7 +159,7 @@ op 收到触发 → 借用当前窗口的段列表 → 按导出布局取各列�
 
 ## 7. 外部编译与迭代
 
-- **作者面**：typed SDK 从契约表导出 Rust 源：列切片视图结构（`struct Window<'a> { ts: &'a [i64], close: &'a [f64], …, valid: &'a Bitmap }`，每字段一列）+ 输出段的可写列（`&mut [T]` + 可写位图）+ `const LAYOUT_HASH`；作者写一个小 crate，依赖 SDK，实现**批量**入口 `fn compute(window: &Window, out: &mut OutputColumns) -> Written { len, first_valid }`——与现成库的 `xxx_into(&mut [f64])` / TA-Lib `outBegIdx` 家族同形，不是逐条 iterator（逐条产出会阻断库的批量列路径）。`zerocopy`/`bytemuck` 派生宏作为"导出布局确实可零拷贝访问"的编译期校验。**[证据：fp-07 组四；fp-08 §3.3；fp-09 修正 5/8]**
+- **作者面 = 列视图 + 原语集 + 标量逃逸口，作者不碰 SIMD**（E10；裁决见 §8.1）：typed SDK 从契约表导出 Rust 源——列视图结构（`struct Window<'a> { ts: &'a [i64], close: ArrayView1<'a, f64>, …, valid: &'a Bitmap }`，每字段一列，`ndarray` 视图零拷贝借自段）+ 输出段的可写列（`ArrayViewMut1<f64>` + 可写位图）+ `const LAYOUT_HASH`；作者写一个小 crate，依赖 SDK，实现**批量**入口 `fn compute(window: &Window, out: &mut OutputColumns) -> Written { len, first_valid }`——与 `xxx_into(&mut [f64])` / TA-Lib `outBegIdx` 家族同形，不是逐条 iterator。输出列**必须是连续 `&mut [f64]`**：只返回新 `Array`/`Series`/`Tensor` 的库（arrow-rs、polars、candle、burn）过不了这个 ABI，不得作数据面。**[证据：fp-10 §3、修正 1]** `zerocopy`/`bytemuck` 派生宏作为"导出布局确实可零拷贝访问"的编译期校验。**[证据：fp-07 组四；fp-08 §3.3；fp-09 修正 5/8]**
 - **迭代**：改一个 op 只重编译一个小 crate，warm rebuild 亚秒级（实测 0.94 s → 0.12 s，单 OS 最小 crate）；替换走 §6.4。**[证据：fp-07 命题 5]**
 - **交付**：source 或预编译均可；三 OS 产物按 target triple 矩阵构建（cargo-dist 式），Windows 需 MSVC、macOS 需 SDK——工具链缺口是独立条件，不是子系统能消掉的。**[证据：fp-07 组四]**
 - **不做**：宿主内嵌编译器（Cranelift 实验性、rustc 作库不稳定）。**[证据：fp-07 案例 4.5]**
@@ -176,20 +176,35 @@ op 收到触发 → 借用当前窗口的段列表 → 按导出布局取各列�
 
 不选：Aeron（可写 `MmapMut`、需 media driver、CI 仅 Linux）、disruptor-rs（进程内）、Chronicle（持久、查表、付费 Rust 绑定）、ipc-channel/shm_ringbuf/shared_memory（三门 FAIL）。Arrow `FFI_ArrowSchema` 只作布局导出面，不作数据面。
 
-### 8.1 算法层：作者的依赖，不是子系统的组件
+### 8.1 中间层裁决：子系统拥有的原语集，建在 `ndarray` 视图上
 
-原生 op 是黑盒（§1.1），用什么指标库是作者的事；子系统只保证段形状让现成库**零转置、零转换**可用（§3.0/§3.5）。调查结论 **[证据：fp-09 §3、§8]**：
+**结论（[设计：fp-10 后裁决，待维护者确认，decision-log F7]）**：不选任何现成指标库作算法层（E10，fp-09）；也不把某个数组库整个 bless 给作者了事。中间层 = **`ndarray` 视图作容器 + 子系统自有的、词汇取自 pandas/numpy 的一小组原语 + 标量逃逸口**。作者写数组表达式与惯用 `for` 循环，不写 SIMD。
 
-| 库 | 在列式 f64 段下 | 不可忽略的限制 |
+三条一手事实决定了这个形状 **[证据：fp-10 §1、§4、§6]**：
+1. **没有单一 Rust 库同时满足**"numpy 式 + 作者不碰 SIMD + 借外部列/写调用方列 + 有 rolling/ewm/validity"：`ndarray` 过 ABI、词汇最近 numpy，但无 rolling/scan/ewm/where/validity；`polars` 词汇最近 pandas、有 `rolling_*`/`ewm`/位图，但 kernel 只能返回新 `Series`，复杂指标慢 1.5–2.3× 且分配；`arrow-rs`/`candle`/`burn` 同样违 ABI；`faer`/`pulp` 分工最自然但要作者写 `WithSimd`。
+2. **aarch64 上"作者不碰 SIMD"已由 LLVM autovec 达成**：release 默认基线里 elementwise/密集窗口已是 NEON `.2d`（禁 autovec 对照：Squeeze 慢 14 %）；显式 SIMD 的增量收益按指标——SuperTrend 递推 ≈ 1.0×、Squeeze 1.36×、朴素 rolling max/min 3.3×（且后者换单调队列 O(n) 标量可能反超）。中间层真正要拥有的不是 SIMD，而是**窗口/递归/validity 的语义**。
+3. **loop-carried 状态机（SuperTrend 类）在所有先例（numpy/pandas/Arrow/Polars/numexpr）都强制退回 scalar/custom**——任何"只写表达式"的中间层都必须留标量逃逸口。
+
+**原语集（词汇取 pandas/numpy，签名取 Rust 惯用；输入 `ArrayView1<f64>` + 位图，输出写调用方列 + 位图）**：
+
+| 原语 | 语义契约（显式，不沿用任何库默认） | 实现形态 |
 |---|---|---|
-| **VectorTA 0.3.1** | 薄封装：`from_slice(&[f64]) + xxx_into(&mut [f64])`，输出零额外分配 | SIMD 全部 `cfg(nightly-avx, x86_64)`，aarch64 恒标量；递归指标 x86 也标量；gap 静默污染；RSI 零分母 = 50、EMA seed 等语义须逐指标对照；`unsafe` 量大，`#![allow(warnings)]` |
-| TA-Lib C 0.8.1 | `outBegIdx/outNBElement` + 调用方 `double[]`，最贴合 `Written` | vector backend "NOT STARTED"；Rust wrapper 2019 年裸 FFI |
-| Tulip C 0.9.x | 预分配 `double*` 输出 | `-O2` 标量；Rust 绑定非官方 |
-| `ta` / `yata` | 逐值状态机可按记录喂 | 无批量列路径、无 caller buffer |
-| polars rolling/ewm | validity 位图语义与 §3.5 同构 | 新建 `Series`，不能写既有段；显式 SIMD 需 nightly |
-| `ndarray` | stride view 可读任意布局 | 无指标，全部自写 |
+| `rolling(w).{sum, mean, std(ddof), var, min, max}` | `min_periods = w`，前 `w-1` 无效；`std` 的 `ddof` 必填 | sum/mean/std 增量窗口（Kahan/Welford）；min/max 单调队列 O(n)，不用 SIMD |
+| `ewm(alpha, seed)` | `seed` 必填：`First` / `MeanOf(n)`（EMA 的 idx n-1 均值 seed）/ `Wilder(n)`；`adjust=false`；无效输入按 op 的 `gap_policy`（§3.5） | 顺序标量（递归沿时间不可平行，E11） |
+| `shift(k)` / `diff(k)` | 位移后无效区显式进位图 | 视图偏移，零拷贝 |
+| `where(cond, a, b)` / elementwise ufunc / `cumsum` / `reduce` | validity 逐元素与运算同步传播 | 惯用循环，autovec；仅当实测超过 autovec 才在原语内部用 `pulp`，永不暴露给作者 |
+| `linreg(w)` | 窗口线性回归端点值（Pine `ta.linreg`） | 代数展开为 rolling sum 组合 |
+| **标量逃逸口** | 作者对列切片写惯用 `for` 循环（状态机、自定义递推），自己写 `first_valid` 与位图 | 无框架；autovec 自然适用 |
 
-SDK 层建议 **[证据：fp-09 §6]**：stable Rust 下的运行期 ISA 派发用 `pulp`（`Arch::new().dispatch` + `WithSimd(&mut [f64])`，aarch64 NEON/x86 V3/V4/Scalar）；手写 kernel 的多版本化用 `multiversion`；`wide` 仅 build-time 检测，`std::simd` 等稳定化前不作 SDK 依赖。指标语义（预热长度、seed、零分母、NaN 传播）不凭同名假定一致，作者以可手算序列逐指标对照后才注册。
+**不做**：不自造行业 DSL（E10）——上表词汇是 pandas/numpy 已有认知；不提供 SIMD 类型给作者；不实现完整 DataFrame；不承诺全向量化（E11）。
+
+**代价，显式接受**：子系统自己实现并维护约十个 kernel 与 validity 传播规则（Polars `rolling/no_nulls` 借 `&[T]+Bitmap` 的内部形状是直接设计参考，fp-10 命题 5）；原语的 `first_valid`/ddof/seed/`gap_policy` 语义由子系统定义并成为契约（§3.5）——这正是选 (b) 而非"bless `ndarray` 让作者手写一切"的理由：validity 传播若由每个 op 自己写，`gap_policy` 无法保证。
+
+**开发难易度（E13，fp-10 §4.5）**：pulp 手写 SuperTrend/Ichimoku/Squeeze 各 185/189/322 行，摩擦全在 lifetime/head-tail/`S::f64s`；纯 `ndarray` 则窗口/递归/位移全部手写循环。原语集下三者预期缩到"几行表达式 + 一个状态机循环"——[需实测]，§9 闸门 9。
+
+**SDK 内部（不面向作者）**：stable Rust 运行期 ISA 派发若需要用 `pulp`（aarch64 NEON / x86 V3；`Arch::new().dispatch`），多版本化用 `multiversion`；`wide` 仅 build-time 检测，`std::simd` 稳定化前不用。**[证据：fp-09 §6；fp-10 §3.5]** 指标语义（预热长度、seed、零分母、NaN 传播）不凭同名假定一致，作者以可手算序列逐指标对照后才注册。
+
+**排除记录 [证据：fp-09 §8；fp-10 §6]**：VectorTA（aarch64 全标量、gap 静默污染、E10 否决）；TA-Lib/Tulip（C FFI、标量、分列 double）；`ta`/`yata`（逐值状态机，无批量列路径）；polars/arrow-rs/candle/burn（新数组，违 ABI）；`numrs`/`numrs2`（owned 存储）；`nalgebra`（矩阵词汇，索引循环慢）；`mdarray`（可用但 unsafe 面最大、实验性）；`faer`（线代词汇；其 `pulp` 分工范式被原语层内部采用）。
 
 ---
 
@@ -201,8 +216,9 @@ SDK 层建议 **[证据：fp-09 §6]**：stable Rust 下的运行期 ISA 派发�
 4. Slice 动态重分配：非 Static 策略下超 `max_slice_len` 扩容，快照不丢样本。
 5. 契约表归一：无序 `PointerOffset` 归一到有序 `LogPosition` 区间并跨段拼接；不同 subscriber 对同一位置得同一内容（跨独立进程复验）。
 6. 布局 fold 确定性：同一组合子树多次 fold 得同一规范化描述与 hash；字段顺序扰动不改变 hash（S13①）。
-7. 端到端 50 ms：真实 iceoryx2 链路上以一条 100 k 窗口 OHLC 流跑 RSI + ATR + Bollinger（M4 标量计算合计约 270 µs），分项记录 `T_ipc / T_compute / T_writeback` 的 p99；`T_ipc` 占比给出 §1.3"IPC 可忽略"成立或否的结论。
-8. 列式段对比：同一窗口在记录数组段与列式段上各跑闸门 7 的指标集，验证 §3.0"零转置"的实际收益并记录多字段同点访问的退化幅度。
+7. 端到端 50 ms：真实 iceoryx2 链路上以真实 SPY 窗口跑闸门 9 的三个指标，分项记录 `T_ipc / T_compute / T_writeback` 的 p99；`T_ipc` 占比给出 §1.3"IPC 可忽略"成立或否的结论。
+8. 列式段对比：同一窗口在记录数组段与列式段上各跑闸门 9 的指标集，验证 §3.0"零转置"的实际收益并记录多字段同点访问的退化幅度。
+9. 原语集实证（E13）：用 §8.1 原语集 + 标量逃逸口实现 SuperTrend(10,3)、Ichimoku(9,26,52)、Squeeze Momentum，真实 SPY 日线（SHA-256 `eeee8593…`）逐点匹配 fp-10 golden（1e-9）；记录 LOC、被迫进逃逸口的位置、µs/call 与 fp-10 标量基线（66/308/138 µs）之比、分配为 (0,0)、validity 端到端（含一处人造 gap 与各 `gap_policy`）。原语集若比 fp-10 手写 pulp 版慢超过 1.5× 或 LOC 未显著下降 → 回到 (a1) 纯 `ndarray` 视图 + 作者手写。
 
 任一失败 → §8 备选条件。
 
@@ -212,8 +228,8 @@ SDK 层建议 **[证据：fp-09 §6]**：stable Rust 下的运行期 ISA 派发�
 
 | 核心 spike | 本文处理 |
 |---|---|
-| S12 | §5 生命周期 + §9 闸门 1–5、7–8；选库已裁决，剩实测 |
-| S13 | ②导出 ③交付 ⑤校验已由 §3/§6/§7 关闭；剩 ① fold 确定性（§9 闸门 6）与三 OS 工具链缺口（§7，外部条件）；列式布局与 gap 策略进 hash 与注册项（§3.4/§3.5） |
+| S12 | §5 生命周期 + §9 闸门 1–5、7–9；选库已裁决，剩实测 |
+| S13 | ②导出 ③交付 ⑤校验已由 §3/§6/§7 关闭；剩 ① fold 确定性（§9 闸门 6）与三 OS 工具链缺口（§7，外部条件）；列式布局与 gap 策略进 hash 与注册项（§3.4/§3.5）；原语集实现与语义契约（§8.1，闸门 9） |
 | S14 | 触发语义（edge/level、合并、冷却）、背压、失败观察的形状——§6.3 给了 50 ms 预算与失败观察，触发通道的具体形式仍开放 |
 | S15 | 不在本文：输入流的持久化归 `Journal` |
 
@@ -224,5 +240,6 @@ SDK 层建议 **[证据：fp-09 §6]**：stable Rust 下的运行期 ISA 派发�
 - `research/fp-07-type-export-and-external-compilation.md`：24 案例，pinned iceoryx2 `aec1ed8` / arrow `b274238` / rosidl `00d13c5`。
 - `research/fp-08-segment-pool-libraries.md`：14 库，三淘汰门 + 12 维；本机 macOS 实测 iceoryx2 跨进程 pub/sub 与 `Slice` 连续性。
 - `research/fp-09-hpc-compute-layer-and-vectorta.md`：VectorTA 0.3.1（tarball SHA-256 `b530eecc…`，git `802518e2`）+ 6 对照库 + Intel/Arm/Arrow 一手依据 + 4 个 Rust SIMD 派发库；本机 M4 实测计时、gap 观测、AoS→SoA 转置成本。
+- `research/fp-10-array-middle-layer.md`：11 个数组/张量/SIMD 库过 ABI 往返闸门 + 本机 M4 真实 SPY 三个 Pine 级指标实测（golden 1e-9）+ LLVM autovec 对照 + 六个跨生态放置先例；§8.1 中间层裁决的证据。
 - `native-computation-design-handoff.md`：场景与约束来源；其"同地址空间"方向已被 D12 取代。
-- `decision-log.md` E1–E9。
+- `decision-log.md` E1–E13；F5–F7 待确认。

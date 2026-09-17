@@ -756,7 +756,7 @@ enum TicketAction<Intent> {
 | S9 | 规则组合的可交换性分类表；具名 struct/enum 组合下三层规则的样板量实测 | fp-03 命题 6；Rust 可行性评估 |
 | S10 | 发出后-持久化前崩溃窗口的恢复协议实测：SQLite WAL/fsync 崩溃注入于 `Prepared`/`SendBarrier`/`submit` 各窗口，验证不重复投放（与 S1 合并） | 域 F5/C1 |
 | S11 | Wasm 三 OS 开箱即用性与预算一致性实测；不成立则退回受监督子进程（§5.2） | 维护者约束；problem-domain §1.4.2 |
-| S12 | **选库已裁决 `iceoryx2`（fp-08）**；剩实测闸门：macOS/Windows 跨独立进程只读消费、借用期回收、reader 崩溃回收、Slice 重分配快照、契约表归一、端到端 50 ms 分项、列式段对比（`hpc-derivation-subsystem.md` §9） | fp-08 §7.1；fp-09 §7；维护者裁决 |
+| S12 | **选库已裁决 `iceoryx2`（fp-08）**；剩实测闸门：macOS/Windows 跨独立进程只读消费、借用期回收、reader 崩溃回收、Slice 重分配快照、契约表归一、端到端 50 ms 分项、列式段对比、原语集实证（`hpc-derivation-subsystem.md` §9） | fp-08 §7.1；fp-09 §7；fp-10 §4；维护者裁决 |
 | S13 | **收窄**（fp-07）：② 导出格式、③ 交付、⑤ hash 校验已在 `hpc-derivation-subsystem.md` §3/§6/§7 关闭；剩 ① 组合子树 fold 推导布局的确定性与规范化输出（闸门 6）、三 OS 产物的 C/linker/SDK 缺口（外部条件） | fp-07 S13 关闭建议；§5.3 |
 | S14 | 原生计算的触发通道形式（edge/level、合并、冷却）、背压/积压；50 ms 预算与失败观察已定（`hpc-derivation-subsystem.md` §6.3）；不承诺 hostile 隔离 | native-computation-design-handoff §6/§7 |
 | S15 | 高频行情流作为 `Journal` 的持久化策略（全量 / 抽样 / 仅 gap 标记）与保留协议；段池不参与（§2、§6.1、§5.3） | D12 |
@@ -772,6 +772,7 @@ enum TicketAction<Intent> {
 - **`research/fp-07-type-export-and-external-compilation.md`**：类型导出 / 外部编译 / 装载 / 握手校验的一手出处。
 - **`research/fp-08-segment-pool-libraries.md`**：段池选库的一手出处；首选 `iceoryx2`。
 - **`research/fp-09-hpc-compute-layer-and-vectorta.md`**：原生 op 算法层的一手出处：VectorTA 0.3.1 深挖与 6 对照库、AoS/SoA 一手依据、Rust SIMD 现状、50 ms 容量估算；子系统列式段裁决（`hpc-derivation-subsystem.md` §3.0）的证据。
+- **`research/fp-10-array-middle-layer.md`**：原生 op 作者面"数组中间层"的一手出处：11 库 ABI 往返闸门、真实 SPY + Pine 级指标 M4 实测、autovec 对照、六个跨生态放置先例；子系统 §8.1 原语集裁决的证据。
 - **`decision-log.md`**：本轮对话中维护者原话与裁决的归档（A–E 分主题，F 为已知未对齐处）。正文与其不一致时以更晚条目为准并回写正文；review 与 subagent 以它为查证入口。
 - **讨论记录**：两位讨论者（steady / divergent）的压力测试、一次外部阅读评审与 `discuss:astra` 两轮讨论的修正已并入正文；历史见 git log。
 

@@ -92,5 +92,6 @@
 |---|---|---|---|
 | F5 | `hpc-derivation-subsystem.md` §3.0 | fp-09 后段布局由 `repr(C)` 记录数组改为**一段内列式记录批**（每字段一条对齐列 + validity 位图）。理由：全部算法库输入是连续列，记录数组每触发须转置（M4 实测 98 µs/3 列/100 k，与计算同量级）；洗入本就是那一次拷贝，写列不增加字节。E2"地址即位置"逐列成立，E8"对齐定长数组"字面即列 | 待维护者确认；确认后并入 E 表并删本行 |
 | F6 | `hpc-derivation-subsystem.md` §3.5 | fp-09 后新增：gap 以 validity 位图显式表示，op 注册项声明 `gap_policy ∈ {Reset, Hold, Missing}`，不声明拒绝装载（数值轴已由 E11 定为 `f64`） | 待维护者确认；确认后并入 E 表并删本行 |
+| F7 | `hpc-derivation-subsystem.md` §8.1 | fp-10 后中间层裁决：`ndarray` 视图作容器 + 子系统自有 pandas/numpy 词汇原语集（rolling/ewm(seed 必填)/shift/diff/where/cumsum/reduce/linreg）+ 标量逃逸口；作者不碰 SIMD；`pulp` 只在原语内部且仅当实测超过 autovec。理由：无单一库同时满足 ABI + 词汇 + rolling/ewm/validity；aarch64 autovec 已覆盖 elementwise/密集窗口；validity/`gap_policy` 传播须子系统拥有才可保证；状态机在所有先例都强制标量。闸门 9 失败则回退 (a1) 纯 `ndarray` | 待维护者确认；确认后并入 E 表并删本行 |
 
 （F1–F4 已于 §4/§0.3/§8.2/§9 回写。）本表由 review 发现后追加；回写完成后删除对应行。
