@@ -61,7 +61,7 @@ flowchart LR
 
 - **50 ms**：默认内部所有计算在 50 ms 内产生，是段有效期与调度的隐含上界；超过即该 op 的失败观察，不是等待。**[设计：E7]** 预算按 `T_ipc + T_convert + T_compute + T_writeback` 分项核算：本机 M4 标量实测单指标 100 k 样本 25–154 µs、每列 i64→f64 转换 14 µs、AoS→SoA 转置 98 µs/3 列——若按触发做转置/转换，物化占合计 34–65 %，与计算同量级；§3 的列式段与洗入期转换把 `T_convert` 从每触发降为零，剩余 `T_ipc` 与真实链路 [需实测]（§9 闸门 7）。**[证据：fp-09 §7]**
 - **延迟**：IPC 延迟以 `iceoryx2` 主页基准为准，本文不复述；其在 50 ms 内可忽略是待验假设，不是前提。**[设计：E7]** **[spike：§9 闸门 7]**
-- **向量化是自然收益，不是目标**：不追求 SIMD 利用率或高度向量化 **[设计：E11]**。行情计算的主体是超大浮点数组的同构数值运算，末尾少量 map；对齐交给类型映射，作者面对对齐定长数组，**作者不碰 SIMD**（E10）。**[设计：E8]** 目标 ISA 是 x86 AVX2 与 aarch64 NEON——AVX2 对浮点有大幅加速、对整数收益小，故段内数值列取 `f64`（§3.5）；AVX-512 不作目标。收益条件 **[证据：fp-09 §3.1 问四、§6]**：窗口/归约类指标（SMA、Bollinger、rolling 统计）沿时间可向量化；递归类（EMA/RSI/ATR）有 loop-carried 依赖，沿时间不可平行化，走标量是合理的（VectorTA 对 RSI 即便在 x86 AVX 也走标量）；递归指标若要并行，维度是跨流/跨参数，不是跨时间。平台：`std::simd` 仍 nightly-only（#86656 open）；Apple M4 只有 128-bit NEON（f64 = 2 lane）。GPU 是同一形态的更远延伸，代价大，现在不做（VectorTA CUDA 作者原话：只在 VRAM 常驻工作流才值得）。
+- **向量化是自然收益，不是目标**：不追求 SIMD 利用率或高度向量化 **[设计：E11]**。行情计算的主体是超大浮点数组的同构数值运算，末尾少量 map；对齐交给类型映射，作者面对对齐定长数组，**作者不碰 SIMD**（E10）。**[设计：E8]** **平台优先级：aarch64 NEON 首要（OpenAlice 用户主流是 ARM macOS），x86 AVX2 第二，AVX-512 不作目标** **[设计：E12]**——AVX2/NEON 对浮点有大幅加速、对整数收益小，故段内数值列取 `f64`（§3.5）。收益条件 **[证据：fp-09 §3.1 问四、§6]**：窗口/归约类指标（SMA、Bollinger、rolling 统计）沿时间可向量化；递归类（EMA/RSI/ATR）有 loop-carried 依赖，沿时间不可平行化，走标量是合理的（VectorTA 对 RSI 即便在 x86 AVX 也走标量）；递归指标若要并行，维度是跨流/跨参数，不是跨时间。平台事实：`std::simd` 仍 nightly-only（#86656 open）；Apple M4 只有 128-bit NEON（f64 = 2 lane）；**现成指标库在 aarch64 上无显式 NEON 内核**，"库自带 SIMD"在首要平台上不成立，中间层选库以 NEON 实测收益为准（fp-10）。GPU 是同一形态的更远延伸，代价大，现在不做。
 
 ## 1.4 代价，显式接受
 
@@ -95,7 +95,7 @@ flowchart LR
 `Pooled` 之前的组合子树（`field::<T>` 访问器 + 转换算子）经 §0.2"输出类型" fold 得到段布局 `Layout`：字段列表，每字段 `(name, format, element_size, column_offset)`；段级 `capacity`、`alignment`、validity 位图位置。fold 必须**确定性**且输出**规范化**描述（字段顺序稳定、不含默认值、不含名字以外的语言细节）——这是 hash 的输入。**[spike S13①：无外部先例，需自证确定性]** **[证据：fp-07 S13 关闭建议 ①]**
 
 ### 3.2 对齐
-段基址与每列起点对齐到 **64 B（cache line）**，它同时满足目标向量宽度：x86 AVX2 为 32 B，aarch64 NEON 为 16 B。**AVX-512 不是设计目标**——一开始对齐 AVX-512 不现实；64 B 只是 cache-line 对齐，不暗示 512-bit 向量路径。对齐是 `Layout` 的一部分，进入 hash。**[设计：E8、E11]** **[证据：fp-09 §6、修正 1]**
+段基址与每列起点对齐到 **64 B（cache line）**，它同时满足目标向量宽度：aarch64 NEON 为 16 B（首要平台），x86 AVX2 为 32 B。**AVX-512 不是设计目标**——64 B 只是 cache-line 对齐，不暗示 512-bit 向量路径。对齐是 `Layout` 的一部分，进入 hash。**[设计：E8、E11、E12]** **[证据：fp-09 §6、修正 1]**
 
 ### 3.3 导出格式
 语言无关的布局描述，形状取 Arrow `ArrowSchema` format 码 + 列偏移：每字段 `(name, format, column_offset, element_size)`，format 码覆盖洗入映射（`'g'` f64、`'l'` i64、`'tsn:'` ns 时间戳、`'C'` u8 枚举）；附 `capacity`、`alignment`、validity 位图布局、`layout_hash`。列式段与 Arrow 的对应比记录数组直接：每列就是一条 Arrow buffer。Rust 源（列切片视图结构，见 §7）与 C 头是它的两种渲染，由工具生成。**[证据：fp-07 命题 2；S13 关闭建议 ②；fp-09 §5.3]**
