@@ -91,8 +91,10 @@ flowchart LR
 
 不取"列即段"（每列独立 service）：那要另立跨段时间轴/长度/缺失一致性协议；一段内含全部列则一次快照天然一致。多字段同点访问（如单根 K 线的 OHLC）退化为四次不同地址加载——该模式属核心值树的 `On(pattern)`，不是原生 op 的向量路径。
 
+**定长多档字段（L2 订单簿的 `bid_sz[N]` 这类）是布局 fold 的显式选择，进入身份** **[证据：fp-12 §5、§8]**：(A) 展平为 N 条标量列（Arrow fixed-size-list `+w:N` 展平，每 (side, level, field) 一列），或 (B) 一条行主序 `(n × N)` 二维列。两者对不同指标最优**相反**：归约成"每快照一个标量"且能跨快照垂直向量化的（OBI(k)）A 快 1.5×；输出/访问本身是"每档一条剖面"的（累计深度）B 快 2–5×，显式 SIMD 也救不了 A 的散写。默认规则：**输出或访问模式是逐档剖面 → B；跨档归约成标量 → A**；fold 记录所选形状与 N，二者不同 hash。
+
 ### 3.1 推导（fold）
-`Pooled` 之前的组合子树（`field::<T>` 访问器 + 转换算子）经 §0.2"输出类型" fold 得到段布局 `Layout`：字段列表，每字段 `(name, format, element_size, column_offset)`；段级 `capacity`、`alignment`、validity 位图位置。fold 必须**确定性**且输出**规范化**描述（字段顺序稳定、不含默认值、不含名字以外的语言细节）——这是 hash 的输入。**[spike S13①：无外部先例，需自证确定性]** **[证据：fp-07 S13 关闭建议 ①]**
+`Pooled` 之前的组合子树（`field::<T>` 访问器 + 转换算子）经 §0.2"输出类型" fold 得到段布局 `Layout`：字段列表，每字段 `(name, format, element_size, column_offset, shape)`——`shape` 对标量列为 `[]`，对多档字段为 `[N]` 及其折法 A/B（§3.0）；段级 `capacity`、`alignment`、validity 位图位置。fold 必须**确定性**且输出**规范化**描述（字段顺序稳定、不含默认值、不含名字以外的语言细节）——这是 hash 的输入；**档数与折法必须进 hash**，否则 4 档段与 10 档段身份撞车 **[证据：fp-12 §8]**。**[spike S13①：无外部先例，需自证确定性]** **[证据：fp-07 S13 关闭建议 ①]**
 
 ### 3.2 对齐
 段基址与每列起点对齐到 **64 B（cache line）**，它同时满足目标向量宽度：aarch64 NEON 为 16 B（首要平台），x86 AVX2 为 32 B。**AVX-512 不是设计目标**——64 B 只是 cache-line 对齐，不暗示 512-bit 向量路径。对齐是 `Layout` 的一部分，进入 hash。**[设计：E8、E11、E12]** **[证据：fp-09 §6、修正 1]**
@@ -180,7 +182,7 @@ op 收到触发 → 借用当前窗口的段列表 → 按导出布局取各列�
 
 ### 8.1 中间层裁决：子系统拥有的原语集，建在 `ndarray` 视图上
 
-**结论（[设计：fp-10 假设，已由 fp-11 闸门 9 demo 实证：作者代码降 57–73%，SuperTrend 快过手写 NEON、Squeeze 1.25×，Ichimoku 2.23× 需 `rolling.min/max` 内部 SIMD；decision-log F7 待维护者确认]）**：不选任何现成指标库作算法层（E10，fp-09）；也不把某个数组库整个 bless 给作者了事。中间层 = **`ndarray` 视图作容器 + 子系统自有的、词汇取自 pandas/numpy 的一小组原语 + 标量逃逸口**。作者写数组表达式与惯用 `for` 循环，不写 SIMD。
+**结论（[设计：fp-10 假设，已由 fp-11/fp-12 两个 demo 实证并限定范围：时间轴 rolling 指标作者代码降 57–73%，SuperTrend 快过手写 NEON；含档轴归约的 L2 指标 LOC 优势消失（404 ≈ 389）；多项 rolling 的回归类指标原语版慢手写融合循环 2–5×；decision-log F7 待维护者确认]）**：不选任何现成指标库作算法层（E10，fp-09）；也不把某个数组库整个 bless 给作者了事。中间层 = **`ndarray` 视图作容器 + 子系统自有的、词汇取自 pandas/numpy 的一小组时间轴原语 + 标量逃逸口**。作者写数组表达式与惯用 `for` 循环，不写 SIMD。
 
 三条一手事实决定了这个形状 **[证据：fp-10 §1、§4、§6]**：
 1. **没有单一 Rust 库同时满足**"numpy 式 + 作者不碰 SIMD + 借外部列/写调用方列 + 有 rolling/ewm/validity"：`ndarray` 过 ABI、词汇最近 numpy，但无 rolling/scan/ewm/where/validity；`polars` 词汇最近 pandas、有 `rolling_*`/`ewm`/位图，但 kernel 只能返回新 `Series`，复杂指标慢 1.5–2.3× 且分配；`arrow-rs`/`candle`/`burn` 同样违 ABI；`faer`/`pulp` 分工最自然但要作者写 `WithSimd`。
@@ -202,7 +204,7 @@ op 收到触发 → 借用当前窗口的段列表 → 按导出布局取各列�
 
 **代价，显式接受**：子系统自己实现并维护约十个 kernel 与 validity 传播规则（Polars `rolling/no_nulls` 借 `&[T]+Bitmap` 的内部形状是直接设计参考，fp-10 命题 5）；原语的 `first_valid`/ddof/seed/`gap_policy` 语义由子系统定义并成为契约（§3.5）——这正是选 (b) 而非"bless `ndarray` 让作者手写一切"的理由：validity 传播若由每个 op 自己写，`gap_policy` 无法保证。
 
-**开发难易度（E13，fp-11 §3）[证据]**：同口径作者 LOC，SuperTrend/Ichimoku/Squeeze = 原语集 43/36/36 vs `ndarray` 手写 62/78/128 vs pulp 手写 114/99/212；逃逸口只剩 SuperTrend 状态机（~18 行，不可消除）与 Squeeze 的 i8 分类（~6 行），Ichimoku 零逃逸口。零优化普通写法（`Vec` + 朴素 O(n·w) + 分配）Ichimoku/Squeeze 慢原语版 3×，SuperTrend 不慢——原语层的价值在窗口类指标的 O(n) 算法与语义，不在 SIMD。原语 crate 自身 428 行。
+**开发难易度（E13，fp-11 §3、fp-12 §6）[证据]**：时间轴指标——同口径作者 LOC，SuperTrend/Ichimoku/Squeeze = 原语集 43/36/36 vs `ndarray` 手写 62/78/128 vs pulp 手写 114/99/212；逃逸口只剩 SuperTrend 状态机（~18 行，不可消除）与 Squeeze 的 i8 分类（~6 行），Ichimoku 零逃逸口。零优化普通写法（`Vec` + 朴素 O(n·w) + 分配）Ichimoku/Squeeze 慢原语版 3×，SuperTrend 不慢——原语层的价值在窗口类指标的 O(n) 算法与语义，不在 SIMD。原语 crate 自身 428 行。**L2 指标（fp-12）划出了边界**：原语词汇是纯时间轴的，档轴归约（OBI 跨档、累计深度剖面）两种写法都退回 `ndarray` Zip/逐行 fold（同码），原语版 404 行 ≈ ndarray 389 行；**LOC 收益是"时间轴指标占比"的函数**。裁定：**不加档轴原语**——`ndarray` 二维视图 + `axis` 归约已是 numpy 词汇，容器承担档轴，原语承担时间轴。**中间列物化的代价已量到**：多项 rolling 的回归指标（slope：4 次 `rolling.sum` 物化 4 条 temp）原语版 3110 µs vs pulp 融合单遍 643 µs（4.8×），OFI 1.4×；单项 rolling（z-score）≈ 持平。缓解方向 [需实测]：多输入单遍 `rolling.sums(&[cols])` 融合原语。`rolling.std` 用补偿滑动求和、忌全局 prefix 差分（近常值窗口一次方差灾难性抵消，fp-12 §2）。
 
 **SDK 内部（不面向作者）**：stable Rust 运行期 ISA 派发若需要用 `pulp`（aarch64 NEON / x86 V3；`Arch::new().dispatch`），多版本化用 `multiversion`；`wide` 仅 build-time 检测，`std::simd` 稳定化前不用。**[证据：fp-09 §6；fp-10 §3.5]** 指标语义（预热长度、seed、零分母、NaN 传播）不凭同名假定一致，作者以可手算序列逐指标对照后才注册。
 
@@ -243,6 +245,7 @@ op 收到触发 → 借用当前窗口的段列表 → 按导出布局取各列�
 - `research/fp-08-segment-pool-libraries.md`：14 库，三淘汰门 + 12 维；本机 macOS 实测 iceoryx2 跨进程 pub/sub 与 `Slice` 连续性。
 - `research/fp-09-hpc-compute-layer-and-vectorta.md`：VectorTA 0.3.1（tarball SHA-256 `b530eecc…`，git `802518e2`）+ 6 对照库 + Intel/Arm/Arrow 一手依据 + 4 个 Rust SIMD 派发库；本机 M4 实测计时、gap 观测、AoS→SoA 转置成本。
 - `research/fp-11-gate9-primitives-demo.md`（+ 三份附录）：闸门 9 demo——原语集 vs ndarray 手写 vs pulp 手写 vs 零优化普通写法四份并排、对齐/cache line 对照、debug 量级；§8.1 结论的实证。
+- `research/fp-12-l2-orderbook-demo.md`：L2 订单簿 demo（LOBSTER AMZN 2012-06-21 level-10，269,748 快照）——四写法 × 6 指标（OBI/microprice/OFI/深度剖面/z-score/rolling 回归）、多档布局 A/B 对比、档轴归约与中间列物化的实测；§3.0/§3.1/§8.1 范围限定的证据。
 - `research/fp-10-array-middle-layer.md`：11 个数组/张量/SIMD 库过 ABI 往返闸门 + 本机 M4 真实 SPY 三个 Pine 级指标实测（golden 1e-9）+ LLVM autovec 对照 + 六个跨生态放置先例；§8.1 中间层裁决的证据。
 - `native-computation-design-handoff.md`：场景与约束来源；其"同地址空间"方向已被 D12 取代。
 - `decision-log.md` E1–E13；F5–F7 待确认。
