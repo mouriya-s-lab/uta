@@ -1,6 +1,6 @@
 # 行情派生高性能计算子系统：`Pooled` → 段池 → 原生 op
 
-状态：子系统设计 v1，闭合。**定位：可选项，独立于核心，不属于核心**——核心在没有它时完整可运行；它与核心的唯一接口是 `DerivationNode::Pooled`（`uta-core-design.md` §5.3）。依赖核心概念：§0.2 值树与五个 fold、§7.0 注册表、`Journal`/`LogPosition`（§2）。裁决：D11/D12，`decision-log.md` E1–E9。证据：`research/fp-07`（类型导出与外部编译）、`research/fp-08`（段池选库）。标注：**[证据]** / **[设计]** / **[spike]** 同核心设计。
+状态：子系统设计 v1，闭合。**定位：可选项，独立于核心，不属于核心**——核心在没有它时完整可运行；它与核心的唯一接口是 `DerivationNode::Pooled`（`uta-core-design.md` §5.3）。依赖核心概念：§0.2 值树与五个 fold、§7.0 注册表、`Journal`/`LogPosition`（§2）。裁决：D11/D12，`decision-log.md` E1–E9。证据：`research/fp-07`（类型导出与外部编译）、`research/fp-08`（段池选库）、`research/fp-09`（算法层与 VectorTA、AoS/SoA、Rust SIMD 现状、50 ms 容量）。标注：**[证据]** / **[设计]** / **[spike]** 同核心设计。
 
 ---
 
@@ -12,8 +12,8 @@
 flowchart LR
   IN["输入流 Journal&lt;Record&gt;<br/>(集成清洗后的观察记录)"]
   POOLED["Pooled { input, window }<br/>值树读侧组合子"]
-  WASH["洗入：一次拷贝<br/>Record → 对齐定长布局"]
-  SEG["段 = Sample&lt;Slice&lt;Layout&gt;&gt;<br/>iceoryx2 只读共享内存"]
+  WASH["洗入：一次拷贝<br/>Record → 对齐列 + validity"]
+  SEG["段 = 一次快照的列式记录批<br/>每字段一条对齐连续列 + validity 位图<br/>iceoryx2 只读共享内存"]
   TBL["契约表（核心）<br/>type_id · layout_hash · segment · stream · position range · version · writer"]
   OP["原生 op（独立进程）<br/>subscriber，只读映射，SIMD"]
   OUT["输出段 = 新派生流"]
@@ -52,22 +52,22 @@ flowchart LR
 
 - **无堆**：共享内存是可分配边界的大内存池，池内无 malloc/free、无指针，只有按行情类型切出的段。
 - **写在哪由类型决定**：每个行情派生读类型声明自己的扁平布局并据此拥有段；布局是该类型的一部分。
-- **地址即位置**：段内 `base + (pos - from) * stride`；跨段由契约表（§4）。
+- **地址即位置**：段内每列 `column_base + (pos - from) * element_size`；跨段由契约表（§4）。
 - **线性即可拼接**：ring 回绕、段满、进程重启只是把流切成若干段，按位置区间拼回即原数据。
 - **IPC 只交接段**：计算输入 = 段句柄列表 + 位置范围；输出也是一个段 = 一条派生流。
 - **快照与有效期**：段是某一时刻输入窗口的快照，有内部有效期，不外泄——计算只见"这一版窗口"。段池不持久；重启由 `Pooled` 重洗；持久化行情归 `Journal`（S15）。**[设计：E6/E7]**
 
 ## 1.3 预算与计算形态
 
-- **50 ms**：默认内部所有计算在 50 ms 内产生，是段有效期与调度的隐含上界；超过即该 op 的失败观察，不是等待。**[设计：E7]**
-- **延迟**：IPC 延迟以 `iceoryx2` 主页基准为准，本文不复述；50 ms 预算下这一层不需关心。**[设计：E7]**
-- **向量化优先**：行情计算是典型向量化场景——超大数组同构数值运算，末尾少量 map；对齐交给类型映射（洗入按 SIMD 通道宽度对齐），作者面对对齐定长数组。GPU 是同一形态的更远延伸，代价大，现在不做。**[设计：E8]**
+- **50 ms**：默认内部所有计算在 50 ms 内产生，是段有效期与调度的隐含上界；超过即该 op 的失败观察，不是等待。**[设计：E7]** 预算按 `T_ipc + T_convert + T_compute + T_writeback` 分项核算：本机 M4 标量实测单指标 100 k 样本 25–154 µs、每列 i64→f64 转换 14 µs、AoS→SoA 转置 98 µs/3 列——若按触发做转置/转换，物化占合计 34–65 %，与计算同量级；§3 的列式段与洗入期转换把 `T_convert` 从每触发降为零，剩余 `T_ipc` 与真实链路 [需实测]（§9 闸门 7）。**[证据：fp-09 §7]**
+- **延迟**：IPC 延迟以 `iceoryx2` 主页基准为准，本文不复述；其在 50 ms 内可忽略是待验假设，不是前提。**[设计：E7]** **[spike：§9 闸门 7]**
+- **向量化优先，但收益依指标类型与平台而异**：行情计算的主体是超大数组同构数值运算，末尾少量 map；对齐交给类型映射，作者面对对齐定长数组。**[设计：E8]** 收益条件 **[证据：fp-09 §3.1 问四、§6]**：窗口/归约类指标（SMA、Bollinger、rolling 统计）沿时间可向量化；递归类（EMA/RSI/ATR）有 loop-carried 依赖，沿时间不可平行化——VectorTA 对 RSI 即便在 x86 AVX 也走标量；递归指标的并行维度是**跨流/跨参数**（同一指标多条流、参数扫描打包成 lane），不是跨时间。平台：`std::simd` 仍 nightly-only（#86656 open）；现成算法库在 aarch64 上无显式 NEON 内核；Apple M4 只有 128-bit NEON（f64 = 2 lane），默认无 SVE/SME。GPU 是同一形态的更远延伸，代价大，现在不做（VectorTA CUDA 作者原话：只在 VRAM 常驻工作流才值得）。
 
 ## 1.4 代价，显式接受
 
 - **信任边界在安装期**：只读映射让计算不能写核心内存，但仍可任意 syscall——是故障域，不是 sandbox（"uta 不保证程序无毒，在追求性能的前提下无法保证"）。原生 artifact 由 principal 经控制面安装，安装即授权；值树程序仍不可信、受预算。**[D11]**
 - **故障域**：计算 panic/OOM 只死计算进程，核心记失败观察；核心死则计算成孤儿，靠 H10 fence 回收。
-- **扁平布局约束**：无指针无 `Vec`；定长逐秒记录是自然形状，变长字段由 typed SDK 承担。
+- **扁平布局约束**：无指针无 `Vec`；段内每字段一条定长对齐列，变长字段由 typed SDK 承担。
 - **zero-copy 的范围**：只指从已物化段到调用不发生完整窗口传输；不覆盖网络、解码、洗入。
 - **用库不自研**：映射、回收与生命周期簿记由 `iceoryx2` 承担；自研只在 S12 闸门失败时启用（§8）。**[E7]**
 
@@ -75,23 +75,38 @@ flowchart LR
 
 ## 2. 前置条件与判定（装载期）
 
-`Pooled { input, window }` 合法当且仅当 `input` 的记录类型满足：**定长**（洗入后每条记录字节数固定）、**位置线性**（`LogPosition` 单调、相邻记录相邻）、**无指针**（`repr(C)` 无引用/`Vec`/字符串）、**可容忍 ring 回收**（旧位置被回收只产生 `BeyondRetention`，不产生错误结果）。四条由输出类型 fold 在装载期判定，不满足即拒绝该程序。**[设计：§5.3]**
+`Pooled { input, window }` 合法当且仅当 `input` 的记录类型满足：**定长**（洗入后每个字段元素字节数固定）、**位置线性**（`LogPosition` 单调、同一列内相邻位置相邻）、**无指针**（无引用/`Vec`/字符串）、**可容忍 ring 回收**（旧位置被回收只产生 `BeyondRetention`，不产生错误结果）。四条由输出类型 fold 在装载期判定，不满足即拒绝该程序。**[设计：§5.3]**
 
 ---
 
-## 3. 布局：推导、对齐、导出、身份
+## 3. 布局：列式段、推导、对齐、导出、身份
+
+### 3.0 段是列式记录批，不是记录数组
+
+**一段 = 一次快照的所有字段，每字段一条连续对齐列，外加每列一张 validity 位图；不是 `repr(C)` 记录的数组。** **[设计：fp-09 后裁决，待维护者确认（decision-log F5）]**
+
+依据 **[证据：fp-09 §3.1、§4、§5]**：(1) 全部成熟算法库——VectorTA、TA-Lib、Tulip、polars——的输入形状都是连续单列 `&[f64]`/`double*`，无一接受记录 stride 视图；记录数组要用它们必须每次触发转置（M4 实测 3 列 × 100 k = 98 µs，与单指标计算同量级），击穿"洗入后不再搬窗口"。(2) Intel/Arm 优化手册：跨样本同字段的 vertical SIMD 要连续列；Arm 明确警告运行期重排整个数据集代价高。(3) Arrow/DataFusion 列式的核心收益正是"只扫所需列"。
+
+为什么代价为零：洗入本来就是那一次拷贝（§1.1，E5），把 raw 记录写到列的地址而不是记录的地址，字节数相同；段"一次性写满即发"（§5），写时已知 `n`，列块边界确定。E2 的"地址即位置"逐列成立；E8 的"作者面对对齐定长数组"字面即列。
+
+不取"列即段"（每列独立 service）：那要另立跨段时间轴/长度/缺失一致性协议；一段内含全部列则一次快照天然一致。多字段同点访问（如单根 K 线的 OHLC）退化为四次不同地址加载——该模式属核心值树的 `On(pattern)`，不是原生 op 的向量路径。
 
 ### 3.1 推导（fold）
-`Pooled` 之前的组合子树（`field::<T>` 访问器 + 转换算子）经 §0.2"输出类型" fold 得到记录布局 `Layout`：字段名、基类型、偏移、宽度、记录 stride、对齐。fold 必须**确定性**且输出**规范化**描述（字段顺序稳定、不含默认值、不含名字以外的语言细节）——这是 hash 的输入。**[spike S13①：无外部先例，需自证确定性]** **[证据：fp-07 S13 关闭建议 ①]**
+`Pooled` 之前的组合子树（`field::<T>` 访问器 + 转换算子）经 §0.2"输出类型" fold 得到段布局 `Layout`：字段列表，每字段 `(name, format, element_size, column_offset)`；段级 `capacity`、`alignment`、validity 位图位置。fold 必须**确定性**且输出**规范化**描述（字段顺序稳定、不含默认值、不含名字以外的语言细节）——这是 hash 的输入。**[spike S13①：无外部先例，需自证确定性]** **[证据：fp-07 S13 关闭建议 ①]**
 
 ### 3.2 对齐
-洗入时按 SIMD 通道宽度对齐（记录 stride 与段基址均对齐到目标平台向量宽度；默认 64 字节覆盖 AVX-512/NEON）。对齐是 `Layout` 的一部分，进入 hash。**[设计：E8]**
+段基址与每列起点对齐到 **cache line 与目标平台向量宽度的较大者**：x86 AVX-512 为 64 B，aarch64 NEON 为 16 B；默认 64 B 两者皆满足，但在 Apple Silicon 上它是 cache-line 对齐，不是向量宽度。对齐是 `Layout` 的一部分，进入 hash。**[设计：E8]** **[证据：fp-09 §6、修正 1]**
 
 ### 3.3 导出格式
-语言无关的布局描述，形状取 Arrow `ArrowSchema` format 码 + NumPy dtype offsets：每字段 `(name, format, offset)`，format 码覆盖洗入映射（`'l'` i64、`'tsn:'` ns 时间戳、`'d:19,10'` 定点、`'C'` u8 枚举）；附 `stride`、`alignment`、`layout_hash`。Rust 源（`#[repr(C, align(64))] struct`）与 C 头是它的两种渲染，由工具生成。**[证据：fp-07 命题 2；S13 关闭建议 ②]**
+语言无关的布局描述，形状取 Arrow `ArrowSchema` format 码 + 列偏移：每字段 `(name, format, column_offset, element_size)`，format 码覆盖洗入映射（`'g'` f64、`'l'` i64、`'tsn:'` ns 时间戳、`'d:19,10'` 定点、`'C'` u8 枚举）；附 `capacity`、`alignment`、validity 位图布局、`layout_hash`。列式段与 Arrow 的对应比记录数组直接：每列就是一条 Arrow buffer。Rust 源（列切片视图结构，见 §7）与 C 头是它的两种渲染，由工具生成。**[证据：fp-07 命题 2；S13 关闭建议 ②；fp-09 §5.3]**
 
 ### 3.4 身份
-`layout_hash = SHA256(规范化布局描述)`（RIHS01 式）。**不依赖 iceoryx2 的 `is_compatible_to`**——它只比 `type_name + size + alignment`，同尺寸同对齐、字段语义不同会误配。**[证据：fp-07 命题 1；fp-08 §3.3]**
+`layout_hash = SHA256(规范化布局描述)`（RIHS01 式），描述必须覆盖**全部物理布局**：字段名、format、元素宽度、列偏移、容量、对齐、padding、validity 表示、定点尺度——"字段名 + 偏移"不足以唯一标定列式段。**不依赖 iceoryx2 的 `is_compatible_to`**——它只比 `type_name + size + alignment`，同尺寸同对齐、字段语义不同会误配。**[证据：fp-07 命题 1；fp-08 §3.3；fp-09 修正 7]**
+
+### 3.5 数值表示与 gap：两条独立于布局的契约轴
+
+- **数值表示由 fold 决定，转换只在洗入期发生。** 价格列的 format（定点 `'d:…'` 或 `'g'` f64）是组合子树的输出类型；原生 op 注册项声明它接受的 `layout_hash`，不匹配在装载期 fail-closed（§6.2）。全部现成算法库价格类型是 `f64`，无定点入口 **[证据：fp-09 §3.1 问五、§5.4]**；喂它们的程序在树里显式放 `to_f64` 转换算子，转换成本落在洗入那一次拷贝，不落在每次触发；精度语义变化（定点 → 53 位尾数）由作者显式选择，不静默发生。**[设计]**
+- **gap 显式，op 声明策略。** 输入流缺位在段里以 validity 位图表示，不伪造连续、不填哨兵。递归指标遇 gap 的行为在现成库里各异且静默——VectorTA RSI 遇 NaN 平台化后继续输出错误值、batch 与 stream 对同一序列输出不同 **[证据：fp-09 §3.1 问三]**——所以由子系统契约定：op 注册项声明 `gap_policy ∈ { Reset, Hold, Missing }`（gap 后重新预热 / 保持上一态 / 输出缺失直到新预热完成）；op 输出的 validity 位图必须把预热区与 `Missing` 区标为无效；不声明即拒绝装载。跨触发保留库的 streaming 状态会悄悄固定未声明的语义，禁止。**[设计]**
 
 ---
 
@@ -115,7 +130,7 @@ flowchart LR
 
 ## 5. 段生命周期
 
-- **写者**：核心洗入器（或原生 op 对其输出段）是 publisher；`loan_slice_uninit(n) → 写 → send`。每段一次性写满即发，不原地追加（段是快照）。**[证据：fp-08 §3.2]**
+- **写者**：核心洗入器（或原生 op 对其输出段）是 publisher；`loan_slice_uninit(n) → 逐列写 → send`。每段一次性写满即发，不原地追加（段是快照）；写时已知 `n`，列块边界与 validity 位图一并落定。**[证据：fp-08 §3.2]**
 - **读者**：原生 op 进程是 subscriber port：payload 段 OS 只读映射（`AccessMode::Read` → `PROT_READ` / `PAGE_READONLY`），控制面（连接队列、refcount）可写但是 iceoryx2 内部结构，不是核心内存。**接受"计算进程是可写控制面 subscriber，不是零协议只读附着"**。**[证据：fp-08 §3.5、推荐 3]** **[设计：显式接受]**
 - **借用**：`Sample` 持有即 refcount>0，chunk 不回收；`subscriber_max_borrowed_samples` 上限防慢读者拖垮池。窗口 = 核心持有的一组 `Sample` 的有序列表（history 是回放队列不是随机访问，随机访问由核心保留引用集实现）。**[证据：fp-08 §3.4、推荐 4]**
 - **回收**：ring 深度与 overflow 由 iceoryx2 配置（`history_size`、`subscriber_max_buffer_size`、`enable_safe_overflow`）；safe overflow 只回收无人借用的 chunk。**[证据：fp-08 §3.4]**
@@ -127,7 +142,7 @@ flowchart LR
 ## 6. 原生 op：装载、握手、执行
 
 ### 6.1 注册项（§7.0 注册表）
-`{ op_id, inputs: [(stream, layout_hash)], output: (stream, layout_hash), code_version, artifact, principal }`。`required_inputs` fold 对 `Pooled` 输入解析到契约表得段句柄。
+`{ op_id, inputs: [(stream, layout_hash)], output: (stream, layout_hash), gap_policy, code_version, artifact, principal }`。`required_inputs` fold 对 `Pooled` 输入解析到契约表得段句柄；`gap_policy` 见 §3.5。
 
 ### 6.2 装载 = 启动进程 + 握手
 1. 核心启动 op 进程（或 op 自行启动并连接），传入 service 名与期望的 `layout_hash` 集。
@@ -135,7 +150,7 @@ flowchart LR
 3. 握手通过后 op 是 subscriber；触发经 iceoryx2 事件或核心的触发通道（S14）。
 
 ### 6.3 执行
-op 收到触发 → 借用当前窗口的段列表 → 按导出布局做向量化计算（SIMD 对齐已由布局保证）→ `loan_slice_uninit` 输出段 → 写 → `send` → 释放借用。默认 **50 ms** 内完成；超时即该 op 的失败观察记录，不等待。**[设计：E7]**
+op 收到触发 → 借用当前窗口的段列表 → 按导出布局取各列切片做向量化计算（对齐已由布局保证，无转置无转换）→ `loan_slice_uninit` 输出段 → 逐列写 + validity → `send` → 释放借用。默认 **50 ms** 内完成（分项见 §1.3）；超时即该 op 的失败观察记录，不等待。**[设计：E7]**
 
 ### 6.4 替换
 布局变 = 新 `layout_hash` = 新 service；旧 op 继续读旧 service 直到被停止；新 op 连新 service。不存在原地改布局。未决：调用中持有的段何时可回收（借用释放后自然回收，S12 实测）。
@@ -144,7 +159,7 @@ op 收到触发 → 借用当前窗口的段列表 → 按导出布局做向量�
 
 ## 7. 外部编译与迭代
 
-- **作者面**：typed SDK 从契约表导出 Rust 源（`#[repr(C, align(N))]` 结构 + `const LAYOUT_HASH`）；作者写一个小 crate，依赖 SDK，实现 `fn compute(windows: &[&[Input]]) -> impl Iterator<Item = Output>` 形状的入口；`zerocopy`/`bytemuck` 派生宏作为"导出布局确实可零拷贝访问"的编译期校验。**[证据：fp-07 组四；fp-08 §3.3]**
+- **作者面**：typed SDK 从契约表导出 Rust 源：列切片视图结构（`struct Window<'a> { ts: &'a [i64], close: &'a [f64], …, valid: &'a Bitmap }`，每字段一列）+ 输出段的可写列（`&mut [T]` + 可写位图）+ `const LAYOUT_HASH`；作者写一个小 crate，依赖 SDK，实现**批量**入口 `fn compute(window: &Window, out: &mut OutputColumns) -> Written { len, first_valid }`——与现成库的 `xxx_into(&mut [f64])` / TA-Lib `outBegIdx` 家族同形，不是逐条 iterator（逐条产出会阻断库的批量列路径）。`zerocopy`/`bytemuck` 派生宏作为"导出布局确实可零拷贝访问"的编译期校验。**[证据：fp-07 组四；fp-08 §3.3；fp-09 修正 5/8]**
 - **迭代**：改一个 op 只重编译一个小 crate，warm rebuild 亚秒级（实测 0.94 s → 0.12 s，单 OS 最小 crate）；替换走 §6.4。**[证据：fp-07 命题 5]**
 - **交付**：source 或预编译均可；三 OS 产物按 target triple 矩阵构建（cargo-dist 式），Windows 需 MSVC、macOS 需 SDK——工具链缺口是独立条件，不是子系统能消掉的。**[证据：fp-07 组四]**
 - **不做**：宿主内嵌编译器（Cranelift 实验性、rustc 作库不稳定）。**[证据：fp-07 案例 4.5]**
@@ -161,16 +176,33 @@ op 收到触发 → 借用当前窗口的段列表 → 按导出布局做向量�
 
 不选：Aeron（可写 `MmapMut`、需 media driver、CI 仅 Linux）、disruptor-rs（进程内）、Chronicle（持久、查表、付费 Rust 绑定）、ipc-channel/shm_ringbuf/shared_memory（三门 FAIL）。Arrow `FFI_ArrowSchema` 只作布局导出面，不作数据面。
 
+### 8.1 算法层：作者的依赖，不是子系统的组件
+
+原生 op 是黑盒（§1.1），用什么指标库是作者的事；子系统只保证段形状让现成库**零转置、零转换**可用（§3.0/§3.5）。调查结论 **[证据：fp-09 §3、§8]**：
+
+| 库 | 在列式 f64 段下 | 不可忽略的限制 |
+|---|---|---|
+| **VectorTA 0.3.1** | 薄封装：`from_slice(&[f64]) + xxx_into(&mut [f64])`，输出零额外分配 | SIMD 全部 `cfg(nightly-avx, x86_64)`，aarch64 恒标量；递归指标 x86 也标量；gap 静默污染；RSI 零分母 = 50、EMA seed 等语义须逐指标对照；`unsafe` 量大，`#![allow(warnings)]` |
+| TA-Lib C 0.8.1 | `outBegIdx/outNBElement` + 调用方 `double[]`，最贴合 `Written` | vector backend "NOT STARTED"；Rust wrapper 2019 年裸 FFI |
+| Tulip C 0.9.x | 预分配 `double*` 输出 | `-O2` 标量；Rust 绑定非官方 |
+| `ta` / `yata` | 逐值状态机可按记录喂 | 无批量列路径、无 caller buffer |
+| polars rolling/ewm | validity 位图语义与 §3.5 同构 | 新建 `Series`，不能写既有段；显式 SIMD 需 nightly |
+| `ndarray` | stride view 可读任意布局 | 无指标，全部自写 |
+
+SDK 层建议 **[证据：fp-09 §6]**：stable Rust 下的运行期 ISA 派发用 `pulp`（`Arch::new().dispatch` + `WithSimd(&mut [f64])`，aarch64 NEON/x86 V3/V4/Scalar）；手写 kernel 的多版本化用 `multiversion`；`wide` 仅 build-time 检测，`std::simd` 等稳定化前不作 SDK 依赖。指标语义（预热长度、seed、零分母、NaN 传播）不凭同名假定一致，作者以可手算序列逐指标对照后才注册。
+
 ---
 
 ## 9. 实测闸门（S12，落地前必过；macOS + Windows 各一遍）
 
-1. 跨独立进程只读消费：publisher 发 `Sample<Slice<Layout>>`，另一进程 subscriber 按 `&[Layout]` 算术遍历；写 payload 触发段错误。
+1. 跨独立进程只读消费：publisher 发列式段，另一进程 subscriber 按各列 `column_base + (pos - from) * element_size` 遍历；写 payload 触发段错误。
 2. 借用期回收安全：长持最老 `Sample` 的 reader 与正常 reader 并存，publisher 超发 `buffer + history` 条；长持仍有效，overflow 行为符合配置。
 3. reader 崩溃回收：持借用的 op 进程异常退出，chunk 经 fence 回收，不泄漏不死锁。
 4. Slice 动态重分配：非 Static 策略下超 `max_slice_len` 扩容，快照不丢样本。
 5. 契约表归一：无序 `PointerOffset` 归一到有序 `LogPosition` 区间并跨段拼接；不同 subscriber 对同一位置得同一内容（跨独立进程复验）。
 6. 布局 fold 确定性：同一组合子树多次 fold 得同一规范化描述与 hash；字段顺序扰动不改变 hash（S13①）。
+7. 端到端 50 ms：真实 iceoryx2 链路上以一条 100 k 窗口 OHLC 流跑 RSI + ATR + Bollinger（M4 标量计算合计约 270 µs），分项记录 `T_ipc / T_compute / T_writeback` 的 p99；`T_ipc` 占比给出 §1.3"IPC 可忽略"成立或否的结论。
+8. 列式段对比：同一窗口在记录数组段与列式段上各跑闸门 7 的指标集，验证 §3.0"零转置"的实际收益并记录多字段同点访问的退化幅度。
 
 任一失败 → §8 备选条件。
 
@@ -180,8 +212,8 @@ op 收到触发 → 借用当前窗口的段列表 → 按导出布局做向量�
 
 | 核心 spike | 本文处理 |
 |---|---|
-| S12 | §5 生命周期 + §9 闸门 1–5；选库已裁决，剩实测 |
-| S13 | ②导出 ③交付 ⑤校验已由 §3/§6/§7 关闭；剩 ① fold 确定性（§9 闸门 6）与三 OS 工具链缺口（§7，外部条件） |
+| S12 | §5 生命周期 + §9 闸门 1–5、7–8；选库已裁决，剩实测 |
+| S13 | ②导出 ③交付 ⑤校验已由 §3/§6/§7 关闭；剩 ① fold 确定性（§9 闸门 6）与三 OS 工具链缺口（§7，外部条件）；列式布局与 gap 策略进 hash 与注册项（§3.4/§3.5） |
 | S14 | 触发语义（edge/level、合并、冷却）、背压、失败观察的形状——§6.3 给了 50 ms 预算与失败观察，触发通道的具体形式仍开放 |
 | S15 | 不在本文：输入流的持久化归 `Journal` |
 
@@ -191,5 +223,6 @@ op 收到触发 → 借用当前窗口的段列表 → 按导出布局做向量�
 
 - `research/fp-07-type-export-and-external-compilation.md`：24 案例，pinned iceoryx2 `aec1ed8` / arrow `b274238` / rosidl `00d13c5`。
 - `research/fp-08-segment-pool-libraries.md`：14 库，三淘汰门 + 12 维；本机 macOS 实测 iceoryx2 跨进程 pub/sub 与 `Slice` 连续性。
+- `research/fp-09-hpc-compute-layer-and-vectorta.md`：VectorTA 0.3.1（tarball SHA-256 `b530eecc…`，git `802518e2`）+ 6 对照库 + Intel/Arm/Arrow 一手依据 + 4 个 Rust SIMD 派发库；本机 M4 实测计时、gap 观测、AoS→SoA 转置成本。
 - `native-computation-design-handoff.md`：场景与约束来源；其"同地址空间"方向已被 D12 取代。
 - `decision-log.md` E1–E9。
