@@ -61,7 +61,7 @@ flowchart LR
 
 - **50 ms**：默认内部所有计算在 50 ms 内产生，是段有效期与调度的隐含上界；超过即该 op 的失败观察，不是等待。**[设计：E7]** 预算按 `T_ipc + T_convert + T_compute + T_writeback` 分项核算：本机 M4 标量实测单指标 100 k 样本 25–154 µs、每列 i64→f64 转换 14 µs、AoS→SoA 转置 98 µs/3 列——若按触发做转置/转换，物化占合计 34–65 %，与计算同量级；§3 的列式段与洗入期转换把 `T_convert` 从每触发降为零，剩余 `T_ipc` 与真实链路 [需实测]（§9 闸门 7）。**[证据：fp-09 §7]**
 - **延迟**：IPC 延迟以 `iceoryx2` 主页基准为准，本文不复述；其在 50 ms 内可忽略是待验假设，不是前提。**[设计：E7]** **[spike：§9 闸门 7]**
-- **向量化优先，但收益依指标类型与平台而异**：行情计算的主体是超大数组同构数值运算，末尾少量 map；对齐交给类型映射，作者面对对齐定长数组。**[设计：E8]** 收益条件 **[证据：fp-09 §3.1 问四、§6]**：窗口/归约类指标（SMA、Bollinger、rolling 统计）沿时间可向量化；递归类（EMA/RSI/ATR）有 loop-carried 依赖，沿时间不可平行化——VectorTA 对 RSI 即便在 x86 AVX 也走标量；递归指标的并行维度是**跨流/跨参数**（同一指标多条流、参数扫描打包成 lane），不是跨时间。平台：`std::simd` 仍 nightly-only（#86656 open）；现成算法库在 aarch64 上无显式 NEON 内核；Apple M4 只有 128-bit NEON（f64 = 2 lane），默认无 SVE/SME。GPU 是同一形态的更远延伸，代价大，现在不做（VectorTA CUDA 作者原话：只在 VRAM 常驻工作流才值得）。
+- **向量化是自然收益，不是目标**：不追求 SIMD 利用率或高度向量化 **[设计：E11]**。行情计算的主体是超大浮点数组的同构数值运算，末尾少量 map；对齐交给类型映射，作者面对对齐定长数组，**作者不碰 SIMD**（E10）。**[设计：E8]** 目标 ISA 是 x86 AVX2 与 aarch64 NEON——AVX2 对浮点有大幅加速、对整数收益小，故段内数值列取 `f64`（§3.5）；AVX-512 不作目标。收益条件 **[证据：fp-09 §3.1 问四、§6]**：窗口/归约类指标（SMA、Bollinger、rolling 统计）沿时间可向量化；递归类（EMA/RSI/ATR）有 loop-carried 依赖，沿时间不可平行化，走标量是合理的（VectorTA 对 RSI 即便在 x86 AVX 也走标量）；递归指标若要并行，维度是跨流/跨参数，不是跨时间。平台：`std::simd` 仍 nightly-only（#86656 open）；Apple M4 只有 128-bit NEON（f64 = 2 lane）。GPU 是同一形态的更远延伸，代价大，现在不做（VectorTA CUDA 作者原话：只在 VRAM 常驻工作流才值得）。
 
 ## 1.4 代价，显式接受
 
@@ -95,17 +95,17 @@ flowchart LR
 `Pooled` 之前的组合子树（`field::<T>` 访问器 + 转换算子）经 §0.2"输出类型" fold 得到段布局 `Layout`：字段列表，每字段 `(name, format, element_size, column_offset)`；段级 `capacity`、`alignment`、validity 位图位置。fold 必须**确定性**且输出**规范化**描述（字段顺序稳定、不含默认值、不含名字以外的语言细节）——这是 hash 的输入。**[spike S13①：无外部先例，需自证确定性]** **[证据：fp-07 S13 关闭建议 ①]**
 
 ### 3.2 对齐
-段基址与每列起点对齐到 **cache line 与目标平台向量宽度的较大者**：x86 AVX-512 为 64 B，aarch64 NEON 为 16 B；默认 64 B 两者皆满足，但在 Apple Silicon 上它是 cache-line 对齐，不是向量宽度。对齐是 `Layout` 的一部分，进入 hash。**[设计：E8]** **[证据：fp-09 §6、修正 1]**
+段基址与每列起点对齐到 **64 B（cache line）**，它同时满足目标向量宽度：x86 AVX2 为 32 B，aarch64 NEON 为 16 B。**AVX-512 不是设计目标**——一开始对齐 AVX-512 不现实；64 B 只是 cache-line 对齐，不暗示 512-bit 向量路径。对齐是 `Layout` 的一部分，进入 hash。**[设计：E8、E11]** **[证据：fp-09 §6、修正 1]**
 
 ### 3.3 导出格式
-语言无关的布局描述，形状取 Arrow `ArrowSchema` format 码 + 列偏移：每字段 `(name, format, column_offset, element_size)`，format 码覆盖洗入映射（`'g'` f64、`'l'` i64、`'tsn:'` ns 时间戳、`'d:19,10'` 定点、`'C'` u8 枚举）；附 `capacity`、`alignment`、validity 位图布局、`layout_hash`。列式段与 Arrow 的对应比记录数组直接：每列就是一条 Arrow buffer。Rust 源（列切片视图结构，见 §7）与 C 头是它的两种渲染，由工具生成。**[证据：fp-07 命题 2；S13 关闭建议 ②；fp-09 §5.3]**
+语言无关的布局描述，形状取 Arrow `ArrowSchema` format 码 + 列偏移：每字段 `(name, format, column_offset, element_size)`，format 码覆盖洗入映射（`'g'` f64、`'l'` i64、`'tsn:'` ns 时间戳、`'C'` u8 枚举）；附 `capacity`、`alignment`、validity 位图布局、`layout_hash`。列式段与 Arrow 的对应比记录数组直接：每列就是一条 Arrow buffer。Rust 源（列切片视图结构，见 §7）与 C 头是它的两种渲染，由工具生成。**[证据：fp-07 命题 2；S13 关闭建议 ②；fp-09 §5.3]**
 
 ### 3.4 身份
-`layout_hash = SHA256(规范化布局描述)`（RIHS01 式），描述必须覆盖**全部物理布局**：字段名、format、元素宽度、列偏移、容量、对齐、padding、validity 表示、定点尺度——"字段名 + 偏移"不足以唯一标定列式段。**不依赖 iceoryx2 的 `is_compatible_to`**——它只比 `type_name + size + alignment`，同尺寸同对齐、字段语义不同会误配。**[证据：fp-07 命题 1；fp-08 §3.3；fp-09 修正 7]**
+`layout_hash = SHA256(规范化布局描述)`（RIHS01 式），描述必须覆盖**全部物理布局**：字段名、format、元素宽度、列偏移、容量、对齐、padding、validity 表示——"字段名 + 偏移"不足以唯一标定列式段。**不依赖 iceoryx2 的 `is_compatible_to`**——它只比 `type_name + size + alignment`，同尺寸同对齐、字段语义不同会误配。**[证据：fp-07 命题 1；fp-08 §3.3；fp-09 修正 7]**
 
 ### 3.5 数值表示与 gap：两条独立于布局的契约轴
 
-- **数值表示由 fold 决定，转换只在洗入期发生。** 价格列的 format（定点 `'d:…'` 或 `'g'` f64）是组合子树的输出类型；原生 op 注册项声明它接受的 `layout_hash`，不匹配在装载期 fail-closed（§6.2）。全部现成算法库价格类型是 `f64`，无定点入口 **[证据：fp-09 §3.1 问五、§5.4]**；喂它们的程序在树里显式放 `to_f64` 转换算子，转换成本落在洗入那一次拷贝，不落在每次触发；精度语义变化（定点 → 53 位尾数）由作者显式选择，不静默发生。**[设计]**
+- **段里的价格与数量列是 `f64`，定点不进段。** 行情本质上是浮点；AVX2/NEON 的大幅加速只对浮点成立，整数收益小 **[设计：E11]**；全部现成算法库与数组库价格类型也是 `f64` **[证据：fp-09 §3.1 问五、§5.4]**。核心侧若以定点承载价格（§9 基类型），`Pooled` 洗入时一次转换为 `f64`，成本落在洗入那一次拷贝，不落在每次触发；精度语义（定点 → 53 位尾数）是进入 `Pooled` 的已知代价，随前置条件在装载期显式接受。时间戳列 `i64` 纳秒、枚举列 `u8` 不受影响。
 - **gap 显式，op 声明策略。** 输入流缺位在段里以 validity 位图表示，不伪造连续、不填哨兵。递归指标遇 gap 的行为在现成库里各异且静默——VectorTA RSI 遇 NaN 平台化后继续输出错误值、batch 与 stream 对同一序列输出不同 **[证据：fp-09 §3.1 问三]**——所以由子系统契约定：op 注册项声明 `gap_policy ∈ { Reset, Hold, Missing }`（gap 后重新预热 / 保持上一态 / 输出缺失直到新预热完成）；op 输出的 validity 位图必须把预热区与 `Missing` 区标为无效；不声明即拒绝装载。跨触发保留库的 streaming 状态会悄悄固定未声明的语义，禁止。**[设计]**
 
 ---
