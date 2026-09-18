@@ -156,7 +156,7 @@ pub fn supertrend(high: &[f64], low: &[f64], close: &[f64]) -> SuperTrendOutput 
 
 [OBSERVED] 基线源：`/Users/mouriya/Ext/tmp/fp10/gate9/demo/src/baselines.rs`；参考计时/加载源：`/Users/mouriya/Ext/tmp/fp10/gate9/demo/src/main.rs`。
 
-[OBSERVED] 设计依据：`/Users/mouriya/Ext/orca/workspaces/OpenAlice/new-uta/plans/uta-refactor/design/hpc-derivation-subsystem.md` §3.2、§8.1、§9；指标契约：`local://fp10-experiment-spec.md`。
+[OBSERVED] 设计依据：`/Users/mouriya/Ext/orca/workspaces/OpenAlice/new-uta/design/hpc-derivation-subsystem.md` §3.2、§8.1、§9；指标契约：`local://fp10-experiment-spec.md`。
 
 [OBSERVED] 实际命令（`CARGO_TARGET_DIR` 按契约使用共享 target）：`CARGO_TARGET_DIR=/Users/mouriya/Ext/tmp/fp10/gate9/target cargo run --manifest-path /Users/mouriya/Ext/tmp/fp10/gate9/naive/Cargo.toml`；`CARGO_TARGET_DIR=/Users/mouriya/Ext/tmp/fp10/gate9/target cargo run --release --manifest-path /Users/mouriya/Ext/tmp/fp10/gate9/naive/Cargo.toml`。
 

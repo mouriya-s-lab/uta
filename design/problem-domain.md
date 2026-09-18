@@ -29,6 +29,8 @@
 
 **O 既有机器事实**（现在的实现；决定"新设计不能假设什么"，不是需求）
 
+> 本表及 F/H 表中的旧代码路径（`packages/uta-protocol/`、`services/uta/`、`src/`、`docs/`、`investigation/`）指 OpenAlice 仓库 `mouriya-s-lab/OpenAlice`（原 `MouriyaEmma/OpenAlice`）在 commit `d9583df0d264` 的内容；旧代码留在 OpenAlice，不迁入本仓库。`investigation/*.md` 已随设计迁入 `design/investigation/`。
+
 |#|事实|证据|
 |---|---|---|
 |O1|六个 adapter 无一使用推送式市场数据；无一向 venue 发调用方幂等键|`brokers/` grep `WebSocket|subscribe|watch*` 无匹配；`IbkrBroker.ts:837` snapshot；`ibkr/README.md:40-45`；grep `client_order_id|clientOrderId|client_request_id|clientOid|orderLinkId` 无匹配|
