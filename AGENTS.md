@@ -31,5 +31,5 @@ UTA（Unified Trading Agent）是 OpenAlice 的独立进程：拥有 broker 连�
 ## 仓库基本规则
 
 - 改文件前 `git fetch origin`、`git status -sb`；保留他人未提交改动，不 reset/stash/覆盖。
-- 主分支 `main`；日常提交走 `RiriAgent/*` 分支。
+- 主分支 `main`。设计阶段的文档改动直接提交 `main`（维护者裁定）；进入实现阶段后再启用分支/PR 流程。本地 clone 位于 `~/Ext/code/uta`。
 - Secrets 不进任何跟踪文件、日志、PR 正文。
