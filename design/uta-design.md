@@ -42,7 +42,7 @@
   - 6.3 核心↔集成契约
   - 6.4 核心↔Alice 契约
   - 6.5 核心↔程序宿主
-  - 6.6 核心↔HPC（核心层自包含）
+  - 6.6 核心↔可选行情派生计算子系统（核心层自包含）
   - 6.7 持久化归属与配置/凭据归属
   - 6.8 Rust 映射
 - 7 走查
@@ -76,7 +76,7 @@ UTA 是 Alice 与多个外部交易来源之间的独立核心进程：它接收
 
 ### 0.3 状态
 
-**评审中。** 已定：§2–§5 的抽象（记录与位置、组合子值树与五个 fold、两个类型宇宙与唯一边）与 §6 已定的进程、契约与归属边界；暂定：受 SP-5/SP-6、SP-11 约束的部分，以及 HPC 子系统受闸门 8/9 约束的列式段、`gap_policy`、原语集；未决：§8.3 的 SP-1…SP-15 与 OD-1…OD-10。
+**评审中。** 已定：§2–§5 的抽象（记录与位置、组合子值树与五个 fold、两个类型宇宙与唯一边）与 §6 已定的进程、契约与归属边界；暂定：受 SP-5/SP-6、SP-11 约束的部分；未决：§8.3 的 SP-1…SP-15 与 OD-1…OD-10。可选行情派生计算子系统的状态在 `hpc-derivation/design.md §0`，本文只拥有它的接口（§6.6）。
 
 ### 0.4 非目标
 
@@ -308,13 +308,13 @@ A 表按调查报告记录的真实入口（路由、SDK 方法、UI/CLI 调用�
 |Q21|格式升级|新旧版本核心|N+1 读 N；反向读取；迁移中断电|P15 格式版本与迁移|持久文件在升级边界|支持的升级后等价；高版本拒绝；断电后二者之一完整，不出现第三态|退出码或记录说明版本结果；无部分迁移|O9；C14|中|
 |Q22|秒级 K 线与大量指标|维护者需求|实时 K 线订阅、秒级清洗、每 instrument 大量增量指标、多核分发|P2、P4、P12|行情持续到达，程序声明输入|允许增量派生和分发，不把每 bar 全量重跑写成前提|处理不落后于 bar 周期：秒级 bar 的清洗 + 增量指标在下一根到达前完成，积压不增长；分发不阻塞清洗 [推断：B1"秒级"]；负载形状取 Q24 沟通场景规模，实测归 SP-15|B1|中|
 |Q23|多渠道多资产判断|维护者需求|同时订阅多渠道、多 instrument；程序以全部渠道最新状态判断|P2、P4、P12|来源时钟不同，消费声明组合方式|按输入声明提供跨 instrument 观察；不隐含全局时间对齐|程序输入声明包含来源与消费方式；跨源无隐式对齐|B2、B4、B5|中|
-|Q24|完整窗口原生计算|维护者需求|约 1500 条流选 15 条，覆盖 24 h 逐秒数据，指标阈值后唤醒 AI|P2、P5、P12 与可选 Pooled|沟通场景，非容量指标|能表达完整窗口与选择条件，把原生计算输出作为普通派生观察|单次触发到输出派生流 ≤ 50 ms（内部预算，hpc-derivation-subsystem.md §2.2；实测闸门 7 未过）；1500/15/24 h 仅为沟通场景，不作容量上限|hpc-derivation-subsystem.md §1.1、§2.2；B3|中|
+|Q24|完整窗口原生计算|维护者需求|约 1500 条流选 15 条，覆盖 24 h 逐秒数据，指标阈值后唤醒 AI|P2、P5、P12 与可选 Pooled|沟通场景，非容量指标|能表达完整窗口与选择条件，把原生计算输出作为普通派生观察|单次触发到输出派生流 ≤ 50 ms（子系统内部预算，hpc-derivation/design.md §2.2；实测闸门 7 未过）；1500/15/24 h 仅为沟通场景，不作容量上限|hpc-derivation/design.md §1.1、§2.2；B3|中|
 |Q25|程序超预算隔离|程序运行时|程序死循环、超内存或超意图速率|P12 程序、P6 意图|不可信程序与其他程序并存|超预算程序隔离并报告；其他程序、账户、核心继续|超出装载时声明的预算（P12：CPU / 内存 / 意图速率 / 状态大小）后被隔离并产出失败观察；其他程序、账户、核心的响应度量不变；预算值是装载声明的参数，不是设计常量|H2；C4|高|
 |Q26|单据并发编辑|第二个 principal|第二个 principal 对已有负责人的单据 `Revise`|Ticket、P6/P7|已有负责人且版本已变化|拒绝共同编辑或返回冲突，保留负责人和版本记录|冲突结果、负责人、版本均可读|§5.2|高|
 |Q27|Replace 无原子能力|消费方|venue 无 cancel/replace 原子操作时改单|P6–P10、能力声明|目标意图可能已执行或仍 pending|不把改单伪装为原子动作；按能力与意图状态返回可区分结果|读模型显示原操作与后续操作的关联及未决状态；撤单腿 `Undetermined` 期间新单腿不发；`deadline`（H6）到期后新单腿永不发出并记过期记录，不补偿|§5.2；F6|高|
 |Q28|保留边界推进|维护者或核心|retention 推进时仍有单据或程序引用的位置|P15、LogPosition 引用、程序输入|观察记录可压缩，效应单据只追加|不删除仍被引用的位置；必要时拒绝推进或先处理引用|压缩后所有仍引用的 `LogPosition` 均在保留边界内|P15；SP-8；§8.5|高|
 |Q29|Alice 断连重连|Alice 客户端|Alice 崩溃或重启，UTA 独立存活；重连后请求当前状态和 cursor 之后记录|P13 会话、P4 订阅、P3 gap|UTA 订阅和程序仍由 UTA 拥有|重连可取得当前状态；断连期间损失显式标 gap，不伪造逐条补发|当前状态、cursor 后记录和 gap 原因可读|H5；C5；§6.1|中|
-|Q30|HPC 扇出端到端|核心与可选 HPC 子系统|1 个输入经 K 个 op 到 N 个消费者；内部预算含 50 ms 分项|P2/P12、Pooled|子系统已装载且满足前置条件|输出以普通派生流进入下游；不满足条件时 Pooled 程序拒绝而核心其余程序不受影响|各预算分项和端到端结果可测；50 ms 是内部预算假设，实测闸门未过|hpc-derivation-subsystem.md §2.2、§10 闸门 7；SP-12|中|
+|Q30|可选子系统扇出端到端|核心与可选子系统|1 个输入经 K 个 op 到 N 个消费者|P2/P12、Pooled|子系统已装载且满足前置条件|输出以普通派生流进入下游；不满足条件时 Pooled 程序拒绝而核心其余程序不受影响|端到端结果可测；子系统内部预算分项见 hpc-derivation/design.md §2.2，实测闸门未过|hpc-derivation/design.md §2.2、§10 闸门 7；SP-12|中|
 |Q31|消费方式声明|程序作者|同一组流分别以 await-all、ordered、latest 消费|P4、P12、P3|来源时间不同且存在 gap/窗口|按程序声明解释，不强加全局对齐；latest 的合并引用窗口界或 conflated gap|每次合并可追溯到声明窗口或 gap|B5；C6；§8.5|中|
 |Q32|健康与 readiness 可见|运维者/消费方|查询集成 reach、tier、连续失败和最后成功时间|P16、P14|集成在线、断开和恢复各状态|返回结构化健康/readiness，供读写门和运维观察|字段 reach、tier、连续失败数、最后成功时间可读|P16；S9|中|
 
@@ -783,7 +783,7 @@ struct Program { nodes: Vec<DerivationNode>, rules: Vec<DecisionStep>, state: Ve
 
 `Pooled` 是 §2.4 值树里的**读侧组合子**，也是核心暴露给可选行情派生计算子系统的唯一接口：`DerivationNode::Pooled { input, window }`，输出是可借用的完整窗口**段视图**（不是逐条值）。原生 op 是 §2.2 注册表里由子系统提供的黑盒 op，要求输入是 `Pooled` 的，输出是一条派生观察流，下游像读任何派生流一样读它；"程序不是黑盒函数"对决策（解释②）继续成立。子系统未安装时，含 `Pooled` 的程序在**装载期被拒绝**，其余程序不受影响。
 
-`Pooled` 的存在理由、四条前置条件及其装载期判定、未安装/不满足时的失败语义、对核心的零影响与核心层最小验收，全部在 §6.6（核心层自包含）；子系统的实现细节在 `design/hpc-derivation-subsystem.md`。本节只给接口定位，不重复前置条件。
+`Pooled` 的存在理由、四条前置条件及其装载期判定、未安装/不满足时的失败语义、对核心的零影响与核心层最小验收，全部在 §6.6（核心层自包含）；子系统的实现细节在 `design/hpc-derivation/design.md`。本节只给接口定位，不重复前置条件。
 
 ---
 
@@ -1191,7 +1191,7 @@ money/quantity 为 [交易协议] 处理器的值类型，不进信封（§2.2 �
 
 ### 6.1 进程、信任与生命周期
 
-UTA 是独立的核心进程，不随 Alice 生命周期绑定。核心、每个集成、每个程序宿主、每个可选 HPC op 都是独立 OS 进程；Alice 是核心的消费方与控制方，不是父进程或守护者。
+UTA 是独立的核心进程，不随 Alice 生命周期绑定。核心、每个集成、每个程序宿主、可选子系统的每个原生 op 都是独立 OS 进程；Alice 是核心的消费方与控制方，不是父进程或守护者。
 
 ```mermaid
 flowchart TB
@@ -1199,7 +1199,7 @@ flowchart TB
     CORE["UTA 核心进程<br/>独占 SQLite；持有 Journal、规则状态、单据、lane、IO 壳、读模型"]
     INT["集成进程 × N<br/>协议清洗 → 信封 + 载荷；凭据终点；独立故障域"]
     HOST["程序宿主 × M<br/>Wasm 或受监督子进程；解释 §5 值树；预算隔离"]
-    HPCOP["HPC op 进程 × K（可选）<br/>只读映射段池；SIMD；不属于核心"]
+    HPCOP["可选原生 op 进程 × K<br/>读 Pooled 段视图；不属于核心"]
     SEAL["统一路径封存文件<br/>（OPENALICE_HOME 下）"]
   end
   ALICE["Alice（消费方 / 控制方）<br/>独立生命周期；重连拉状态 + cursor 之后记录"]
@@ -1210,7 +1210,7 @@ flowchart TB
   INT -->|上游协议| VENUE
   CORE -->|装载值树 + 预算| HOST
   HOST -->|EffectRequest / 派生记录| CORE
-  CORE -.Pooled 段句柄.-> HPCOP
+  CORE -.Pooled 段视图.-> HPCOP
   HPCOP -.输出派生流.-> CORE
 ```
 
@@ -1251,7 +1251,7 @@ flowchart TB
 | 读模型 | 对执行事实 `Journal` 的可重建只读 fold，非权威，经同一 JSON-RPC 暴露 | fold 的具体数据结构 | 不被规则引用；消费方也可自行 fold 原始记录 | §5.3（读侧） |
 | 控制面 | 认证 principal 传入的运维动作通道（P14）：装卸程序、换凭据、重启集成、请求快照 | 认证机制、传输 | 只经认证 principal，不经进程信号或 flag 文件 | §5（授权）、P14 |
 | 存储（SQLite 单写者） | 单文件、表主键、事务原子性、append-only 的 Rust 接口保证、快照、格式版本 | SQL、索引、WAL 细节 | 核心独占；集成/宿主不接触 | §6.7（§3.1/§5.4 持久化落点） |
-| HPC 洗入器 / 契约表（外部子系统） | 洗入、段池、契约表——**属子系统，不属核心** | 段布局、`iceoryx2`、段生命周期 | 核心零影响；未安装即拒绝含 `Pooled` 的程序 | §3.5、§6.6（子系统文档拥有实现） |
+| 行情派生计算子系统（外部，可选） | `Pooled` 段视图的物化与原生 op 的运行——**属子系统，不属核心** | 全部实现：布局、IPC、段生命周期、作者面 | 核心零影响；未安装即拒绝含 `Pooled` 的程序 | §3.5、§6.6（实现归 `hpc-derivation/design.md`） |
 
 **执行事实 append 链的唯一写入口**：执行事实 `Journal` 只经"存储"元素暴露的 append 接口写入；写入者是单据关闭（`Prepared`）与 IO 壳（`SendBarrier`/回执/对账证据）与集成（外部变更观察）。读模型只读、不写。三者不争同一秘密：append-only 保证归"存储"，写内容归各自元素，只读 fold 归读模型。
 
@@ -1280,7 +1280,7 @@ flowchart TB
   IOSHELL -.append 执行事实.-> STORE
   OJ -.持久化.-> STORE
   RM -.只读 fold 执行事实.-> STORE
-  DAG -. Pooled 段句柄 .-> HPC["HPC 洗入器/契约表（外部）"]
+  DAG -. Pooled 段视图 .-> HPC["行情派生计算子系统（外部，可选）"]
   classDef ext fill:#eee,stroke:#999,stroke-dasharray:3;
   class HPC,INT,HOST ext;
 ```
@@ -1437,9 +1437,9 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 
 **未决**：`[未决 OD-9]` 程序宿主协议：编译单元、装载、预算语义、trap、状态迁移、替换。必须回答什么：宿主与核心之间的装载/预算/trap/状态/替换协议。关闭事件：`[暂定：SP-11]` 得出 Wasm 可/不可结论后，据选定运行时定出宿主协议。影响章节：§5.1、§6.2。依赖 `[暂定：SP-11]`，本节不给确定协议。
 
-### 6.6 核心↔HPC（核心层自包含）
+### 6.6 核心↔可选行情派生计算子系统（核心层自包含）
 
-行情派生高性能计算子系统是可选项，独立于核心，不属于核心；核心在没有它时完整可运行。核心与它之间只有一个组合子接口，本节完整拥有这个接口；实现细节（段池、洗入、布局推导/导出/身份、契约表、段生命周期、原生 op 装载握手、外部编译、选库、预算、原语集、替代方案、实测闸门）在 `design/hpc-derivation-subsystem.md`。
+行情派生高性能计算子系统是可选项，独立于核心，不属于核心；核心在没有它时完整可运行。核心与它之间只有一个组合子接口，本节完整拥有这个接口；实现细节在 `design/hpc-derivation/design.md`（其证据在 `design/hpc-derivation/research/`）。
 
 - **存在理由**（核心层）：
   - **完整窗口**：黑盒闭包计算每次触发可见指定输入的完整最新窗口，而非 delta；核心不理解其算法，只把已注册的行情读数据与触发信号交给它，把它产生的值交给程序中已约定的消费者。
@@ -1458,7 +1458,7 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 - **对核心的零影响**（清单）：`Journal`、`LogPosition`、§2.4 的五个 fold、§6.3 处理器注册表的含义不变；`required_inputs` 遇到 `Pooled` 交给子系统解析，其余解析到普通流；效应侧、单据、读模型、§2.3 保留语义不受影响。
 - **原生 op 是注册表黑盒**：原生计算不是新节点种类，而是 §6.3 注册表里由子系统提供的黑盒 op，要求输入是 `Pooled` 的；输出是一条派生观察流，下游节点像读任何派生流一样读它。"程序不是黑盒函数"对决策（解释②）继续成立。若产生外部写，走单据 → STS → IO 壳，不增设旁路（"唤醒对应订单的 AI"是程序里的 `On(pattern) → Emit(EffectRequest)`）。
 - **核心层最小验收**：含 `Pooled` 的程序在无子系统时被拒且其余程序不受影响；子系统 op 的输出对下游是普通派生流（下游节点无需知道它由原生 op 产出）。
-- **实现细节与闸门**：段池存储、洗入、布局 fold、契约表、`iceoryx2`、原生 op 握手、预算、原语集、替代方案与实测闸门见 `design/hpc-derivation-subsystem.md`；核心只保留一个"子系统是否安装"的外部依赖状态，不复制其闸门。
+- **实现细节与闸门**：见 `design/hpc-derivation/design.md`；核心只保留一个"子系统是否安装"的外部依赖状态，不复制其闸门。
 
 ### 6.7 持久化归属与配置/凭据归属
 
@@ -1484,7 +1484,7 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 | 单据记录（`TicketAction`） | 效应 | 单据负责人 / 决定者（各 `TicketAction`） | 单据 fold、审批人视图 | 每条带 principal 与依据；`Ticket` 是这些记录的 fold |
 | 订阅表 / cursor | 观察 | 订阅需求写入（消费方/程序）、核心推进 cursor | 集成路由、投递、gap 判定 | cursor 前进；损失以 `Gap{origin: Delivery}` 标记 |
 | 快照 | 两侧 | 核心（按 P15 快照规则） | 重启恢复 | 加速 `fold_state` 重建，不改 append-only 语义 |
-| 段池（不持久） | 观察（扩展） | HPC 洗入器 / 原生 op | 原生 op | 运行期快照，有内部有效期，不外泄；重启由 `Pooled` 重洗（§6.6） |
+| 段池（不持久） | 观察（扩展） | 可选子系统（洗入）/ 原生 op | 原生 op | 运行期快照，有内部有效期，不外泄；重启由 `Pooled` 重洗（§6.6） |
 
 #### 6.7.3 配置与凭据归属
 
@@ -1523,9 +1523,9 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 
 ## 7 走查
 
-本章不新增任何定义。它把 §2–§6（含 design/hpc-derivation-subsystem.md）已冻结的抽象放到具体刺激上逐步走：7.1 沿质量场景 Q 走正常路径与失败/扩展路径，每步写“输入 → 经过哪个元素/抽象（§x.y）→ 输出/append 的记录（持久化落点 §6.7）→ 对外可见结果 → 当前唯一行动者/恢复者与其稳定身份或 fence 依据”；7.2 把崩溃窗口逐行排出，恢复结论由状态机（§5.2/§5.4）与存储归属（§6.7）推出而非期望；7.3 收集走查暴露的卡点，分类并指向补哪一章，已被 SP/OD 覆盖的标同号，未覆盖的标“新”。
+本章不新增任何定义。它把 §2–§6 已冻结的抽象放到具体刺激上逐步走：7.1 沿质量场景 Q 走正常路径与失败/扩展路径，每步写“输入 → 经过哪个元素/抽象（§x.y）→ 输出/append 的记录（持久化落点 §6.7）→ 对外可见结果 → 当前唯一行动者/恢复者与其稳定身份或 fence 依据”；7.2 把崩溃窗口逐行排出，恢复结论由状态机（§5.2/§5.4）与存储归属（§6.7）推出而非期望；7.3 收集走查暴露的卡点，分类并指向补哪一章，已被 SP/OD 覆盖的标同号，未覆盖的标“新”。
 
-走查约定：走通 = 整条路径能由冻结设计闭合，且每步的行动者与恢复归属可推出；可走查、卡于 X = 路径能推进但某步命中未决项 X（SP/OD），结论状态不强于 X；卡点 = 缺概念/选错抽象/接口不够/归属不明，登记进 7.3。持久化落点简称：**观察 J** = 观察 `Journal`；**执行 J** = 执行事实 `Journal`（纯 append，§2.5 第二层/§6.7）；**RuleState**、**单据记录**（`TicketAction`）、**订阅表/cursor**、**快照**、**段池**（不持久，§6.6/hpc-derivation-subsystem.md §1.5）。两处同事务耦合由 §6.7 保证：单据 `Close(Prepared)` 与 `Prepared` append 同一 SQLite 事务；决策 append + 投递 outbox + `RuleState` 更新同一事务。
+走查约定：走通 = 整条路径能由冻结设计闭合，且每步的行动者与恢复归属可推出；可走查、卡于 X = 路径能推进但某步命中未决项 X（SP/OD），结论状态不强于 X；卡点 = 缺概念/选错抽象/接口不够/归属不明，登记进 7.3。持久化落点简称：**观察 J** = 观察 `Journal`；**执行 J** = 执行事实 `Journal`（纯 append，§2.5 第二层/§6.7）；**RuleState**、**单据记录**（`TicketAction`）、**订阅表/cursor**、**快照**、**段池**（不持久，§6.6）。两处同事务耦合由 §6.7 保证：单据 `Close(Prepared)` 与 `Prepared` append 同一 SQLite 事务；决策 append + 投递 outbox + `RuleState` 更新同一事务。
 
 ### 7.1 场景 trace
 
@@ -1687,10 +1687,10 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 1. 程序含 `DerivationNode::Pooled{input, window}`（§3.5/§2.4）。子系统未安装 → 该程序在**装载期被拒绝**（§6.6/§3.5），错误指出依赖未安装子系统；其余不含 `Pooled` 的程序不受影响（§6.6 核心层最小验收）。恢复者：装载器（§2.4 输出类型 fold）。对外可见：含 `Pooled` 程序被拒，其余程序照常装载运行。
 
 **环境二：有子系统且 op 崩溃。**
-2. 四条前置条件由输出类型 fold 在装载期判定（定长/位置线性/无指针/可容忍 ring 回收，§6.6 / hpc-derivation-subsystem.md §3）；满足则 `Pooled` 输入交洗入器，段一次洗入进段池（§6.6 一次洗入 / hpc-derivation-subsystem.md §1.4–§1.5）。行动者：核心洗入器（hpc-derivation-subsystem.md §5.1），段身份 = `layout_hash` + `position_range`（hpc-derivation-subsystem.md §5.2 契约表）。
-3. 原生 op 借用只读段计算、发布输出派生流（hpc-derivation-subsystem.md §5.3/§6.4）；下游像读任何派生流一样读它（§6.6）。op 进程 panic/OOM → 只死计算进程，核心记失败观察（观察 J 派生失败记录，hpc-derivation-subsystem.md §5.3/§6.3），**不改名**为 `Gap{origin: Source}` 或 `NoResponse`（hpc-derivation-subsystem.md §5.3）。恢复者：iceoryx2 `retrieve_returned_chunks` + H10 fence 回收借用（hpc-derivation-subsystem.md §5.3/§6.5）。
-4. 核心崩溃时 op 成孤儿，由 fence 回收（hpc-derivation-subsystem.md §5.3/§6.5，同 §6.1 fence）。若消费者产生外部写，仍经单据 → STS → IO 壳（§6.6，走 W1）。
-5. **卡于 SP-12**（iceoryx2 跨平台映射、借用回收、崩溃回收、在途段回收）、**SP-14**（触发 edge/level、合并、冷却、背压、失败观察语义登记）、**SP-13**（布局 hash 稳定规范化）。50 ms 是内部预算假设，实测闸门未过（hpc-derivation-subsystem.md §2/闸门 7）。
+2. 四条前置条件由输出类型 fold 在装载期判定（定长/位置线性/无指针/可容忍 ring 回收，§6.6）；满足则 `Pooled` 输入交子系统物化为段视图（§6.6 一次洗入；实现见 hpc-derivation/design.md §1.4–§1.5、§5）。行动者：子系统洗入器；段身份由子系统契约表标定（hpc-derivation/design.md §5.2）。
+3. 原生 op 借用只读段计算、发布输出派生流；下游像读任何派生流一样读它（§6.6）。op 进程 panic/OOM → 只死计算进程，核心记失败观察（观察 J 派生失败记录），**不改名**为 `Gap{origin: Source}` 或 `NoResponse`（§6.6；hpc-derivation/design.md §5.3/§6.3）。恢复者：子系统的借用回收 + H10 fence（hpc-derivation/design.md §5.3/§6.5）。
+4. 核心崩溃时 op 成孤儿，由 fence 回收（§6.1 fence；hpc-derivation/design.md §6.5）。若消费者产生外部写，仍经单据 → STS → IO 壳（§6.6，走 W1）。
+5. **卡于 SP-12 / SP-13 / SP-14**（子系统内部：跨平台映射与回收、布局 hash 规范化、触发与背压语义；见 hpc-derivation/design.md §11.1）。
 
 **可走查，卡于 SP-12/SP-13/SP-14 → 7.3-l。**
 
@@ -1735,9 +1735,9 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 | 14 | 集成崩溃（`submit` 中） | 已 `SendBarrier`、`submit` 中途 | IO 壳：`NoResponse` = `Undetermined` → 对账；不区分“集成挂”与“venue 没回” | 尝试 `Undetermined`，靠证据非猜 | §5.4；§6.1/§6.3.7 | SP-1 |
 | 15 | 新核心接管时旧核心/旧集成会话仍存活并继续送回执 | 双实例/旧会话在途回执 | 新实例：fence 接管、旧实例失权；旧会话回执路由/接受/丢弃归属未定义（收敛靠对账不靠它） | 不产生双写；旧会话回执归属待定 | §6.1（fence）；§5.4（对账） | OD-10 |
 | 16 | 程序宿主崩溃 | 程序 state 依宿主 | 宿主：程序状态须显式可序列化重建，不依赖运行时快照；H9 跨重启恢复 | 程序恢复或显式冷启动 + 回填 | §5.1/§6.5；H9 | SP-4/SP-11 |
-| 17 | HPC op 崩溃 | 段池借用未释放 | iceoryx2+fence：`retrieve_returned_chunks`/H10 fence 回收借用；核心记失败观察 | op 失败观察；核心与其他消费者不受影响 | hpc-derivation-subsystem.md §5.3/§6.5；§6.6 | SP-12 |
-| 18 | HPC op 已完成产生结果、核心在结果持久化前崩溃/断连 | 输出段在段池、未接入派生流持久点 | 核心：段池不持久，重启由 `Pooled` 重洗重算；未发布结果不半接入下游 | 结果重算；下游只见成功发布的派生流 | hpc-derivation-subsystem.md §1.5/§5.3/§6.3 | SP-12/SP-14 |
-| 19 | 核心崩溃时 HPC op 孤儿 | op 进程存活、核心死 | 新核心+fence：op 为孤儿由 H10 fence 回收；重连后重登记契约表 | 无双写；孤儿被回收 | hpc-derivation-subsystem.md §5.3/§6.5；§6.1 | SP-12；OD-10 |
+| 17 | 可选子系统 op 崩溃 | 段借用未释放 | 子系统回收借用 + H10 fence；核心记失败观察 | op 失败观察；核心与其他消费者不受影响 | §6.6；hpc-derivation/design.md §5.3/§6.5 | SP-12 |
+| 18 | 可选子系统 op 已产生结果、核心在结果持久化前崩溃/断连 | 输出段在段池、未接入派生流持久点 | 核心：段池不持久，重启由 `Pooled` 重洗重算；未发布结果不半接入下游 | 结果重算；下游只见成功发布的派生流 | §6.6；hpc-derivation/design.md §1.5/§5.3 | SP-12/SP-14 |
+| 19 | 核心崩溃时可选子系统 op 孤儿 | op 进程存活、核心死 | 新核心 + fence：op 为孤儿由 H10 fence 回收；重连后重新握手 | 无双写；孤儿被回收 | §6.1；hpc-derivation/design.md §6.5 | SP-12；OD-10 |
 | 20 | Alice 崩溃 | 核心订阅/程序/lane 完整 | 核心：独立存活；Alice 重连拉当前状态 + cursor 后记录 + gap | 断连损失显式标 gap，不伪造补发 | §6.1/§6.4；H5/C5 | OD-1/OD-2 |
 
 可进 §8.5 验收的可测项：#2/#3/#8 的 fsync 崩溃注入证明“`Prepared` 无 `SendBarrier` 确未发、`SendBarrier` 无后继升 `Undetermined`、复合链不重复投放”（对应 SP-10）；#3 的 fixture venue 调用 ≤ 1；#9 半写不可见、无半条记录；#1 同事务原子回滚；#13/#14 两故障面唯一判别边界（`submit` 路径与否）。
@@ -1759,7 +1759,7 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 | 7.3-i | 接口不够 | W10.3 / 崩溃矩阵 #16 | §6.5 补程序宿主协议（编译单元、装载、预算语义、trap、状态迁移、替换）与程序状态显式序列化 | SP-11、OD-9、SP-4 |
 | 7.3-j | 接口不够 | W13.3 / 崩溃矩阵 #11 | §2.3/§6.7 补引用登记方、边界推进审批方、原始证据与派生历史留存时长 | SP-8 |
 | 7.3-k | 接口不够 | W14.3 | §6.4 补 Alice↔核心消息形状、session handshake 取 principal、订阅原始记录 vs 读模型的消息 | OD-1 |
-| 7.3-l | 接口不够 | W15.5 / 崩溃矩阵 #17–19 | design/hpc-derivation-subsystem.md §5/§6 补 iceoryx2 跨平台映射与借用/崩溃/在途段回收、触发 edge/level/合并/冷却/背压/失败观察语义登记、布局 hash 稳定规范化 | SP-12、SP-13、SP-14 |
+| 7.3-l | 接口不够 | W15.5 / 崩溃矩阵 #17–19 | hpc-derivation/design.md §5/§6 补跨平台映射与借用/崩溃/在途段回收、触发/背压/失败观察语义登记、布局 hash 稳定规范化（子系统内部卡点，核心接口 §6.6 不变） | SP-12、SP-13、SP-14 |
 | 7.3-m | 接口不够 / 归属不明 | W2.4 脑裂 / 崩溃矩阵 #15 | §6.1（实例/会话生命周期）/§6.3（握手/推送契约）补集成会话 epoch/fencing、核心重启后旧会话在途回执的接受/丢弃/转交规则、最终判定权归属 | **OD-10**。已定部分：收敛不依赖旧会话回执（对账驱动经新会话独立取证）；不重复投放由 `SendBarrier` durable + lane 队首阻塞保证。与 SP-1/SP-10 相关但不被其替代 |
 | 7.3-n | 接口不够 | W15.2 / W6.2 / 崩溃矩阵 #13 | §6.3 补回填请求与结果 schema、实时边界确认语义、readiness 状态机完整集合、健康面字段稳定契约 | OD-7（依赖 SP-5/SP-6 完整消息 schema） |
 
@@ -1771,7 +1771,7 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 
 ### 8.1 替代方案对比表
 
-每个重要决定至少一个可信替代，写它在 §1.4 质量场景下的后果、不选理由、证据与状态。全部从 §2–§7 与 `design/hpc-derivation-subsystem.md`（下称 HPC 文档）现有正文提取，不发明新方案。受 SP/OD 约束的决定，状态列列全约束项。
+每个重要决定至少一个可信替代，写它在 §1.4 质量场景下的后果、不选理由、证据与状态。全部从 §2–§7 现有正文提取，不发明新方案。受 SP/OD 约束的决定，状态列列全约束项。可选子系统内部的替代方案在 `hpc-derivation/design.md §8.2`，这里只评估它的接入方式。
 
 | 决定 | 选中方案 | 在 Q 场景下的后果 | 不选的替代及理由 | 证据 | 状态 |
 |---|---|---|---|---|---|
@@ -1801,9 +1801,7 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 | 核心↔外部的线缆编码（§6.1、§6.3） | 一份 IDL 固定语义，默认文本 JSON-RPC | Q22：跨语言、可读、可录制回放 | 默认二进制协议——不选：牺牲可读与跨语言；二进制作为同一 IDL 的另一种编码保留，触发条件在 spike | §6.1；`investigation/rust-feasibility.md`（gRPC 单流有序、流间独立） | 暂定（高频推送编码受 SP-6 实测触发） |
 | 执行事实的下游读取（§3.4、§6.4） | 对执行事实 `Journal` 的可重建非权威读模型，消费方也可自 fold | Q1/Q29：Alice 消费面可实现，不重复 fold；读模型不被规则引用 | 让规则直接引用读模型（当权威）——不选：读模型是可重建 fold，被规则依赖就要承担权威与一致性，违反核心状态最小化；为每消费方各自 fold——不选：S10 要求可实现且重复 fold 易分叉 | §3.4；域 S10 | 已定（集合与一致性受 OD-3 约束） |
 | UTA 自身的锁（§5.5） | 无锁定位：唯一的锁是单据 | Q1/Q6：venue 域事实（账户/持仓/订单/成交/价格）由 venue 裁决，UTA 无权决定是否消费 | 给 UTA 造悲观/乐观锁——不选：UTA 不是消费者，锁不在它这里 | §5.5；域 F1 | 已定 |
-| HPC 计算的进程模型（§6.6；hpc-derivation-subsystem.md §1.3、§8.2） | 独立进程 + 只读共享内存映射（同物理页非同地址空间） | Q24/Q30：同时得到零拷贝与故障域；op panic/OOM 只死计算进程 | 同地址空间 cdylib 借用——不选：性能—故障域二难，同地址空间无法既零拷贝又隔离故障；按消费者复制——不选：成本 O(窗口×消费者) | fp-08 §7；hpc-derivation-subsystem.md §1.3 | 暂定（受 SP-12 约束） |
-| HPC 段布局（hpc-derivation-subsystem.md §4.0、§8.2） | 列式段（每字段一条连续对齐列 + validity 位图） | Q24：洗入后每次触发零转置零转换 | 记录数组段（`repr(C)` 记录）——不选：现成 kernel 只接受连续单列，每次触发转置约 98 µs（三列×100k），破坏"洗入后不再搬窗口" | fp-09 §3.1/§4；fp-12 | 暂定（受 SP-12、列式段闸门 8 约束） |
-| HPC 作者面计算层（hpc-derivation-subsystem.md §7.2、§8.2） | `ndarray` 视图 + 自有一小组时间轴原语 + 标量逃逸 | Q24：作者写数组表达式与 `for` 循环、不写 SIMD | 现成库 DataFrame——不选：`ndarray` 缺 rolling/ewm/where/validity；polars kernel 只能返回新 `Series`，复杂指标慢 1.5–2.3× | fp-10；fp-11 | 暂定（受 SP-13、原语集闸门 9 约束） |
+| 可选行情派生计算的接入（§3.5、§6.6） | 单一读侧组合子 `Pooled` + 注册表黑盒原生 op；子系统独立进程、独立文档 | Q24/Q30：含 `Pooled` 的程序无子系统时装载期被拒，其余程序不受影响；op 输出对下游是普通派生流 | 把原生计算做成新节点种类——不选：程序代数随算法膨胀（§3.3 红线）；把段池做成 `Journal` 的热层——不选：两套存储互不派生（§6.6）；op 与核心同进程——不选：无独立故障域（§6.6） | §6.6；hpc-derivation/design.md §1.3、§8.2 | 已定（子系统内部决定受 SP-12/13/14 约束，见其文档） |
 
 ### 8.2 风险 / 敏感点 / 权衡点
 
@@ -1812,7 +1810,7 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 - **崩溃窗口恢复未实测（对应 SP-1、SP-10）**：`Prepared`/`SendBarrier`/`submit` 三个窗口的 SQLite WAL/fsync 崩溃注入尚未做；影响 Q2/Q4/Q17 的"不重复投放 / 不误升 / 半写不可见"响应能否成立。
 - **程序隔离运行时未决（对应 SP-11）**：Wasm 三 OS 开箱即用性与预算一致性未测；影响 Q25 的"超预算被隔离且其他程序/账户/核心不受影响"响应。
 - **同一 enum 类型视图与 fold 开销未测（对应 SP-5、SP-6）**：构造子全集、值树 fold 求值开销与 `dyn` 分发成本未测；影响 Q22/Q23/Q31 的派生与消费响应；若推翻"同一 enum 类型视图"，§2.4 的统一表示与 §5.3/§6.3 的下游序列化一并受影响。
-- **段池跨平台未验（对应 SP-12）**：`iceoryx2` 在 macOS/Windows 的映射、借用回收、崩溃回收、动态 `Slice`、契约表归一、端到端扇出未过闸门；影响 Q30 的"扇出端到端 + 50 ms 分项"响应。
+- **可选子系统跨平台闸门未过（对应 SP-12）**：影响 Q30 的扇出端到端响应；风险明细在 hpc-derivation/design.md §9。
 - **运行期能力证据是否抬进类型未决（对应 SP-2）**：影响 Q16 的能力不支持响应能否在类型层给出更强保证。
 - **lane 并发协议未决（对应 SP-7）**：多 unknown 叠加、部分收敛、解除阻塞条件未定；影响 Q7 的队首阻塞与解除响应。
 - **配置文件 schema 未定（对应 OD-6，回链 OD-5/OD-1/OD-7）**：策略/审批规则、集成登记、程序装载清单的文件 schema 随其消费契约定；影响 Q18/Q21 的热变更与格式升级响应。
@@ -1823,7 +1821,6 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 - **`fold_state` 重建成本 vs 快照频率（SP-8）**：快照频率下调则 Q17 重启延迟随历史长度线性恶化；上调则写放大增加，触碰单写者吞吐（见 B1 敏感点）。
 - **lane 阻塞半径（`WriteLaneKey` 粒度）**：粒度细化则 Q7 队首阻塞半径缩小但失去 H4 写全序与 H1 资金隔离；粗化则冻结无关子账户。
 - **保留时长（retention）**：缩短则 Q28 中仍被单据/程序引用的 `LogPosition` 更易越界，边界推进更常被拒；延长则存储与重建成本上升。
-- **50 ms 内部预算（hpc-derivation-subsystem.md §2、SP-12 闸门 7）**：调低则更多 HPC op 记失败观察，Q24/Q30 的可用输出率下降；`T_ipc` 占比决定该预算是否成立。
 - **单 SQLite 写者吞吐 vs B1**：秒级 K 线清洗与大量增量指标（Q22）若超过单写者吞吐，则派生分发响应劣化；这是"单文件单写者"裁决的敏感点，实测项归 SP-3/SP-8。
 - **`basis` 有效性窗口（`basis_validity`）**：判定 `Fresh` 的窗口收紧则 Q1/Q9 更多决策因依据滞后被门拦下；放宽则可能据过期依据下写。
 
@@ -1832,7 +1829,6 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 - **IO 壳体量 vs 语义集中（§5.4）**：IO 壳是效应侧最大而非最薄的组件——集中带来审计完整与重启零丢失，代价是内部转移表与渠道策略成为设计重点（走查 §7 + SP-1/SP-7/SP-10）。
 - **每步取证写日志的体积 vs 审计（§5.4、§6.7）**：每次取证都 append 一条记录，换来重启零丢失与审计完整，代价是存储体积与噪音（留存受 SP-8 约束）。
 - **值树启动/装载期校验 vs 编译期（§2.4）**：装载期 fold 让 AI 程序与核心规则共用一套校验与表示，代价是"引用了没有集成提供的字段"这类检查落在启动/装载期而非编译期。
-- **列式段点访问退化 vs 零转置（hpc-derivation-subsystem.md §4.0）**：列式换来成熟 kernel 的连续列与零转置，代价是 OHLC 同点访问退化为多地址加载（闸门 8 记录退化幅度）。
 - **JSON-RPC 可读可回放 vs 高频吞吐（§6.1）**：默认文本编码换来跨语言、可读、可录制回放，代价是高频推送流吞吐可能不达标，需另加二进制编码作同一 IDL 的另一种编码。
 - **`responsible` 字段 vs 互斥原语（§5.2）**：无死锁、无超时释放的复杂性，代价是"负责人失联"必须由策略层（§5.3）经 `Expired` 或带 principal 的强制 `Transfer` 处理——责任归规则而非锁机制。
 
@@ -1855,9 +1851,9 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 | SP-9 | 规则组合的可交换性分类表；具名 struct/enum 组合下三层规则的样板量实测 | fp-03 命题 6；`investigation/rust-feasibility.md` | 列出可交换集与顺序固定链的分类表并过交换性测试；实测三层规则样板量 | §5.3；`Rule`/`Rejection`、顺序固定链 | 区分可交换集与顺序固定链、顺序由代码固定 —— 已定；分类表与样板量 暂定 |
 | SP-10 | 发出后-持久化前崩溃窗口的恢复协议实测：SQLite WAL/fsync 崩溃注入于 `Prepared`/`SendBarrier`/`submit` 各窗口，验证不重复投放（与 SP-1 合并） | 域 F5/C1 | 三窗口崩溃注入后重启，观测：venue 调用不超过 1、无 `SendBarrier` 的 `Prepared` 不误升、无后继 `SendBarrier` 记为 `Undetermined` | §5.4；IO 壳恢复、`SendBarrier` move token | 恢复规则（从记录重建各 lane 链状态） —— 已定；崩溃注入未过 |
 | SP-11 | Wasm 三 OS 开箱即用性与预算一致性实测；不成立则退回受监督子进程 | §6.5；`investigation/rust-feasibility.md` | 按三条判定标准实测 Wasm 在 macOS/Windows/Linux 的开箱即用、fuel/内存/trap 一致性；不成立则退回受监督子进程 | §5.1、§6.5；程序宿主协议（OD-9） | 隔离运行时仅作解释器宿主、状态显式序列化 —— 已定；运行时选择与宿主协议 暂定 |
-| SP-12 | `iceoryx2` 在 macOS/Windows 的跨进程映射、借用回收、崩溃回收、动态 `Slice`、契约表归一、端到端扇出与在途段回收是否成立 | 见 hpc-derivation-subsystem.md §11.1 | hpc-derivation-subsystem.md §10 闸门 1–5、7–9 各平台实测；给出是否切换 `memmap2` 的结论 —— 详见 hpc-derivation-subsystem.md §11.1 | hpc-derivation-subsystem.md §2、§5、§6、§8、§9、§10；§6.6 只保留"子系统是否安装"外部依赖状态 | 边界与选库已定；跨平台闸门未过（详见 hpc-derivation-subsystem.md §11.1） |
-| SP-13 | fold 能否稳定产生规范化布局 hash；三 OS 的 source/预编译工具链是否可交付 | 见 hpc-derivation-subsystem.md §11.1 | hpc-derivation-subsystem.md §10 闸门 6 通过 + target triple 矩阵实验 —— 详见 hpc-derivation-subsystem.md §11.1 | hpc-derivation-subsystem.md §4、§7、§10；`layout_hash` 与导出格式 | 布局 fold 方向已定；确定性与工具链未过（详见 hpc-derivation-subsystem.md §11.1） |
-| SP-14 | 触发通道形式（edge/level、合并、冷却）、背压/积压，以及 HPC op 的可观察性/替换/状态/错误恢复控制面形状 | 见 hpc-derivation-subsystem.md §11.1 | 业务确认 + 端到端积压/重复触发走查，登记触发与背压语义 —— 详见 hpc-derivation-subsystem.md §11.1、§11.2 | hpc-derivation-subsystem.md §2、§6、§9；触发注册契约 | 触发入口与超时失败观察已定；触发/背压/替换控制面 暂定（详见 hpc-derivation-subsystem.md §11.1） |
+| SP-12 | 可选子系统的段池数据面：跨进程映射、借用/崩溃/在途段回收、契约表归一、端到端扇出是否成立 | hpc-derivation/design.md §11.1 | hpc-derivation/design.md §10 闸门 1–5、7–9 各平台实测 | hpc-derivation/design.md §2、§5、§6、§8–§10；本文只保留 §6.6 的"子系统是否安装"外部依赖状态 | 接口（§6.6）已定；子系统内部见其文档 |
+| SP-13 | 可选子系统的布局 hash 规范化与三 OS 工具链交付 | hpc-derivation/design.md §11.1 | hpc-derivation/design.md §10 闸门 6 + target triple 矩阵实验 | hpc-derivation/design.md §4、§7、§10 | 接口（§6.6）已定；子系统内部见其文档 |
+| SP-14 | 可选子系统的触发/背压/替换控制面形状 | hpc-derivation/design.md §11.1 | 业务确认 + 端到端积压/重复触发走查 | hpc-derivation/design.md §2、§6、§9 | 接口（§6.6）已定；子系统内部见其文档 |
 | SP-15 | 高频行情流作为 `Journal` 的持久化策略（全量 / 抽样 / 仅 gap 标记）与保留协议 | 域 B1 秒级行情负载；`Journal` 单写者吞吐 | 在秒级行情负载上对比三种持久化策略的存储与重建成本，选定策略并写入保留协议 | §2.3、§6.7；`Journal` 持久化、段池不参与 | 行情持久化归 `Journal`、段池不参与 —— 已定；持久化策略 暂定 |
 
 #### 8.3.2 开放设计项：OD-1…OD-10
@@ -1873,23 +1869,21 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 | OD-5 | principal 来源与授权/审批策略配置 | principal 来源；授权 scope 的存储与版本；授权规则与审批规则的配置表示；规则变更如何与待决单据并存；规则失败如何审计 | 定出授权/审批策略的配置与并存契约并在规则变更 × 待决单据并存场景上走查 | §5.3、§6.4、§6.7；`Rule` 配置、scope 存储 | 写按 (principal,账户,操作种类) 授权、版本期望不匹配即冲突 —— 已定；配置与并存契约 未决 |
 | OD-6 | 配置文件 schema 与版本 | 统一路径下各文件（账户封存信封、封存密钥引用、集成登记、策略/审批规则、程序装载清单）的 schema、格式版本与迁移规则 | 随 OD-5 的规则配置表示与 OD-1/OD-7 的 IDL 一起给出各文件 schema，并完成一次成功和一次失败重载演练 | §6.7.3；配置/凭据归属 | 统一路径、每文件唯一写者、原子替换、重载失败保留上一有效版本、格式版本只前进、单实例与核心独占 SQLite —— 已定；各文件 schema 未决 |
 | OD-7 | 核心↔集成完整消息 schema / 回填 / 实时边界 / readiness / 健康面 | 回填请求与结果的消息 schema、实时边界确认语义、readiness 状态机完整集合、健康面字段的稳定契约 | 为一个集成写完整消息 schema，并完成能力缺失、会话重建、回执映射、回填/实时边界演练 | §6.3.5、§6.3.10；集成 IDL、`Projection`、健康/readiness | 已定语义（回填带范围/页/游标、readiness backfilling→live、断线无游标标 `Gap{origin: Source}`、健康经读模型可见）—— 已定；完整 schema 暂定（受 SP-5、SP-6 约束） |
-| OD-8 | `payload_schema` 登记（含 HPC 制品版本矩阵） | `payload_schema` 如何标识、登记、版本化、演进；HPC 布局/导出制品的版本矩阵、跨语言编码与最终制品位置、谁生成、何时拒绝 | 定出 `payload_schema` 登记契约；HPC 制品侧完成版本矩阵与装载实验 | §2.2、§6.3.4；hpc-derivation-subsystem.md §4、§6、§7；`payload_schema` 登记、`layout_hash` | 载荷原封直通并打 `payload_schema`、核心不解释载荷 —— 已定；标识/版本化与 HPC 制品位置 未决 |
+| OD-8 | `payload_schema` 登记 | `payload_schema` 如何标识、登记、版本化、演进；可选子系统导出制品的版本矩阵在其文档内随此项一起定 | 定出 `payload_schema` 登记契约 | §2.2、§6.3.4；hpc-derivation/design.md §4、§6、§7 | 载荷原封直通并打 `payload_schema`、核心不解释载荷 —— 已定；标识/版本化 未决 |
 | OD-9 | 程序宿主协议 | 编译单元、装载、预算语义、trap、状态迁移、替换 | `[暂定：SP-11]` 得出 Wasm 可/不可结论后，据选定运行时定出宿主协议 | §5.1、§6.2、§6.5；核心↔程序宿主协议 | 预算靠宿主不靠类型、状态显式序列化 —— 已定；确定协议 暂定（受 SP-11 约束） |
 | OD-10 | 集成会话 epoch/fencing 与接管 | 核心重启后旧核心/旧集成会话在途回执的接受、丢弃或转交规则；最终判定权归属；会话 epoch 握手字段 | 定义会话 epoch 握手字段与在途回执路由规则，并在 SP-10 崩溃注入中验证 | §6.1、§6.3；集成会话重建、回执映射、H10 fence | 收敛不依赖旧会话回执（对账经新会话独立取证）、不重复投放由 `SendBarrier` durable + lane 队首阻塞保证 —— 已定；epoch/fence 握手与在途回执路由 未决 |
 
 ### 8.4 证伪条件
 
-以下观测会推翻本设计的相应决定，而不是用补丁保留结论。前六条从不变量与 SP 关闭事件导出，后三条从假设 H 的证伪条件导出。
+以下观测会推翻本设计的相应决定，而不是用补丁保留结论。前四条从不变量与 SP 关闭事件导出，后三条从假设 H 的证伪条件导出；可选子系统的证伪条件在 `hpc-derivation/design.md §12`。
 
 1. **同一 enum 类型视图（SP-5/SP-6）**：实测表明规则、程序、处理器需要不同代数或不同生命周期，或同一组合子树不能得到稳定规范化描述 → §2.4 的"一个 enum 值树 + 五个 fold"被推翻，§2.4/§3.3/§5.1/§5.3/§6.3 四处使用须拆分。
 2. **首执一次不变量（SP-1/SP-10）**：`Prepared`/`SendBarrier`/`submit` 崩溃注入后重启，出现同一意图的第二次 venue 调用或无 `SendBarrier` 的 `Prepared` 被误升 → §5.4 的两阶段 + move token 恢复协议与 C1 不变量被推翻。
 3. **程序隔离前提（SP-11）**：三 OS 上既无开箱即用的 Wasm，受监督子进程也无法给出一致的 CPU/内存/意图速率预算与 trap 语义 → §5.1 的"预算靠宿主"与 C4 隔离前提被推翻。
-4. **段池数据面（SP-12）**：真实 `1 → K=3 → N=10` 扇出下共享段的 p99、总内存或回收复杂度不优于按消费者复制，或独立进程共享映射在 macOS/Windows 无法通过借用/崩溃/生命周期闸门 → hpc-derivation-subsystem.md §1.3 的段池数据面被推翻，按 hpc-derivation-subsystem.md §8.1 的备选条件评估 `memmap2` 或复制方案。
-5. **50 ms 预算（SP-12 闸门 7）**：真实链路显示 `T_ipc` 使总时间稳定超过 50 ms → hpc-derivation-subsystem.md §2 的"IPC 当小项"预算假设被推翻，须修改调度/预算或切换备选。
-6. **三种进度互不替代（§2.3）**：`latest` 消费者被当作已跟上完备进度、阈值策略据此误触发 → §2.3 用完备进度而非消费位置触发 `await-all` 的不变量被推翻。
-7. **H1 宁重复不漏单**：维护者对某账户类别明确接受"宁重复不漏单" → C1"unknown 不得自动产生新尝试"对该类别放宽，§5.4 的自动化边界须分类。
-8. **H4 写并发确定排序**：某 venue 文档保证并发写的确定性排序 → §5.3 的"同 (账户,子账户) 需一个全序"lane 前提对该 venue 放宽。
-9. **H5 订阅生命周期**：维护者决定程序/订阅随消费方连接存亡 → §6.1/§6.4 的"订阅与程序 owner 是核心、与消费方连接无关"（C5）被推翻，Q29 的重连语义改写。
+4. **三种进度互不替代（§2.3）**：`latest` 消费者被当作已跟上完备进度、阈值策略据此误触发 → §2.3 用完备进度而非消费位置触发 `await-all` 的不变量被推翻。
+5. **H1 宁重复不漏单**：维护者对某账户类别明确接受"宁重复不漏单" → C1"unknown 不得自动产生新尝试"对该类别放宽，§5.4 的自动化边界须分类。
+6. **H4 写并发确定排序**：某 venue 文档保证并发写的确定性排序 → §5.3 的"同 (账户,子账户) 需一个全序"lane 前提对该 venue 放宽。
+7. **H5 订阅生命周期**：维护者决定程序/订阅随消费方连接存亡 → §6.1/§6.4 的"订阅与程序 owner 是核心、与消费方连接无关"（C5）被推翻，Q29 的重连语义改写。
 
 ### 8.5 验收标准
 
@@ -1901,7 +1895,7 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 4. **保留边界（§2.3、§6.7）**：压缩后所有仍被引用的 `LogPosition` 均 ≥ 保留边界。（对应 Q28）
 5. **provider 正交性（§2.2、§6.3）**：新 provider 接入不改核心 crate；新 `OperationKind` 必然改实现该协议的全部 provider；新 IDL 操作必然改全部集成。（对应 Q18）
 6. **窗口追溯（§3.2）**：`latest` 消费者的每次合并都可追溯到声明的窗口界或 `conflated` gap。（对应 Q31）
-7. **核心层最小验收（§6.6）**：含 `Pooled` 的程序在无 HPC 子系统时被拒且其余程序不受影响；子系统 op 的输出对下游是普通派生流（下游节点无需知道它由原生 op 产出）。（对应 Q24/Q30）
+7. **核心层最小验收（§6.6）**：含 `Pooled` 的程序在无可选子系统时被拒且其余程序不受影响；子系统 op 的输出对下游是普通派生流（下游节点无需知道它由原生 op 产出）。（对应 Q24/Q30）
 8. **崩溃矩阵可测项（§7.2 #1–#3、#8、#9；关闭事件回链 SP-10）**：`Prepared`/`SendBarrier`/`submit` 各窗口 fsync 崩溃注入后重启，观测——(a) 无 `SendBarrier` 的 `Prepared` 确未发出；(b) 无后继的 `SendBarrier` 升为 `Undetermined`；(c) 复合链不重复投放，fixture venue 调用 ≤ 1；(d) 追加/替换中途崩溃后无半条记录、同事务原子回滚、订阅者可按游标恢复。（对应 Q2/Q4/Q17）
 9. **两故障面唯一判别（§5.4、§6.3）**：集成崩溃的观察流侧（`Gap{origin: Source}`）与写提交侧（`NoResponse`→`Undetermined`）的判别边界唯一 = 是否落 `submit` 路径。（对应 Q11/Q18/Q2）
 
@@ -1964,13 +1958,6 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 | 操作集（operation set） | 核心 IO 壳对集成的调用与集成对核心的推送，构成跨协议 IDL 契约 | §6.3 |
 | 持久化归属表 | 每份状态谁写、谁读、怎么传播 | §6.7 |
 | 配置/凭据归属 | 统一路径下的文件契约：每文件唯一写者、格式版本只前进 | §6.7 |
-| 洗入 | 把输入记录一次写入段内导出布局，形成连续列、数值格式与 validity 的过程 | hpc-derivation-subsystem.md §1.4、§5.3 |
-| 段（segment） | 某一时刻完整窗口的列式记录批，每字段一条列并带 validity 位图 | hpc-derivation-subsystem.md §4.0 |
-| `Layout` | 由输出类型 fold 生成的字段、形状、容量、对齐和 validity 描述 | hpc-derivation-subsystem.md §4.1 |
-| `layout_hash` | 对规范化物理布局描述计算的身份摘要，用于握手与版本切换 | hpc-derivation-subsystem.md §4.4、§6.2 |
-| 契约表 | 把段句柄、输入流、位置范围、布局版本与写者关联起来的核心运行期表 | hpc-derivation-subsystem.md §5.2 |
-| `gap_policy` | 原生 op 对输入 gap、预热区和递归状态的显式处理策略 | hpc-derivation-subsystem.md §4.5、§7.3 |
-| 原语集 | 面向作者的时间轴数组操作和标量逃逸口，负责窗口、递归与 validity 语义 | hpc-derivation-subsystem.md §7.2、§7.3 |
 
 ### 9.2 五种关系，五种承载
 
@@ -2019,7 +2006,7 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 
 ## 附录 A 研究与调查报告索引
 
-每个报告一行：路径 / 它是什么的一手出处 / 支撑的章节或条目 ID。本附录只作证据出处，不复述设计结论。全部路径在 `design/research/*` 与 `design/investigation/*`，本设计不改动它们。
+每个报告一行：路径 / 它是什么的一手出处 / 支撑的章节或条目 ID。本附录只作证据出处，不复述设计结论。核心证据在 `design/research/*` 与 `design/investigation/*`；可选子系统的证据在 `design/hpc-derivation/research/*`，由其文档 §13 逐篇索引。本设计不改动它们。
 
 | 路径 | 一手出处 | 支撑的章节 / 条目 ID |
 |---|---|---|
@@ -2030,12 +2017,7 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 | `design/research/fp-04-base-types-and-domain-primitives.md` | 基础类型与域原语（safe-money、Squants、DMMF、Incremental、幂等、位置/时钟） | §2.2（命题 15/16）、§2.3（命题 10/11）、§5.6；§8.1 信封解析行 |
 | `design/research/fp-05-streams-incremental-frp.md` | 观察侧流/增量/FRP（fs2、Incremental、Salsa、Differential、Materialize、Pine Script） | §2.3（案例 13⑤）、§2.5（命题 12）、§3.1（命题 12）、§6.8；§8.1 增量引擎 / 两侧共表 / 快照重建行；SP-8 |
 | `design/research/fp-06-reconciliation-and-in-doubt.md` | 写边界 / in-doubt / 对账的一手出处（2PC 先例、四面泄漏、命题 1–6） | §5.4；§8.1 两阶段行；SP-1 |
-| `design/research/fp-07-type-export-and-external-compilation.md` | 类型导出 / 外部编译 / 装载 / 握手校验（含 warm rebuild 0.94s→0.12s） | hpc-derivation-subsystem.md §4、§6、§7；SP-13；OD-8 |
-| `design/research/fp-08-segment-pool-libraries.md` | 段池选库（14 库、3 淘汰门、iceoryx2 跨进程实测） | hpc-derivation-subsystem.md §5、§8；§8.1 HPC 进程模型行；SP-12 |
-| `design/research/fp-09-hpc-compute-layer-and-vectorta.md` | 原生 op 算法层（VectorTA 0.3.1、AoS→SoA、Rust SIMD、50 ms 容量估算） | hpc-derivation-subsystem.md §2、§3、§4；§8.1 列式段行；SP-12 闸门 7 |
-| `design/research/fp-10-array-middle-layer.md` | 数组中间层（11 库 ABI 往返、真实 SPY Pine 级指标、跨生态放置先例） | hpc-derivation-subsystem.md §7、§8；§8.1 作者面计算层行 |
-| `design/research/fp-11-gate9-primitives-demo.md`（+ 附录 prims/naive/align） | 闸门 9 原语实证（LOC 57–73%、四种写法并排、对齐对照） | hpc-derivation-subsystem.md §7、§9、§10（闸门 9）；SP-13 原语集 |
-| `design/research/fp-12-l2-orderbook-demo.md` | L2 订单簿 demo（LOBSTER AMZN level-10、多档布局 A/B、中间列物化） | hpc-derivation-subsystem.md §3、§4、§8；§8.1 列式段行 |
+| `design/hpc-derivation/research/fp-07..12-*.md` | 可选子系统的一手证据（类型导出与外部编译、段池选库、算法层与 SIMD、数组中间层、闸门 9 原语实证、L2 订单簿 demo） | hpc-derivation/design.md §13 逐篇索引；本设计只经 §6.6、Q24/Q30、SP-12–SP-14 引用 |
 | `design/investigation/alice-consumers.md` | Alice 消费面真实入口（SDK/路由/UI/connector/CLI） | §1.3.1（A 表）、§1.4、§1.6.4；S10/S11；OD-1/OD-3 |
 | `design/investigation/existing-capabilities.md` | 旧 UTA 可观察行为、后台任务、持久化与 20 条缺陷 | §1.1（O11）、§1.3.1；C9–C14；Q8/Q17/Q19/Q20 |
 | `design/investigation/venue-capabilities.md` | venue 能力矩阵（推送流/幂等键/回读/续传游标；限额与 pacing） | §1.1（F6/F7）、§1.2（P1）、§1.6.1；§8.1 写批处理行 |
