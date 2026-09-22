@@ -66,7 +66,7 @@
 
 ### 0.1 决定什么
 
-UTA 是 Alice 与多个外部交易来源之间的独立核心进程：它接收集成层清洗后的能力、观察与效应记录，向消费方提供一次性读和订阅，接收带身份与依据的意图，并把执行过程与外部结果保真地记录和关联。本文决定 UTA 的问题域与驱动（§1）、设计中心与两个类型宇宙（观察 | 效应，§2–§5）、进程与接口/归属边界（§6），并以走查与评估（§7–§8）验证这些决定；每个决定的证据、替代与未决项就近登记，SP 与 OD 在 §8 汇总。
+UTA 是 Alice 与多个外部交易来源之间的独立核心进程：它接收集成层清洗后的能力、观察与效应记录，向消费方提供一次性读和订阅，接收带身份与依据的意图，并把执行过程与外部结果保真地记录和关联。本文决定 UTA 的问题域与驱动（§1）、设计中心与两个类型宇宙（观察 | 效应，§2–§5）、进程与接口/归属边界（§6），并以走查与评估（§7–§8）验证这些决定；每个决定的证据与替代就近登记，证伪条件与验收项在 §8 汇总。
 
 ### 0.2 读者、审批与维护
 
@@ -76,7 +76,7 @@ UTA 是 Alice 与多个外部交易来源之间的独立核心进程：它接收
 
 ### 0.3 状态
 
-**评审中。** 已定：§2–§5 的抽象（记录与位置、组合子值树与五个 fold、两个类型宇宙与唯一边）与 §6 已定的进程、契约与归属边界；暂定：受 SP-5/SP-6、SP-11 约束的部分；未决：§8.3 的 SP-1…SP-15 与 OD-1…OD-10。可选行情派生计算子系统的状态在 `hpc-derivation/design.md §0`，本文只拥有它的接口（§6.6）。
+**已定。** §2–§6 全部已定：记录与位置、组合子值树与五个 fold、两个类型宇宙与唯一边、单据/STS/IO 壳、进程与契约归属（程序宿主 = 受监督子进程、会话 epoch、Alice 操作集、配置文件契约）。依赖假设 H 的决定在 §8.4 有证伪条件。需要实测的量都是 §8.5 的验收项，不是设计未决；可选行情派生计算子系统的决定在 `hpc-derivation/design.md`，其验收标准在其 §10、证伪条件在其 §11，本文只拥有它的接口（§6.6）。
 
 ### 0.4 非目标
 
@@ -92,11 +92,11 @@ UTA 是 Alice 与多个外部交易来源之间的独立核心进程：它接收
 
 ### 0.5 阅读约定
 
-标签含义如下：`[证据]` 是来源直接支持的事实或原话；`[设计]` 是在已有事实上的设计表达，必须紧跟理由；`[暂定：SP-n]` / `[暂定：OD-n]` 表示受 spike 或开放设计项约束；`[未决 SP-n]` / `[未决 OD-n]` 表示必须由关闭事件回答；`[推断]` 表示由已列事实推出、但没有一手来源直接陈述的结论。
+标签含义如下：`[证据]` 是来源直接支持的事实或原话；`[设计]` 是在已有事实上的设计表达，必须紧跟理由；`[推断]` 表示由已列事实推出、但没有一手来源直接陈述的结论。
 
-编号含义如下：`F` = 外部域事实，`O` = 既有机器事实，`S` = 利益相关者要求，`H` = 假设或威胁，`P` = 机器与域共享现象，`A` = 既有行为入口，`B` = 新增需求原话，`C` = 由事实推出的需求，`Q` = 质量场景，`SP` = spike，`OD` = 开放设计项。
+编号含义如下：`F` = 外部域事实，`O` = 既有机器事实，`S` = 利益相关者要求，`H` = 假设或威胁，`P` = 机器与域共享现象，`A` = 既有行为入口，`B` = 新增需求原话，`C` = 由事实推出的需求，`Q` = 质量场景。
 
-状态词只使用：`已定`、`暂定（受 SP-n/OD-n 约束）`、`未决`。
+状态词只使用 `已定`；依赖假设 H-n 的决定在 §8.4 给出证伪条件。会推翻决定的观测写在 §8.4，需要实测的量写在 §8.5；设计不登记待做实验。
 
 ## 1 问题域与驱动
 
@@ -156,7 +156,7 @@ UTA 是 Alice 与多个外部交易来源之间的独立核心进程：它接收
 |H4|同一 (账户, 子账户) 上的写需要一个全序；不同账户可并行。|F1 + F8：venue 侧顺序只能由我们发出的顺序决定|某 venue 文档保证并发写的确定性排序（未见）|
 |H5|订阅的 owner 是 UTA 而非消费方：消费方断开后订阅仍有业务价值（程序在跑）。|S1/S3：程序在 UTA 内运行|维护者决定程序随消费方连接存亡|
 |H6|决定有时效，过期未决 = 否决，不做补偿。|connector `ttlMs`（`delivery-manager.ts:271`）、Telegram 过期（`telegram-uta.ts:196-199`）是现有实例|维护者要求人类决定无过期，或过期后自动执行|
-|H7|信任单位是 **OS 用户**：本机非本用户的进程不可信；本用户的进程视为用户本人；同机进程能连到 UTA 不等于有权发写——写权限来自认证得到的 principal × 策略 scope，不来自连接。|O7 现状无认证 + C1 独立进程使 IPC 成为正式边界；UDS 对端凭据 / 命名管道 ACL 的粒度都是用户|维护者要求同用户进程之间也互相隔离（则需能力令牌 / 管道句柄传递，X4 升级路径）；或接受“host 即信任边界”|
+|H7|信任单位是 **OS 用户**：本机非本用户的进程不可信；本用户的进程视为用户本人；同机进程能连到 UTA 不等于有权发写——写权限来自认证得到的 principal × 策略 scope，不来自连接。|O7 现状无认证 + C1 独立进程使 IPC 成为正式边界；UDS 对端凭据 / 命名管道 ACL 的粒度都是用户|维护者要求同用户进程之间也互相隔离（则需能力令牌 / 管道句柄传递，§6.1 的升级路径）；或接受"host 即信任边界"|
 |H8|Windows 是必须支持的运行目标。|§6.1 已确认；三 OS 目标为 macOS、Windows、Linux（旧基线 `README.md:32`；`docs/development-workflow.md:280,324`）|—|
 |H9|程序状态需要跨 UTA 重启恢复（而非重启后从零重建）。|S3 alert/决策连续性；若不恢复则每次重启丢失指标暖机与程序 state|维护者接受重启后程序冷启动 + 历史回填|
 |H10|同一用户状态根（`OPENALICE_HOME`）上同时只能有一个 UTA 核心实例持有单据与订阅表；孤儿实例（父进程死而子进程活）是真实威胁。|`scripts/guardian/shared.ts:271-276`：Windows 上 kill 只到 wrapper，孤儿 UTA 继续占端口使新实例无法绑定；用户状态根见 `existing-capabilities.md:239`|—（威胁模型）|
@@ -171,8 +171,8 @@ UTA 是 Alice 与多个外部交易来源之间的独立核心进程：它接收
 |---|---|---|---|---|
 |P1|能力声明|集成→机|集成身份、venue、账户、按（操作种类 / 流种类）的 supported / unsupported、配额、每种写操作的 unknown 证据渠道（按调用方键回读 / open-order listing + venue 订单身份（含“缺席需二次确认”的间隔） / 成交或持仓对账 / 无），历史 bar 有无与 pacing、子账户有无、续传游标有无|C2、C8、A18、A19、Q6、Q13、Q15|
 |P2|观察|集成→机；程序→机（派生）|来源（账户、公共 feed、或程序——程序输出的指标 / alert 是派生观察，与外部观察同一形状）、主体（instrument / 账户 / 子账户 / feed）、种类（quote / book / bar / clock / 余额 / 持仓 / 订单状态 / 成交 / 目录 / 连接状态 / 健康 / 汇率 / 派生）、venue 事件时间（可无）、venue 序号（可无）、venue 续传游标（可无）、本地收到时间、Seq、原始负载、质量标记；订单状态 / 成交观察带归因（某尝试 / 外部 / 未定）|B1–B5、A11–A17、Q1–Q3、Q16、Q18|
-|P3|gap / 控制|机→程序/消费方|来源 gap（某范围断代：新 epoch 首条记录，含前一范围与其最后 Seq、原因 ∈ {start, disconnect, quota, ingress_overflow, program_upgrade}）；投递 gap（某订阅对某范围的损失：gap id、from/to Seq、原因 ⊆ {slow_consumer, compacted}，需显式确认）；程序 gap（程序滞后被跳过的区间）；状态通知（readiness backfilling/live、订阅挂起 / 恢复；非损失，不需确认，由订阅状态派生）|C6、Q11、Q12、Q14、Q28、Q31|
-|P4|订阅需求 / 订阅状态|消费方/程序→机；机→集成|owner、选择器（来源 × instrument × 种类）、epoch、状态（待接纳 / 活 / 被拒 / 挂起）、拒绝原因、消费游标（该订阅已确认的最后 `LogPosition`；“确认”指投递、消费方持久化还是处理完成，需决定重复可见性）|B1、C5、Q9、Q13、Q14、Q23、Q31|
+|P3|gap / 控制|机→程序/消费方|来源 gap（某范围断代：新 epoch 首条记录，含前一范围与其最后 Seq、原因 ∈ {start, disconnect, quota, ingress_overflow, credential_rotated, schema_change, backfill_incomplete, program_upgrade}）；投递 gap（某订阅对某范围的损失：gap id、from/to Seq、原因 ∈ {slow_consumer, compacted, conflated}，需显式确认；程序作为订阅消费者滞后被跳过的区间也是投递 gap）；状态通知（readiness backfilling/live、订阅挂起 / 恢复；非损失，不需确认，由订阅状态派生）|C6、Q11、Q12、Q14、Q28、Q31|
+|P4|订阅需求 / 订阅状态|消费方/程序→机；机→集成|owner、选择器（来源 × instrument × 种类）、epoch、状态（待接纳 / 活 / 被拒 / 挂起）、拒绝原因、消费游标（该订阅已确认的最后 `LogPosition`；确认 = 消费方已处理，未确认区间可重复可见，§3.2）|B1、C5、Q9、Q13、Q14、Q23、Q31|
 |P5|回填|机→集成；集成→机|范围、页 / 游标、结果、与实时流的边界、readiness|A19、Q14|
 |P6|意图|程序/消费方→机|意图身份、principal、目标（账户、子账户、instrument）、操作种类（下单 / 改单 / 撤单 / 平仓）、参数、依据（`Set<LogPosition>`）、生产者（程序制品 hash + 版本 + 调用身份，或消费方会话）、过期|B7、C1、C3、A29–A35、Q5、Q7、Q17、Q19、Q25|
 |P7|决定|决策者→机|所指意图、principal、裁决（批准 / 否决 / 过期 / 规则否决）、原因、依据、对待决集合版本的期望|S8、C3、A26–A28、Q7、Q9、Q10、Q19|
@@ -281,7 +281,7 @@ A 表按调查报告记录的真实入口（路由、SDK 方法、UI/CLI 调用�
 
 ### 1.4 质量场景
 
-每条场景六要素为：stimulus source（刺激源）、stimulus（刺激）、artifact（构件）、environment（环境）、response（响应）、response measure（响应度量）。优先级按业务重要性 × 架构风险：高表示资金安全、身份/权限或数据连续性直接受影响；中表示主要消费能力或恢复能力；低表示可隔离的附加能力。没有一手阈值时，响应度量写可观察项，关闭事件是对应 spike 或实测闸门。
+每条场景六要素为：stimulus source（刺激源）、stimulus（刺激）、artifact（构件）、environment（环境）、response（响应）、response measure（响应度量）。优先级按业务重要性 × 架构风险：高表示资金安全、身份/权限或数据连续性直接受影响；中表示主要消费能力或恢复能力；低表示可隔离的附加能力。没有一手阈值时，响应度量写可观察项，由 §8.5 的验收项或子系统验收标准（`hpc-derivation/design.md §10`）实测。
 
 |ID|场景|stimulus source|stimulus|artifact|environment|response|response measure|来源|优先级|
 |---|---|---|---|---|---|---|---|---|---|
@@ -306,15 +306,15 @@ A 表按调查报告记录的真实入口（路由、SDK 方法、UI/CLI 调用�
 |Q19|会话身份与未授权控制|攻击者或未授权进程|伪造请求体身份、未认证连接、已认证但无 scope 的控制请求|P13 会话、P14 控制、P7 安全记录|同机跨进程边界|以认证 principal 判定；拒绝未认证与越权；不产生写或配置副作用|无 venue 调用、无配置变更；安全事件可读|H7；C11|高|
 |Q20|双实例|第二个核心进程|在同一用户状态根启动第二实例|单实例锁、fence、P15|已有实例存活；也测试已有实例死亡后接管|第二实例专用退出并报告；持有者死亡后新实例按 fence 接管|退出码/诊断可观测；接管不会产生双写|H10|高|
 |Q21|格式升级|新旧版本核心|N+1 读 N；反向读取；迁移中断电|P15 格式版本与迁移|持久文件在升级边界|支持的升级后等价；高版本拒绝；断电后二者之一完整，不出现第三态|退出码或记录说明版本结果；无部分迁移|O9；C14|中|
-|Q22|秒级 K 线与大量指标|维护者需求|实时 K 线订阅、秒级清洗、每 instrument 大量增量指标、多核分发|P2、P4、P12|行情持续到达，程序声明输入|允许增量派生和分发，不把每 bar 全量重跑写成前提|处理不落后于 bar 周期：秒级 bar 的清洗 + 增量指标在下一根到达前完成，积压不增长；分发不阻塞清洗 [推断：B1"秒级"]；负载形状取 Q24 沟通场景规模，实测归 SP-15|B1|中|
+|Q22|秒级 K 线与大量指标|维护者需求|实时 K 线订阅、秒级清洗、每 instrument 大量增量指标、多核分发|P2、P4、P12|行情持续到达，程序声明输入|允许增量派生和分发，不把每 bar 全量重跑写成前提|处理不落后于 bar 周期：秒级 bar 的清洗 + 增量指标在下一根到达前完成，积压不增长；分发不阻塞清洗 [推断：B1"秒级"]；负载形状取 Q24 沟通场景规模，验收 §8.5 #19|B1|中|
 |Q23|多渠道多资产判断|维护者需求|同时订阅多渠道、多 instrument；程序以全部渠道最新状态判断|P2、P4、P12|来源时钟不同，消费声明组合方式|按输入声明提供跨 instrument 观察；不隐含全局时间对齐|程序输入声明包含来源与消费方式；跨源无隐式对齐|B2、B4、B5|中|
-|Q24|完整窗口原生计算|维护者需求|约 1500 条流选 15 条，覆盖 24 h 逐秒数据，指标阈值后唤醒 AI|P2、P5、P12 与可选 Pooled|沟通场景，非容量指标|能表达完整窗口与选择条件，把原生计算输出作为普通派生观察|单次触发到输出派生流 ≤ 50 ms（子系统内部预算，hpc-derivation/design.md §2.2；实测闸门 7 未过）；1500/15/24 h 仅为沟通场景，不作容量上限|hpc-derivation/design.md §1.1、§2.2；B3|中|
+|Q24|完整窗口原生计算|维护者需求|约 1500 条流选 15 条，覆盖 24 h 逐秒数据，指标阈值后唤醒 AI|P2、P5、P12 与可选 Pooled|沟通场景，非容量指标|能表达完整窗口与选择条件，把原生计算输出作为普通派生观察|单次触发到输出派生流 ≤ 50 ms（子系统内部预算，hpc-derivation/design.md §2.2，验收其 §10 #7/#10）；1500/15/24 h 仅为沟通场景，不作容量上限|hpc-derivation/design.md §1.1、§2.2；B3|中|
 |Q25|程序超预算隔离|程序运行时|程序死循环、超内存或超意图速率|P12 程序、P6 意图|不可信程序与其他程序并存|超预算程序隔离并报告；其他程序、账户、核心继续|超出装载时声明的预算（P12：CPU / 内存 / 意图速率 / 状态大小）后被隔离并产出失败观察；其他程序、账户、核心的响应度量不变；预算值是装载声明的参数，不是设计常量|H2；C4|高|
 |Q26|单据并发编辑|第二个 principal|第二个 principal 对已有负责人的单据 `Revise`|Ticket、P6/P7|已有负责人且版本已变化|拒绝共同编辑或返回冲突，保留负责人和版本记录|冲突结果、负责人、版本均可读|§5.2|高|
 |Q27|Replace 无原子能力|消费方|venue 无 cancel/replace 原子操作时改单|P6–P10、能力声明|目标意图可能已执行或仍 pending|不把改单伪装为原子动作；按能力与意图状态返回可区分结果|读模型显示原操作与后续操作的关联及未决状态；撤单腿 `Undetermined` 期间新单腿不发；`deadline`（H6）到期后新单腿永不发出并记过期记录，不补偿|§5.2；F6|高|
-|Q28|保留边界推进|维护者或核心|retention 推进时仍有单据或程序引用的位置|P15、LogPosition 引用、程序输入|观察记录可压缩，效应单据只追加|不删除仍被引用的位置；必要时拒绝推进或先处理引用|压缩后所有仍引用的 `LogPosition` 均在保留边界内|P15；SP-8；§8.5|高|
+|Q28|保留边界推进|维护者或核心|retention 推进时仍有单据或程序引用的位置|P15、LogPosition 引用、程序输入|观察记录可压缩，效应单据只追加|不删除仍被引用的位置；必要时拒绝推进或先处理引用|压缩后所有仍引用的 `LogPosition` 均在保留边界内|P15；§2.3；§8.5 #4|高|
 |Q29|Alice 断连重连|Alice 客户端|Alice 崩溃或重启，UTA 独立存活；重连后请求当前状态和 cursor 之后记录|P13 会话、P4 订阅、P3 gap|UTA 订阅和程序仍由 UTA 拥有|重连可取得当前状态；断连期间损失显式标 gap，不伪造逐条补发|当前状态、cursor 后记录和 gap 原因可读|H5；C5；§6.1|中|
-|Q30|可选子系统扇出端到端|核心与可选子系统|1 个输入经 K 个 op 到 N 个消费者|P2/P12、Pooled|子系统已装载且满足前置条件|输出以普通派生流进入下游；不满足条件时 Pooled 程序拒绝而核心其余程序不受影响|端到端结果可测；子系统内部预算分项见 hpc-derivation/design.md §2.2，实测闸门未过|hpc-derivation/design.md §2.2、§10 闸门 7；SP-12|中|
+|Q30|可选子系统扇出端到端|核心与可选子系统|1 个输入经 K 个 op 到 N 个消费者|P2/P12、Pooled|子系统已装载且满足前置条件|输出以普通派生流进入下游；不满足条件时 Pooled 程序拒绝而核心其余程序不受影响|端到端结果可测；子系统内部预算分项见 hpc-derivation/design.md §2.2，验收其 §10 #7|hpc-derivation/design.md §2.2、§10 #7|中|
 |Q31|消费方式声明|程序作者|同一组流分别以 await-all、ordered、latest 消费|P4、P12、P3|来源时间不同且存在 gap/窗口|按程序声明解释，不强加全局对齐；latest 的合并引用窗口界或 conflated gap|每次合并可追溯到声明窗口或 gap|B5；C6；§8.5|中|
 |Q32|健康与 readiness 可见|运维者/消费方|查询集成 reach、tier、连续失败和最后成功时间|P16、P14|集成在线、断开和恢复各状态|返回结构化健康/readiness，供读写门和运维观察|字段 reach、tier、连续失败数、最后成功时间可读|P16；S9|中|
 
@@ -338,7 +338,7 @@ A 表按调查报告记录的真实入口（路由、SDK 方法、UI/CLI 调用�
 
 **偏好：** 面向未来实现者，不设置审批角色。它排除了把本文当作审批流程或审批记录的阅读路径；范围与状态仍由维护者确认。
 
-另有必须支持的运行目标：Windows（H8）；调查与工程材料将 macOS、Windows、Linux 作为三 OS 目标。Windows 传输选择不得假设 macOS/Linux 的 UDS 直接适用，具体比较由 §6.1 和 SP-11 处理。
+另有必须支持的运行目标：Windows（H8）；调查与工程材料将 macOS、Windows、Linux 作为三 OS 目标。Windows 传输选择不得假设 macOS/Linux 的 UDS 直接适用，具体比较由 §6.1 处理。
 
 ### 1.6 调查结论摘录
 
@@ -363,7 +363,7 @@ A 表按调查报告记录的真实入口（路由、SDK 方法、UI/CLI 调用�
 
 #### 1.6.2 Rust 生态可行性
 
-未证明任何 Rust 不可行点；Rust 偏好未触发语言例外。tonic 0.14.6 在 Windows 返回 `uds connections are not allowed on windows`（`investigation/rust-feasibility.md:165`），因此 Windows 传输作为 §6.1 的 OS 选择问题。Wasmtime 48.0.2 没有 live `Store` 快照 / 恢复 API；Wizer 只快照初始化，`Module::serialize` 只保存编译产物（`investigation/rust-feasibility.md:133-139`），这是程序恢复语义的证据缺口，转到 §6.5 与 SP-11。fuel 是确定性指令预算，epoch 不确定，两者都管不住阻塞的 host 调用；Component Model async ABI “very incomplete”；tokio `broadcast` 会丢弃落后者；okaywal 自述不宜生产；gRPC 单流有序、流间独立；`rust_decimal` scale ≤ 28（同报告 `:117-119,131,189,215,300`）。吞吐、延迟、崩溃注入文件系统矩阵和 Windows 传输实测尚未完成。
+未证明任何 Rust 不可行点；Rust 偏好未触发语言例外。tonic 0.14.6 在 Windows 返回 `uds connections are not allowed on windows`（`investigation/rust-feasibility.md:165`），因此 Windows 传输作为 §6.1 的 OS 选择问题。Wasmtime 48.0.2 没有 live `Store` 快照 / 恢复 API；Wizer 只快照初始化，`Module::serialize` 只保存编译产物（`investigation/rust-feasibility.md:133-139`），这是 Wasm 不选为初始程序宿主的依据之一（§6.5：宿主 = 受监督子进程）。fuel 是确定性指令预算，epoch 不确定，两者都管不住阻塞的 host 调用；Component Model async ABI "very incomplete"；tokio `broadcast` 会丢弃落后者；okaywal 自述不宜生产；gRPC 单流有序、流间独立；`rust_decimal` scale ≤ 28（同报告 `:117-119,131,189,215,300`）。吞吐、延迟、崩溃注入文件系统矩阵和 Windows 传输实测尚未完成。
 
 #### 1.6.3 既有缺陷
 
@@ -379,7 +379,7 @@ FX 回退链和模拟器属于既有读来源/集成行为；新边界中的能�
 - Venue 官方 URL 尚未逐条重开；表格中保留的能力、重复语义和 10 分钟缓存仍需按 `venue-capabilities.md:167` 重新核实。
 - UTA 服务端真实路由、运行时错误体、实际状态转移、超时和 retry 语义未从运行环境核实；SDK 路径是调用方证据，不是服务端实现证据。
 - `/api/simulator/*`（A39）到模拟器注入方法（A40–A46）的路由级对应关系未从调查报告取得；报告只记录了路由族与方法各自的存在。
-- 质量场景的容量数字（Q22、Q24、Q30）来自沟通场景与内部预算假设，不是产品 SLO；关闭事件为 SP-15 与闸门 7 的实测。
+- 质量场景的容量数字（Q22、Q24、Q30）来自沟通场景与内部预算假设，不是产品 SLO；核心侧以 §8.5 #19 验收，子系统侧以 hpc-derivation/design.md §10 #7/#10 验收。
 
 ## 2 共同底层
 
@@ -492,7 +492,8 @@ enum Verdict { Supported(CapabilityProof), Unsupported, Unknown }
 
 `WriteScope` 就是"多账户"：核心不知道它是账号、子账号还是跨国独立账户，只知道有几个、各自能做什么、各自挂哪些流。F6"部分未文档化"的能力不可能是静态保证。写操作的 `CapabilityProof` 含 unknown 证据渠道声明（by-key / listing+venue id / fills-positions / 保留期内 replay-by-key / 无）。UTA 对投影只做两件事：原样转发给下游；按投影路由（lane 按 `WriteScope`、订阅按 `StreamDecl`、门按 `Capability`）。它不解释形状，也不发明投影。
 
-- **能力未知 ≠ 结果未知**：三值 `Verdict` 属握手阶段，与 §5.4 的"结果未知"分开——能力未知约束启动阶段（能不能发），结果未知约束恢复阶段（发了之后）。是否值得把运行期能力证据抬进类型 → [未决 SP-2]。[证据：fp-03 命题 3]
+- **能力未知 ≠ 结果未知**：三值 `Verdict` 属握手阶段，与 §5.4 的"结果未知"分开——能力未知约束启动阶段（能不能发），结果未知约束恢复阶段（发了之后）。`Verdict` 是**运行期值**，不抬进类型 [设计]：能力随握手与运行期观察变化（§6.3.6 能力变更推送、`CapabilityObserved`），静态类型无法表达运行期才知道的三值；单据 `alignment` 的能力项按当前能力证据评估（§5.2），`Unknown` 视同 `Unsupported`：该项 `Diverged`，不放行。[证据：fp-03 命题 3]
+- **`payload_schema` 身份** [设计]：`StreamDecl.payload_schema` 是 `(schema_id, schema_version)` 对，由集成在握手声明；同一 `StreamId` 内版本不变，版本变化即开新 epoch（§6.3.4）。核心不解释 schema 内容，只按身份路由与存储，并在 `Projection` 中原样转发给消费者；消费者据此决定能否解析。
 - **信封解析，载荷直通**：venue 状态映射只对被路由的少数字段做（订单状态的终态/非终态），按 venue 枚举输入，输出**必须保留 `Unmapped(raw)`**，不能靠"无 catch-all"伪造穷尽映射。[证据：fp-04 命题 15/16；域 C13/F6]
 - **只读批处理条件**：只读请求允许批处理/去重的条件：无可观测副作用 + 稳定 identity + 幂等 + 可接受的批窗口。写操作永不走此路径。[证据：fp-03 命题 4；fp-02 命题 1/2]
 - venue 词汇不进核心。[域 B6]
@@ -537,7 +538,7 @@ LogPosition = (StreamId, Seq)           // 一条记录的顺序身份
 
 - **引用处理与边界推进**：推进保留边界前，必须显式处理仍被引用的 `LogPosition`——保留对应历史、保存必要证据，或明确缩小重放承诺（`AS OF ≥ retention frontier`）。[证据：fp-05 案例 13⑤ Materialize]
 - **双侧保留策略**：派生侧依据 frontier 进行压缩（`compact_below_retention` 仅对 `RetractableDelta` 表存在，§3.1）；执行事实侧依据 §2.5 不变量保持纯 append；快照是重启延迟的必需项，不改变 append-only 语义。[域 P15]
-- **权责与周期归属**：引用登记方、边界推进审批方，以及原始证据与派生历史的留存时长 → [未决 SP-8]。
+- **权责与周期归属** [设计]：**登记方 = 核心**——引用在产生时由核心自动登记，随持有者的生命周期自动解除，消费者不手工登记：意图的 `basis`（§4）在 `Prepared` 持久化时登记，在该 Attempt 链 `Resolved` 后解除；程序 `Checkpoint` 依赖的 cursor 位置在 checkpoint 持久化时登记，下一个 checkpoint 持久化即替换；对账 `ResolutionEvidence` 引用的观察位置在 append 时登记，Attempt `Resolved` 后解除。解除后的历史引用仍可读作审计，落到边界之下时读得 `BeyondRetention`（§4），不再阻止压缩。**审批方 = 控制面 principal**（§6.4 `advance_retention`）：核心算出 `min(当前登记引用)`，边界不得越过它，越过即 `Rejected(ReferencedBelow{min})`；要越过只能先让持有者终结（关闭单据、人工决议 `Undetermined`、卸载程序），没有旁路。**留存时长 = 配置参数**（§6.7.3）：执行事实侧原始记录不压缩、不删除；派生历史与原始观察的保留窗口由配置给出，实际边界 = `min(配置窗口下界, 当前登记引用最早位置)`。
 
 > 存储引擎（单个 SQLite 文件、表结构、事务、快照、格式版本）是持久化归属，属 §6.7；本节只写保留的**语义**（哪些历史必须保留、谁批准边界推进），不定实现。
 
@@ -603,7 +604,7 @@ enum DerivationNode {
 
 **替代与不选理由。** 泛型关联类型派生（cardano 式 `Embed`）——不选：Rust 无类型级和/积自动构造，泛型嵌套是 O(N²) 样板或退化到 `BoxError` catch-all（§5.3 详述）。黑盒函数 `(State,Input)->(State,Output)` 作程序——不选：无法预算、无法静态检查、状态可序列化仅依赖作者承诺（§3.3/§5.1）。builder API 作权威表示——不选：会让"引用了没有集成提供的字段"这类静态检查失去单一 fold 入口。
 
-**状态。** 暂定（受 SP-5/SP-6 约束）。构造子的完整集合标 [暂定：SP-5/SP-6]；`enum` 值树 + 五个 fold 的求值开销与代码体量、`dyn Handler`/`dyn AlignmentCheck` 分发成本待实测（同一未决）。**证伪范围包含"同一 enum 类型视图"本身**：若实测表明规则/程序/处理器需要不同代数或不同生命周期，本节的统一表示被推翻，四处使用须拆分（§8.3 SP-5/SP-6 条目登记此证伪条件）。
+**状态。** 已定。构造子全集即上面的 `enum DerivationNode`；表达力不足时的扩展轴是**显式加构造子**——改这个 enum，五个 fold 随之各加一臂，编译器指出全部遗漏（与 §5.3 加规则同一纪律：显式接受，不做泛型逃生口）。会推翻本节统一表示的观测在 §8.4 #1（规则/程序/处理器需要不同代数或生命周期，或同一树得不到稳定规范化描述）。求值开销与 `dyn` 分发成本是实现期 profiling 的对象，落点变化不改本节。
 
 ### 2.5 两个类型宇宙与唯一边
 
@@ -651,7 +652,7 @@ enum DerivationNode {
 | 程序（值，§3.3/§5.1） | 派生记录（解释①）、`EffectRequest`（解释②） | cursor 之后的记录、frontier | 直接调用 venue 写接口 |
 | 规则 STS（§5.3） | `Outcome` 记录 | 执行事实记录、经 `basis` 的观察值 | 引用读模型（读模型非权威） |
 | 读模型（§3.4/§5.1） | 供下游订阅的只读 fold | 执行事实 `Journal` | 被规则引用、被当作权威 |
-| IO 壳（§5.4） | 执行事实记录（`SendBarrier`/`VenueAccepted`/…） | `Prepared`、证据响应 | 修改任何记录、知道单据存在 |
+| IO 壳（§5.4） | 执行事实记录（`SendBarrier`/`VenueAccepted`/`Expired`/…）；取证读产生的观察记录（落观察 `Journal`，与一次性读同形，§3.4） | `Prepared`、证据响应、复合链所需的终态观察（经 `basis` 边） | 修改任何记录、知道单据存在 |
 | 单据（§5.2） | `TicketAction` append 记录 | IO 壳 append 的记录（作 `basis`/检查项依据）、观察值 | 反向耦合进 IO 壳 |
 | 效应侧 → 观察侧（`basis`，§4） | — | 观察位置集 `Set<LogPosition>` | — |
 | 观察侧 → 效应侧 | — | — | **全部禁止**（反向不编译） |
@@ -659,10 +660,9 @@ enum DerivationNode {
 #### 不变量清单
 
 以下不变量在任何时刻成立；每条注明由谁保证：
-
-1. 任一 `Undetermined` 记录在 `Resolved` 前，**同 lane 无新 Attempt**——由 lane 队首阻塞协议 + IO 壳按序推进保证（§5.3/§5.4）。
+1. 同 lane **至多一条未终结 Attempt**；特别地，任一 `Undetermined` 记录在 `Resolved` 前同 lane 无新 Attempt——由 STS lane 步在 `Prepared` 之前等待 + IO 壳按序推进保证（§5.3/§5.4）。唯一例外是带 principal 的显式绕过：它以 Decision 记录在案，使阻塞头成为未终结 Attempt 的集合（§5.3）。
 2. 执行事实侧**只 append**，永不改写为"从未发生"——由持久化接口（对应表模块 API 仅暴露 `append`）保证（§2.5 第二层/§6.7）。
-3. 压缩后所有仍被引用的 `LogPosition` 均 **≥ 保留边界**——由边界推进前的显式引用处理保证（§2.3/§6）。
+3. 压缩后所有**已登记引用**的 `LogPosition` 均 **≥ 保留边界**；未登记而落到边界之下的引用不静默失真，而在校验时得 `BeyondRetention`（§4）——由核心自动登记 + 边界推进前的显式引用处理保证（§2.3 保留语义：登记方核心、审批方控制面 principal）。
 4. 一张单据**至多一个负责人**（`responsible` 字段的存在即锁）——由单据锁保证（§5.2）。
 5. **写处理器不绕过效应路径**（至少经授权与预算规则）——由处理器注册语义保证（§5.1）。
 6. **观察侧不引用效应侧**（反向不编译）——由本节单向边 + crate 依赖方向保证（§4）。
@@ -704,7 +704,7 @@ fn compact_below_retention<Record, D: RetractableDelta>(journal: &mut Journal<Re
 
 **替代与不选理由。** 把执行历史也建成可撤回 delta——不选：负 diff 不能当外部 Write 的补偿，已发出的写不能被撤回代数抹成"从未发生"（§2.5）。让状态由规则原地修改而非 fold——不选：状态就无法随时重建与缓存，重放/审计失去依据。
 
-**状态。** 已定；两侧是否共用同一存储原语/表结构的成本待实测（抽象已裁决不共享）→ [未决 SP-3]。
+**状态。** 已定。两侧共用存储原语（§6.7.1 单 SQLite 文件、同一 `(stream_id, log_position)` 主键形状）是实现事实，不共享类型宇宙是设计事实；表结构是否物理共表由实现按写放大与查询成本定，不改本节。
 
 ### 3.2 消费方式与 gap
 
@@ -720,11 +720,13 @@ fn compact_below_retention<Record, D: RetractableDelta>(journal: &mut Journal<Re
 
 **gap 的三种来源**同一形状、按 `origin` 区分：
 
-- `Gap{origin: Source}`：集成断线，来源流有缺口（§3；新 epoch 首条记录后的补齐边界由 frontier 声明，域 P3/P4）。
-- `Gap{origin: Delivery}`：慢消费者或 conflated，投递有缺口。
-- `Gap{origin: Channel}`：对账取证渠道不可用（§5.4）。
+- `Gap{origin: Source, reason}`：来源流有缺口（§3；新 epoch 首条记录后的补齐边界由 frontier 声明，域 P3/P4）。`reason` 取 P3 的集合 `{start, disconnect, quota, ingress_overflow, credential_rotated, schema_change, backfill_incomplete, program_upgrade}`：`start`/`disconnect`/`quota`/`ingress_overflow` 由集成上报，`credential_rotated` 由会话重建（§6.1）、`schema_change` 由载荷版本变化（§6.3.4）、`backfill_incomplete` 由回填穷尽（§6.3.10）触发；程序产出的派生流也是来源，程序升级或 `Reset` 开新 epoch 时记 `program_upgrade`（§6.5）。
+- `Gap{origin: Delivery, reason}`：投递有缺口，`reason ∈ {slow_consumer, compacted, conflated}`（P3）：慢消费者被停投、订阅位置已被压缩到保留边界之下、`latest` 消费合并。程序是订阅消费者（§3.3 输入 = 位置推进），程序滞后被跳过的区间是它的 `Delivery` gap。
+- `Gap{origin: Channel, channel}`：对账取证渠道不可用（§5.4），`channel` 为返回 `Unavailable` 的那个渠道或回填操作。
 
 **集成崩溃的观察流面**：集成在**观察流侧**崩溃（订阅/推送进程掉线）时，仅波及其负责的流，记录为 `Gap{origin: Source}`，核心不受影响。这是集成崩溃两个故障面之一；另一面是集成在**写投放路径**（IO 壳 `submit`）中途崩溃，落 `NoResponse → Undetermined`。两面的唯一判别边界与能否并发在 §5.4 给出。
+
+**cursor 与确认。** 每个订阅者持有一个 `Set<LogPosition>` cursor，由核心作为唯一物理写者持久化（§6.7.2）。**确认 = 消费方已处理**：消费者向核心提交"已处理到 `LogPosition` p"，核心把 cursor 推进到 p；已投递未确认的记录是消费者内存里的事。确认前崩溃或断连后，核心从已确认 cursor 之后重投，所以同一记录可能被同一订阅者重复看到；重复只发生在未确认区间，消费者按 `LogPosition` 去重（每条记录的 `(StreamId, Seq)` 唯一，§2.3）。已确认区间不重投；退回 cursor 是显式控制动作（§6.4），不是恢复路径。程序订阅同样受此约束：程序状态 `Checkpoint` 与其 cursor 同事务持久化（§6.5、§6.7.2），因此程序重启后从其 checkpoint 对应的 cursor 续读，不会看到已折入状态的记录。
 
 ### 3.3 派生 DAG 与程序解释①
 
@@ -754,11 +756,11 @@ struct Program { nodes: Vec<DerivationNode>, rules: Vec<DecisionStep>, state: Ve
 **不变量。**
 - 执行状态不进入派生 DAG（无自反馈环）——由增量引擎的 height/cycle 约束保证。
 - 核心越小且越封闭，穷尽验证、预算控制与静态分析能力越强；构造子膨胀至 TradingView 当量即退化为 Pine-with-limits——由封闭构造子集保证（§2.4）。[证据：fp-01 M9/M10；fp-05 案例 14⑥]
-- 无写能力：程序无写能力，Intent 是值而非外部调用，capability token 仅用于授权而不执行动作；预算依赖宿主进程/沙箱隔离，而非类型系统（§5.1）。[证据：fp-03 命题 7；域 H2/H3]
+- 无写能力：程序无写能力，Intent 是值而非外部调用，capability token 仅用于授权而不执行动作；预算依赖宿主进程隔离（§6.5 受监督子进程），而非类型系统（§5.1）。[证据：fp-03 命题 7；域 H2/H3]
 
 **替代与不选理由。** 黑盒函数 `(State,Input)->(State,Output)`——不选：不可预算、不可静态检查、状态序列化仅靠作者承诺。增量在算法内部而非节点粒度——不选：记录渐进不要求算法渐进，节点粒度的 cutoff 足够且更简单。
 
-**状态。** 暂定（受 SP-5 约束）：小语言表达真实策略的能力与抗膨胀 → [未决 SP-5]；程序状态序列化/版本化/重放边界 → [未决 SP-4]。
+**状态。** 已定。程序表达力不足时加构造子（§2.4 扩展轴）；程序状态的序列化与重放边界由 `Checkpoint` 与 cursor 同事务持久化给出（§3.2、§6.5、§6.7.2）。
 
 ### 3.4 抽象：读副作用与读模型
 
@@ -777,7 +779,7 @@ struct Program { nodes: Vec<DerivationNode>, rules: Vec<DecisionStep>, state: Ve
 
 **替代与不选理由。** 让规则直接引用读模型（把它当权威）——不选：读模型是可重建 fold，一旦被规则依赖就要为它承担权威与一致性，违反"核心状态最小化"（§5.3）。为每个消费方各自 fold 而不提供读模型——不选：利益相关者 S10 要求 Alice 消费面可实现，重复 fold 是浪费且易分叉。
 
-**状态。** 已定（读模型的集合与 cursor/gap 一致性属核心↔Alice 契约的未决部分 → [未决 OD-3]）。
+**状态。** 已定；读模型的集合、`as_of` 与 gap 一致性在 §6.4。
 
 ### 3.5 `Pooled`：观察侧的可选扩展点
 
@@ -817,9 +819,9 @@ enum BasisValidity { Fresh, Stale(Lag), Retracted(LogPositions), BeyondRetention
 - `BeyondRetention`：两侧都可能——引用位置落到保留边界之下，不再能精确重建（§2.3）。
 - 执行事实侧的引用**不会因年龄变假**（只 append，§2.5）。
 
-有效性窗口是 `操作种类 × WriteLaneKey 策略` 的参数而非全局常量；未声明窗口的操作默认要求依据不晚于最近一次完备进度。**这条只读校验边界不参与两阶段协议**（§5.4），只决定是否进入 prepare——写的前置条件（依据有效性）向读侧延伸出的一条边界。§5.2 的单据在提交时**应用**此门（读取 `basis_validity == Fresh` 等状态字段），**不重新定义** `basis` 或其有效性语义。
+有效性窗口是 `操作种类 × WriteLaneKey 策略` 的参数而非全局常量。[设计] 未声明窗口的操作默认要求依据不晚于最近一次完备进度——理由：完备进度是"之前不再变"的唯一保证（§2.3），以它为默认使未声明策略的操作 fail-closed 于最保守的一侧，而不是静默接受任意滞后。**这条只读校验边界不参与两阶段协议**（§5.4），只决定是否进入 prepare——写的前置条件（依据有效性）向读侧延伸出的一条边界。§5.2 的单据在提交时**应用**此门（读取 `basis_validity == Fresh` 等状态字段），**不重新定义** `basis` 或其有效性语义。
 
-**`Prepared` 的双认。** `Prepared` 是同一条记录，是观察→效应单向边的**唯一接触点**：单据侧只认它是"我已交出"（`Close(Prepared(position))` 的结果，§5.2）；IO 壳只认它是"我该做的"（链起点 `Prepared → SendBarrier → …`，§5.4）。两边各认一半，中间隔着整条 STS 链。
+**`Prepared` 的双认。** `Prepared` 是同一条记录，是单据 → IO 壳的**唯一交出点**（两者同属效应宇宙，§2.5）：单据侧只认它是"我已交出"（`Close(Prepared(position))` 的结果，§5.2）；IO 壳只认它是"我该做的"（链起点 `Prepared → SendBarrier → …`，§5.4）。两边各认一半，中间隔着整条 STS 链。
 
 **归因记录归观察，响应归效应。** 归因字段落在观察记录上，但读它的处理器注册在效应侧：
 - **记录归观察**：`attribution` 落在订单/成交观察记录上。
@@ -874,18 +876,14 @@ Emit(EffectRequest { effect_kind: EffectKind, payload: Bytes, basis: Basis, key:
 
 **替代与不选理由。** 对每种副作用各加一个 `DecisionStep` 构造子——不选：代数随副作用膨胀、退化为 Pine-with-limits（§3.3）。让写处理器"轻量"消息直通不走规则链——不选：破坏不可信程序前提。
 
-**状态。** 已定；`Undetermined` 写结果与证据渠道的记录模型 → [未决 SP-1]。
+**状态。** 已定。
 
 #### 程序隔离运行时的前提
 
-程序无写能力，预算依赖宿主进程/沙箱隔离而非类型系统。隔离运行时的选择是未决项：
+程序无写能力，预算依赖宿主进程隔离而非类型系统。宿主 = **受监督子进程**（§6.5）：每程序一个宿主进程，预算由 OS 进程机制限制，状态经宿主协议以 `Checkpoint` 值显式序列化，不依赖运行时快照；§3.3/§5.1 的封闭值代数与两种解释不变——宿主仅是解释器的宿主，不进入设计中心。
 
-- **Wasm 仅在"三 OS（macOS / Linux / Windows）通用、开箱即用"的方案存在时才可选为隔离运行时。** 开箱即用的判定标准：(1) 作为普通 Rust 依赖引入即可在三 OS 构建与运行，无需系统级安装、外部工具链或平台特判；(2) 预算手段（fuel / 内存上限）与 trap 语义在三 OS 上表现一致；(3) 打包为独立二进制时无平台差异。
-- **已知事实**：Wasmtime 缺乏 live `Store` 快照/恢复 API，Component Model async ABI 尚未完成，fuel 虽能提供确定性指令预算但无法限制阻塞性 host 调用（`design/investigation/*`，§1.6.2）。上述属**能力缺口**而非三 OS 通用性缺口；通用性本身须在 spike 中按上述标准实测。
-- **降级路径**：若判定不成立，程序隔离退回**受监督子进程**：预算由 OS 进程机制限制，状态经内部协议显式序列化；§3.3/§5.1 的封闭值代数与两种解释保持不变——隔离运行时仅作为解释器的宿主，不进入设计中心。
-- **运行时状态要求**：无论采用何种运行时，程序状态都必须显式可序列化（[未决 SP-4]），不依赖运行时快照。
-
-→ [未决 SP-11]：依据判定标准实测 Wasm 在三 OS 上的开箱即用性与预算一致性，得出可/不可结论；不成立则退回受监督子进程。受监督子进程与 Wasm 都只是解释器宿主。核心↔程序宿主的完整协议（编译单元、装载、预算语义、状态迁移）属 §6.5，此处不给确定协议。
+- **为何不是 Wasm**：Wasmtime 缺乏 live `Store` 快照/恢复 API，Component Model async ABI 尚未完成，fuel 虽能提供确定性指令预算但无法限制阻塞性 host 调用（§1.6.2）；三 OS 开箱即用（作为普通 Rust 依赖即可构建运行、预算与 trap 语义一致、独立二进制无平台差异）未证。这些是能力缺口，足以不选它作初始宿主；它可作实现阶段的替代宿主，走同一宿主协议（§6.5），不改设计。
+- **运行时状态要求**：程序状态只经 `Checkpoint{bytes, state_version}` 序列化，与程序 cursor 同事务持久化（§6.7.2）。
 
 ### 5.2 单据 `Ticket`：意图形成期的抽象
 
@@ -920,23 +918,23 @@ type IntentAlignment = Map<CheckName, Aligned | Diverged(Divergence) | Undecidab
 enum TicketAction<Intent> {
     Draft   { by: Principal, initial: Intent, basis: Basis },  // 建立单据 = 取得锁 = 声明负责
     Revise  { by: Principal, next: Intent, basis: Basis },     // 仅 responsible；追加版本，current_version 前进
-    Transfer{ from: Principal, to: Principal },               // 显式移交，记录，不静默
+    Transfer{ by: Principal, from: Principal, to: Principal },  // 显式移交，记录，不静默；by = from（自愿）或持有控制授权的 principal（强制，§6.4）
     SubmitForDecision { by: Principal, at: Hash },           // 送审：冻结 current_version，Drafting → AwaitingDecision
     SendBack { by: Principal, reason },                      // 审批退回：AwaitingDecision → Drafting，responsible 不变
-    Close   { outcome: Prepared(LogPosition) | Withdrawn | DecisionRejected | Expired },  // 锁消失
+    Close   { outcome: Prepared(LogPosition) | Withdrawn | DecisionRejected | Expired },  // 锁消失；Withdrawn 仅 responsible，DecisionRejected 仅决定者，Expired 仅过期规则，Prepared 仅放行链
 }
 ```
 
 - **锁的本质是 `responsible` 字段**：`Draft` 即取锁，`Close` 即释放；持锁期间仅 `responsible` 可 `Revise`/`SubmitForDecision`，其他 principal 的 `Revise` 被拒绝（不排队、不产生分支）。
 - **`TicketAction` 均为 append 记录**：每条带 principal 与依据 `LogPosition`；`Ticket` 自身是这些记录的 fold（§3.1 `fold_state`），不是原地修改的对象。"锁"因此也是记录的解释：`responsible` 由最近一次 `Draft`/`Transfer` 决定。
-- **穷尽转移表**：`Drafting --Revise--> Drafting`、`Drafting --SubmitForDecision--> AwaitingDecision`、`AwaitingDecision --SendBack--> Drafting`、`AwaitingDecision --Close(Prepared)--> Closed`、任意 `--Close(Withdrawn|DecisionRejected|Expired)--> Closed`、`Drafting|AwaitingDecision --Transfer--> 同态`。`AwaitingDecision` 期间 `Revise` 被拒（决定绑定的 current_version 不能变，C11）。
+- **穷尽转移表**：`Drafting --Revise--> Drafting`、`Drafting --SubmitForDecision--> AwaitingDecision`、`AwaitingDecision --SendBack--> Drafting`、`AwaitingDecision --Close(Prepared)--> Closed`、`Drafting|AwaitingDecision --Close(Withdrawn|Expired)--> Closed`、`AwaitingDecision --Close(DecisionRejected)--> Closed`、`Drafting|AwaitingDecision --Transfer--> 同态`。`Closed` 无出边：之后任何 `TicketAction` 被拒（含再次 `Close`）；`Prepared` 之后的命运属 Attempt 链（§5.4），不再经单据。触发者：`Withdrawn` 由 `responsible` 发起；`DecisionRejected` 由决定者；`Expired` 由 STS 过期步（H6）；负责人失联时的强制 `Transfer` 由持有控制授权的 principal 经 `transfer` 发起（§6.4），`Expired` 仍由过期步。`AwaitingDecision` 期间 `Revise` 被拒（决定绑定的 current_version 不能变，C11）。
 - **与写边界的接口**：决策链（§5.3）对 `AwaitingDecision(current_version)` 放行后 append `Prepared`，并在同一事务中 `Close(Prepared(position))`。单据与 IO 壳之间有两条**都经记录中介、方向相反**的流：写向——单据 → `Prepared` 记录 → IO 壳（唯一的交出点）；读向——IO 壳 append 的记录 → 单据的 `basis`/检查项。IO 壳不知道单据的存在。
 
 **从哪推出。** 意图在 `Prepared` 之前是脚本/值：两个 AI 对同一个暂存订单编辑，这时根本不是一般数据库事务形态下的锁——等于事务还没提交，外面有人想改 SQL 脚本。草稿是否自己就是个锁，这才是 UTA 里加锁的地方；单据本身就是锁。
 
 #### 偏离、门、钩子与撤改单
 
-- **偏离是状态，不是动作**：`basis_validity` 与 `alignment` 均为单据 fold 的一部分（作为派生 DAG 节点，解释①），在依据引用的流推进、被撤回、出现 gap 或能力证据变化时重算，本身不是 `TicketAction`。因此**单据是否偏离是状态字段，不需要外部触发对账**；单据始终知道自己与世界的关系。§4 只读校验门在提交时退化为读取 `basis_validity == Fresh` 及策略要求的必要项；`AwaitingDecision` 期间世界变了，审批人看到的就是一张 `Diverged` 单据，不需要另一套失效逻辑。
+- **偏离是状态，不是动作**：`basis_validity` 与 `alignment` 均为单据 fold 的一部分——用 §2.4 的组合子（`AlignmentCheck.eval` 是 `Comb<Observed, CheckResult>`）与 §3.1 的 `fold_state` 机制在**效应侧**评估，输入是 `TicketAction` 记录与经 `basis` 读到的观察值。在依据引用的流推进、被撤回、出现 gap 或能力证据变化时重算，本身不是 `TicketAction`。因此**单据是否偏离是状态字段，不需要外部触发对账**；单据始终知道自己与世界的关系。§4 只读校验门在提交时退化为读取 `basis_validity == Fresh` 及策略要求的必要项；`AwaitingDecision` 期间世界变了，审批人看到的就是一张 `Diverged` 单据，不需要另一套失效逻辑。
 - **编辑 diff 是另一类派生副作用，与偏离不同**：单据是不可变量的线性版本链，每次 `Revise` 都是一个 diff（`version_n → version_{n+1}`），而这个 diff 本身触发副作用。它与对账产生的偏离方向相反，必须分开收束：
 
   | | 编辑 diff | 偏离（对账 diff） |
@@ -953,8 +951,8 @@ enum TicketAction<Intent> {
 - **`InputMissing` 是可行动的**：缺的输入若 venue 有一次性查询能力，发一次只读查询就产生一条观察记录（§3.4），该项随即可算——读是安全的、可批处理的（§2.2）。策略可选"先查后判"、"无该项对账则人工"、"无该项对账则不发"；真正的"不能对账"= 缺的输入没有任何渠道可得，这由能力证据说了算。
 - **钩子的输入是观察值及其出处**：派生 `Journal` 的 `fold_state`、能力证据、归因后的订单观察。执行事实记录只作**身份与因果依据**（`basis` 中的 `VenueAccepted`/`SendBarrier` 位置），不进钩子的 `eval`。归因后的订单观察是**记录**（集成或 IO 壳产出并带出处），不是读模型；"规则不引用读模型"不放宽。
 - **撤单与改单 [交易协议]：目标身份是构造前提，"仍在"是 advisory**：撤单/改单意图类型在构造时**必须**携带目标身份 `target: VenueRef | IdemKey`（parse-don't-validate），无目标即构造不出意图，不需要事后规则。身份来源三种，身份进意图的 `target`，其来源记录的位置进 `basis`：本地 `VenueAccepted(venue_order_id)`；本地 `SendBarrier` 的幂等键（无回执的提交）；归因观察记录中的 venue 身份（外部订单，F9/P11）。构造期只保证"目标存在且与账户作用域匹配"，**不**保证 venue 此刻支持按该身份撤单（那是运行期能力检查项：有幂等键 ≠ 有 cancel-by-key，F6）。"原单仍在"来自观察侧 listing，按 F10 只能是 advisory，永不作为撤单放行的必要项——否则最安全的动作在 listing 滞后时被 fail-closed。
-- **改单是单一意图类型 `Replace` [交易协议]，不是两张单据**：venue 有原子 cancel/replace 能力就一个操作；没有，IO 壳在**同一条 Attempt 链**里解释为 `SendBarrier(cancel) → 目标订单终态证据 → SendBarrier(new)`，新单数量按意图声明的口径（剩余量或绝对量）从撤单腿的终态观察（含累计成交量）算出——这是 `>>=`，第二腿读第一腿的结果，发生在 IO 壳内，不是单据层的两次起单。撤单腿 `Undetermined` 时整条链停在对账，新单腿不发。
-- **`ResolutionEvidence` 指尝试，终态与成交量是观察记录**：执行侧 `ResolutionEvidence` 的 found/absent 回答"我的提交到达了吗"；派生侧观察记录反映目标订单的终态与累计成交量。二者来自同一次 venue 交互，落两侧各一条记录；共享一次输入是设计事实 → [未决 SP-1]。
+- **改单是单一意图类型 `Replace` [交易协议]，不是两张单据**：venue 有原子 cancel/replace 能力就一个操作；没有，IO 壳在**同一条 Attempt 链**里解释为 `SendBarrier(cancel) → 目标订单终态证据 → SendBarrier(new)`，新单数量按意图声明的口径（剩余量或绝对量）从撤单腿的终态观察（含累计成交量）算出——这是 `>>=`，第二腿读第一腿的结果，发生在 IO 壳内，不是单据层的两次起单。撤单腿 `Undetermined` 时整条链停在对账，新单腿不发；撤单腿收敛后新单腿仍要过发出前门（§5.4），意图的 `deadline` 已过则记 `Expired(deadline)`、新单腿永不发出。
+- **`ResolutionEvidence` 指尝试，终态与成交量是观察记录**：执行侧 `ResolutionEvidence` 的 found/absent 回答"我的提交到达了吗"；派生侧观察记录反映目标订单的终态与累计成交量。二者来自同一次 venue 交互，同一事务落两侧各一条记录，`Found` 以位置引用那条观察记录（记录模型在 §5.4）。
 - **检查是纯函数、按 `Intent` 分派**：下单看价格/资金/持仓/能力；撤单看能力（可按目标身份撤）+ advisory 仍在；`Replace` 看撤单项 + 新单项。新意图类型 = 新的检查集，核心不变。
 
 #### 意义与产品规则
@@ -973,7 +971,7 @@ enum TicketAction<Intent> {
 
 **替代与不选理由。** 互斥原语作锁——不选：死锁、超时释放复杂；`responsible` 字段无这些（代价见权衡）。分叉/合并（git 式）修补协作——不选：一次订单草稿理应只有一种交易意图，借线性历史不借分叉合并（C11）。外部触发对账——不选：单据统一对账钩子使偏离成为状态问题，不需外部触发。
 
-**状态。** 已定；共享一次 venue 交互落两侧记录的输入契约 → [未决 SP-1]。
+**状态。** 已定。
 
 #### 权衡
 
@@ -1005,15 +1003,15 @@ trait Rule {
 
 #### 顺序固定链：授权 → 输入约束 → 审批 → lane → 过期
 
-规则组合分两类：**可交换集**（相互独立的 guard，以交换性测试保证）与**顺序固定链**（由代码固定执行顺序并测试）。不存在"任意装配顺序均不改变结果"的默认前提。[证据：fp-03 命题 6] 顺序固定链五步，每步读前一步 append 的记录（§2.2 推论 3）：
+规则组合分两类：**可交换集**（相互独立的 guard，以交换性测试保证）与**顺序固定链**（由代码固定执行顺序并测试）。不存在"任意装配顺序均不改变结果"的默认前提。[证据：fp-03 命题 6] 分类 [设计]：五步之间是顺序固定链（每步读前一步 append 的记录，§2.2 推论 3）；可交换集只出现在**一步之内**——输入约束步的各守卫字段校验、授权步的各 scope 判定彼此独立，以 `Validated` 累积并要求交换性测试；跨步的守卫一律不可交换。顺序固定链五步：
 
 | 步 | 读什么 / 做什么 | 依据 |
 |---|---|---|
 | 授权 | 哪些 principal 的记录足以让写进入 prepare；写处理器的装载 principal 授权范围决定能否不经人工直接放行 | §5.5；C11 |
 | 输入约束 | 守卫字段校验：instrument 属目标账户、数量/名义有限为正、子账户已枚举、side/名义金额阈值 | C9/C10；§2.2 守卫字段处理器 |
 | 审批 | 策略要求人工则送审；审批带版本；另一笔过期未决独立处理 | C3；H6 |
-| lane | 写通道有序队列；队首 `Undetermined` 时后续等待（下文） | H4 |
-| 过期 | `deadline` 过期规则；过期 = 否决记录，不补偿 | H6 |
+| lane | 读该 `WriteLaneKey` 的阻塞头（`RuleState`）：lane 上存在未终结 Attempt（`Prepared` 无 `SendBarrier`、`SendBarrier` 无后继、`Undetermined` 未 `Resolved`，§5.4）时本笔停在此步，单据保持 `AwaitingDecision`，不产生 `Prepared`；阻塞头终结后放行到下一步 | H4 |
+| 过期 | `deadline` 过期规则，以 `Input::超时` 触发；`AwaitingDecision` 期间（含停在审批步或 lane 步时）到期 = `Close(Expired)` 否决记录，不补偿 | H6 |
 
 **放行前的依据有效性门**：进入 `Prepared` 前，链读取单据 fold 的三项状态——`basis_validity == Fresh`（§4）、必要项 `alignment` 为 `Aligned`（§5.2）、`AwaitingDecision(current_version)` 与决定绑定的版本一致；任一不满足 → `PredicateFailure`（fail-closed，C12），不发出。规则**不自己算**这三项——它们是单据 fold 已经算好的状态字段（§5.2）。此门即 §4 只读校验边界在 STS 链上的读取点，不参与两阶段。
 
@@ -1028,23 +1026,23 @@ trait Rule {
 
 **队首阻塞协议语义。**
 - **队首阻塞是通讯协议的一部分，不是 UTA 选择的锁**。提交属于消费动作，仅在消费者自身有权消费时才存在加锁概念；UTA 无权决定是否消费，消费方始终是 venue。
-- **等待机理**：lane 队首处于 `Undetermined` 时后续操作必须等待，因为**后续写入的语义依赖队首结果**（同账户 buying power、待撤订单是否存在、venue 侧顺序）。此乃与 venue 的通讯协议语义，而非数据库层面的并发互斥。
+- **等待机理**：lane 上有未终结 Attempt（最长的情形是队首 `Undetermined`）时后续意图必须等待，因为**后续写入的语义依赖队首结果**（同账户 buying power、待撤订单是否存在、venue 侧顺序）。此乃与 venue 的通讯协议语义，而非数据库层面的并发互斥。**等待发生在 `Prepared` 之前**：等待者是 `AwaitingDecision` 的单据，不是已放行的记录；因此同 lane 至多一条未终结 Attempt，`Prepared` 一旦 append 即由 IO 壳紧接执行。等待期间单据的 `basis_validity`/`alignment` 照常重算（偏离是状态，§5.2），放行时链重新过依据有效性门；等待超过 `deadline` 由过期步 `Close(Expired)` 终结。
 - **无第二类越顶队列**：队首仅允许执行决议动作（按键查询、listing、成交/持仓对账及作为决议手段的 cancel-by-key），这些动作属于 IO 壳的对账协议而非队列项。
-- **显式绕过**：带 principal 的显式绕过仍可存在，但必须记录为 Decision 并记为**对协议的自觉违反**，不是队列的一种模式。
+- **显式绕过**：带 principal 的显式绕过仍可存在，但必须记录为 Decision 并记为**对协议的自觉违反**，不是队列的一种模式。绕过的语义 [设计]：绕过使该单据越过 lane 步进入 `Prepared`，于是该 lane 同时存在多条未终结 Attempt——lane 的阻塞头因此是**未终结 Attempt 的集合**而非单条；每条 Attempt 由各自的对账驱动独立收敛（§5.4），集合清空即 lane 解除，不存在"部分解除"；绕过只影响本 lane。绕过记录带 principal 与被绕过的阻塞头位置集，是审计事实。
 
 lane 的有序与队首阻塞来自通讯协议，不是 UTA 抢占通道的锁；无锁定位见 §5.5。
 
 **从哪推出。** 提交是消费动作，消费方始终是 venue，UTA 从头到尾自己都不能决定是否消费，所以"队首阻塞"只能是与 venue 的通讯协议语义，而非 UTA 的锁；lane 的键取自握手 `WriteScope`，因为核心不知道也不该知道上游账户结构（§2.2）。[域 H4/H1；证据：fp-03 条目 7]
 
 **不变量。**
-- 任一 `Undetermined` 记录在 `Resolved` 前，同 lane 无新 Attempt——由队首阻塞协议 + IO 壳按序推进保证（§5.4）。
+- 任一 `Undetermined` 记录在 `Resolved` 前，同 lane 无新 Attempt（显式绕过除外，它以 Decision 记录在案并扩大阻塞头集合）——由队首阻塞协议 + IO 壳按序推进保证（§5.4）。
 - 组合状态是具名 struct、组合 rejection 是具名 enum，每变体 `From` 一条子规则 rejection；两层封闭——由具名类型 + `From` 保证。
 - 核心不定义全局 effect enum；记录类型按 stream 参数化——由 decider per stream 保证。
 - 显式绕过必须记录为 Decision——由绕过语义保证。
 
 **替代与不选理由。** cardano 式泛型 `Embed` 组合规则——不选：Rust 无类型级和/积自动构造，泛型嵌套是 O(N²) 样板或退化到 `BoxError` catch-all；规则集本就闭合，具名 struct/enum 更直接。全局 effect enum——不选：按 stream 参数化（Equinox 模式）避免全局耦合。"任意装配顺序不改变结果"作默认前提——不选：fp-03 命题 6 表明不成立，须区分可交换集与顺序固定链。
 
-**状态。** 已定；规则组合的可交换性分类表与三层规则样板量实测 → [未决 SP-9]；lane 并发协议（多 unknown 叠加、部分收敛）与解除阻塞条件 → [未决 SP-7]。
+**状态。** 已定。
 
 ### 5.4 写边界：IO 壳、两阶段、`Undetermined`、决议、崩溃恢复
 
@@ -1069,9 +1067,9 @@ unknown 并非孤立的类型问题，其实质是一个**对账系统**；写�
 | Haskell | UTA |
 |---|---|
 | `IO a` 值（纯，可构造、可组合、可检查） | `Prepared` 记录：已持久化的"将对 venue 做什么"的描述；构造过程（草稿 → 决策 → append）不接触 venue |
-| `>>=` 组合：后一步依赖前一步的结果 | lane 队列：后一条 `Prepared` 的语义依赖队首结果，故按序执行（§5.3） |
+| `>>=` 组合：后一步依赖前一步的结果 | lane 全序：同 lane 后一个 Attempt 的语义依赖前一个的终态，故 STS 的 lane 步在前一个未终结时不放行下一个（§5.3）；复合链的第二腿读第一腿的终态（§5.2） |
 | runtime 运行 `main` | IO 壳解释 `Prepared` 链：系统中唯一产生外部副作用的环节 |
-| 效果发生后只剩结果值与外部状态变更 | 效果发生后只剩 append 的记录（`VenueAccepted`/`VenueRejected`/`Undetermined`/`ResolutionEvidence`）与 venue 侧变更 |
+| 效果发生后只剩结果值与外部状态变更 | 效果发生后只剩 append 的记录（`VenueAccepted`/`VenueRejected`/`Undetermined`/`ResolutionEvidence`；未发出即到期则 `Expired`）与 venue 侧变更 |
 | `unsafePerformIO` 是禁忌 | 规则、程序、集成、消费方直接调用 venue 写接口是禁忌 |
 | 纯代码可随意重算，`IO` 不能 | 派生侧与决策可以重放重算，`Prepared` 的实际执行不能重放 |
 
@@ -1079,13 +1077,15 @@ unknown 并非孤立的类型问题，其实质是一个**对账系统**；写�
 
 **抽象的四个面：**
 - **位置**：单据（§5.2）与 STS 决策（§5.3）位于上游，产出 `Prepared` 记录；读模型与消费方位于下游，只读记录。IO 壳是核心中**唯一**把记录变成 venue 动作、把 venue 响应变成记录的地方；核心内不存在第二处接触集成进程写接口的路径。
-- **输入**：按 lane 顺序 tail 执行事实 `Journal` 上的 `Prepared` 记录，以及对账驱动所需的证据响应。
-- **输出**：只有 append——`SendBarrier`、`VenueAccepted(venue_order_id)`、`VenueRejected(reason)`、`Undetermined(reason)`、`ResolutionEvidence(channel, found|absent|inconclusive, raw)`、`CapabilityObserved`、`Gap{origin: Channel}`。IO 壳**不修改**任何记录，不持有权威状态；重启后其全部状态由 `fold_state` 重建。
-- **代数**：每个 Attempt 对应一条线性阶段链 `Prepared → SendBarrier → (VenueAccepted | VenueRejected | Undetermined) → ResolutionEvidence* → Resolved`。venue 无原子能力时，`Replace` 是该链上两个连续的 `SendBarrier` 腿（§5.2），腿间依赖由链的顺序保证。IO 壳是链的驱动器，每一步转移由 `venue 回应类型 × 该 (venue, op) 的能力证据 × 超时参数` 决定。链是闭合 sum，转移表穷尽，没有"其他"分支（C13）。
+- **输入**：执行事实 `Journal` 上的 `Prepared` 记录（每 lane 至多一条未终结，§5.3），以及对账驱动所需的证据响应。
+- **输出**：执行事实侧只有 append——`SendBarrier`、`VenueAccepted(venue_order_id)`、`VenueRejected(reason)`、`Undetermined(reason)`、`Expired(deadline)`、`ResolutionEvidence`、`CapabilityObserved`、`Gap{origin: Channel}`。`Undetermined` 的 `reason` 封闭为 `NoResponse`（`submit` 无业务回执，§6.3.5）与 `CrashWindow`（重启时 `SendBarrier` 无后继，下文"恢复"）；二者进入同一对账驱动，只是审计出处不同。**取证记录模型** [设计]：取证是读（§3.4），一次 venue 交互在**同一 SQLite 事务**内落两条记录——观察 `Journal` 上一条观察记录（venue 返回的订单/成交状态，带 `provenance: Reconciliation{attempt_position, channel}` 与归因），供复合链读终态、供单据钩子与读模型消费；执行事实侧一条 `ResolutionEvidence{attempt_position, channel, outcome}`，其中 `outcome ∈ {Found(observation: LogPosition), Absent, Inconclusive}`，`Found` 以位置引用那条观察记录（效应→观察方向，与 `basis` 同向，§2.5）。人工决议是同一记录类型的 `Manual{principal, outcome, note}` 变体。IO 壳**不修改**任何记录，不持有权威状态；重启后其全部状态由 `fold_state` 重建。
+- **代数**：**Attempt** = 一条 `Prepared` 记录及其后继阶段链，身份 = `attempt_position`（该 `Prepared` 的 `LogPosition`）。每个 Attempt 对应一条线性阶段链 `Prepared → [发出前门] → (SendBarrier → (VenueAccepted | VenueRejected | Undetermined) → ResolutionEvidence*) | Expired(deadline)`。venue 无原子能力时，`Replace` 是该链上两个连续的腿（§5.2），每条腿各过一次发出前门与各自的 `SendBarrier`，腿间依赖由链的顺序保证。IO 壳是链的驱动器，每一步转移由 `venue 回应类型 × 该 (venue, op) 的能力证据 × 超时参数 × deadline` 决定。链是闭合 sum，转移表穷尽，没有"其他"分支（C13）。
+  - **发出前门**：IO 壳在为任一腿 append `SendBarrier` 之前读该 `Prepared` 自带的 `deadline` 字段（效应侧处理器字段，§2.2/§6.3.3；单据已 `Closed`，IO 壳不读单据）：未过则继续；已过则 append `Expired(deadline)` 终结该链，永不发出、不补偿（H6 在放行之后的延伸）。正常路径上放行与发出在同一 lane 步之后紧接发生，此门几乎不可能失败；它**可达的两个窗口**是崩溃恢复（`Prepared` 无 `SendBarrier`，§7.2 #2）与复合链腿间（前一腿停在对账期间到期，§7.2 #8、Q27）。`Expired` 是链终态：lane 随之解除，不进对账。
+  - **`Resolved` 是 fold 状态，不是记录**：链达终态即 `Resolved`——`VenueAccepted`、`VenueRejected`、`Expired` 直接终结；`Undetermined` 在出现 `found`/`absent` 的 `ResolutionEvidence` 或带 principal 的人工 `ResolutionEvidence` 后终结。取证渠道集取自该 (venue, op) 当前能力证据（§6.7.2），渠道顺序固定（下文），已取证渠道 = 已 append 的 `ResolutionEvidence`；因此"渠道穷尽"与"下一渠道"都由 fold 重建（§7.2 #7）。
   - **`SendBarrier` 是发送屏障**：durable append（fsync）之后才允许调用 `submit`。它把崩溃窗口二分：`Prepared` 无 `SendBarrier` = **确未发出**；`SendBarrier` 无后继 = **可能已发出**（先例：PostgreSQL `EndPrepare` 先 `XLogFlush` 再 `MarkAsPrepared`）。[证据：fp-06 修正 5]
-  - **`VenueAccepted` 只认 venue 业务级回执**（订单被受理并给出 venue 身份 / FIX application-level ExecutionReport）。传输 ACK、HTTP 5xx、超时、集成崩溃**都不是** `VenueAccepted`，全部落 `Undetermined`。因此集成的 `submit` 只在取得业务回执时返回 `Ack(venue_id)`，否则返回 `NoResponse`。[证据：fp-06 修正 3]
+  - **`VenueAccepted` 只认 venue 业务级回执**（订单被受理并给出 venue 身份 / FIX application-level ExecutionReport）。传输 ACK、HTTP 5xx、超时、集成崩溃**都不是** `VenueAccepted`，全部落 `Undetermined`。因此集成的 `submit` 只在取得业务回执时返回 `Ack(venue_id)` 或业务级 `Reject(reason)`（→ `VenueRejected`），否则返回 `NoResponse`（§6.3.5）。[证据：fp-06 修正 3]
 
-> IO 壳对集成的操作集（IDL，小且闭合：`handshake`/`submit`/`query_by_key`/`list_open`/`list_fills`/`cancel`/`replay_by_key`）是核心↔集成契约，属 §6.3；本节只用其语义。**完整操作集与返回值见 §6.3**。`NoResponse` 与 `Unavailable` 是一等返回值而非异常。
+> 核心对集成的操作集（IDL，小且闭合：`handshake`/`submit`/`query_by_key`/`list_open`/`list_fills`/`cancel`/`replay_by_key`/`backfill`）是核心↔集成契约，属 §6.3；IO 壳只用其中的写与取证操作，`backfill` 由订阅侧发起。**完整操作集与返回值见 §6.3**。`NoResponse` 与 `Unavailable` 是一等返回值而非异常。
 
 #### 对账驱动的自动化边界
 
@@ -1096,7 +1096,7 @@ unknown 并非孤立的类型问题，其实质是一个**对账系统**；写�
 
 #### 崩溃恢复与集成崩溃两故障面
 
-**恢复**：恢复时 IO 壳从日志重建各 lane 的链状态：`Prepared` 无 `SendBarrier` 者仍是可安全发送的 `Prepared`；`SendBarrier` 无后继者 append `Undetermined(crash_window)` 进入对账驱动。IO 壳不 `submit` 任何已有 `SendBarrier` 的记录。
+**恢复**：恢复时 IO 壳从日志重建各 lane 的链状态：`Prepared` 无 `SendBarrier` 者仍是可安全发送的 `Prepared`，过发出前门后发送或 `Expired`；`SendBarrier` 无后继者 append `Undetermined(CrashWindow)` 进入对账驱动。IO 壳不 `submit` 任何已有 `SendBarrier` 的记录。
 
 **集成崩溃两故障面并列（判别边界）**：集成崩溃按崩溃发生在哪条路径分为两个面，判别边界唯一——**崩溃是否落在 IO 壳的 `submit` 写投放路径上**：
 
@@ -1112,17 +1112,18 @@ unknown 并非孤立的类型问题，其实质是一个**对账系统**；写�
 **不变量。**
 - IO 壳是核心中唯一把记录变成 venue 动作的地方，不修改记录、不持权威——由 §2.5 关系表与 `fold_state` 重建保证。
 - `Prepared` 无 `SendBarrier` = 确未发出；`SendBarrier` 无后继 = 可能已发出；IO 壳不 `submit` 已有 `SendBarrier` 的记录——由发送屏障 fsync 屏障保证。
+- 每条腿发出前过 `deadline` 门；过期即 `Expired(deadline)` 终结，永不发出——由发出前门保证；链的每个 `Prepared` 必达且只达一个终态（`VenueAccepted`/`VenueRejected`/`Expired`/`Undetermined` 后收敛）——由闭合 sum 保证。
 - `VenueAccepted` 只认业务回执，其余落 `Undetermined`——由 `submit` 返回契约保证。
 - `Undetermined` 未 `Resolved` 时同 lane 不产生新 Attempt；`inconclusive` 停人工，IO 壳永不 heuristic——由对账驱动 + 队首阻塞保证。
 - 取证（读副作用）可重试，`submit`（写副作用）永不重试——由 §5.5 两类副作用保证。
 
 **替代与不选理由。** 把 IO 壳做薄（"就是个 HTTP 调用"）——不选：会让两阶段、unknown 与队列语义散落至规则与集成里。用泛型 typestate 保证发送屏障——不选：泛型 typestate 在崩溃恢复路径失效（从记录重建不能产回不同类型），故用 move-semantics token（`SendBarrier` 无 `Copy`、构造器私有且内含 durable append，`submit` 只接受 `SendBarrier` 值），静态保证只覆盖首执一次的调用栈，恢复路径全部是运行期 enum。把 timeout 当收敛终态（单阶段"发一次超时算失败"）——不选：无一先例把 timeout 当终态，会造成重复投放或漏单。宣称"unknown 的可组合代数"——不选：9 个一手案例未见"多个 unknown 组合成新 unknown"的运算，不写成行业无先例。[证据：fp-06 修正 2/4/5]
 
-**状态。** 已定；发出后-持久化前崩溃窗口的恢复协议实测（SQLite WAL/fsync 崩溃注入于 `Prepared`/`SendBarrier`/`submit` 各窗口，验证不重复投放）与 unknown 写结果记录模型 → [未决 SP-1]、[未决 SP-10]。
+**状态。** 已定。崩溃窗口的恢复协议以 fsync 崩溃注入验收（§8.5 #8：`Prepared`/`SendBarrier`/`submit` 各窗口不重复投放）。
 
 **权衡。**
-- IO 壳是效应侧**最大**的组件而非最薄的；代价是内部转移表与渠道策略是设计重点，需走查与 spike（SP-1/SP-7/SP-10）。
-- 它的一切状态都是记录：每一步取证都写日志（体积与噪音），换来重启零丢失与审计完整（SP-8）。
+- IO 壳是效应侧**最大**的组件而非最薄的；代价是内部转移表与渠道策略是设计重点，由 §7 走查与 §8.5 #8/#17 验收覆盖。
+- 它的一切状态都是记录：每一步取证都写日志（体积与噪音），换来重启零丢失与审计完整；留存由 §2.3 保留语义与 §6.7.3 运行期参数约束。
 - 它与集成之间是 JSON-RPC（§6.1/§6.3）：集成在 `submit` 中途崩溃 = `NoResponse` = `Undetermined`。
 - **单据锁在它之外**（§5.2 属于意图形成期）；因此"UTA 唯一的锁"与"IO 壳内没有锁"两句同时成立。
 
@@ -1137,7 +1138,7 @@ unknown 并非孤立的类型问题，其实质是一个**对账系统**；写�
 | 对外 | 不改变世界；可重复、可批处理、可并发、可丢 | 改变世界；一次；不可批、不可去重、不可重放 |
 | 结果 | 总是可判定（拿到了或没拿到） | 可能不可判定（`Undetermined`） |
 | 失败处理 | 重试、换渠道、标 gap | 对账，永不重试 |
-| 对内的副作用 | append 观察记录、推进进度、触发处理器与 DAG 重算、唤醒程序、更新单据 `alignment` | append 执行事实、推进 lane、关闭单据 |
+| 对内的副作用 | append 观察记录、推进进度、触发处理器与 DAG 重算、唤醒程序、更新单据 `alignment`；对账取证还 append 执行事实侧的 `ResolutionEvidence`（记录"我为这次尝试问过谁、得到什么"，§5.4） | append 执行事实（`SendBarrier`/回执/`Undetermined`/`Expired`）、推进 lane、关闭单据 |
 | 时间 | 事件时间 + 收到时间 | 只有发出时间（venue 的时间是回执的观察） |
 | 发起者 | 任何人：集成推送、程序、钩子的 `InputMissing` 取证、消费方、IO 壳的对账取证 | 只有 IO 壳 |
 | 机制 | 进度、保留、去重、批处理 | 单据锁、STS 链、lane、两阶段、证据 gate |
@@ -1179,9 +1180,9 @@ money/quantity 为 [交易协议] 处理器的值类型，不进信封（§2.2 �
 | 金额 | 精确有理数/定点数 + 货币索引；离散化返回余数，不静默丢钱 | fp-04 命题 1 safe-money |
 | 数量 | 精确数值；**不**做"数量带 instrument 尺度"（无证据） | — |
 | 身份 | 上游身份一律 `(venue, native_id)` opaque + 智能构造器，出现在三处：投影里的 `WriteLaneKey`/`StreamId`（§2.2）、意图的 `target`（§5.2）、观察记录的 `attribution`（§4）；instrument 只在 venue 作用域内有意义；换名不是安全，隐藏构造器才是 | fp-04 命题 16；域 F2 |
-| 时间 | `occurred_at` / `received_at` 分离；deadline 用单调钟；顺序只有 `(stream, seq)` 偏序 | fp-04 命题 9/11；域 F11 |
+| 时间 | `occurred_at` / `received_at` 分离；`deadline` 以 UTC 时刻声明并随记录持久化（发出前门与过期步跨重启仍可比），运行期计时器用单调钟；顺序只有 `(stream, seq)` 偏序，不由任何时钟推导 | fp-04 命题 9/11；域 F11 |
 | 错误 | 每规则封闭 sum；venue 映射保留 `Unmapped` | fp-04 命题 8；域 C13 |
-| 外部写结果 | `Prepared \| SendBarrier \| VenueAccepted \| VenueRejected \| Undetermined` + `ResolutionEvidence` 记录，非 `Option`/字符串 | fp-06 命题 1（MongoDB `UnknownTransactionCommitResult`、Oracle in-doubt）；fp-01 M11 DAML 反例 |
+| 外部写结果 | `Prepared \| SendBarrier \| VenueAccepted \| VenueRejected \| Undetermined \| Expired` + `ResolutionEvidence` 记录，非 `Option`/字符串 | fp-06 命题 1（MongoDB `UnknownTransactionCommitResult`、Oracle in-doubt）；fp-01 M11 DAML 反例 |
 
 这些是核心**计算**处出现的值类型（守卫字段、`cumulative_filled_quantity`、程序/钩子解释器），不是信封类型；信封不含价格（§2.2）。
 
@@ -1198,7 +1199,7 @@ flowchart TB
   subgraph OSUSER["信任边界 = 一个 OS 用户（H7）"]
     CORE["UTA 核心进程<br/>独占 SQLite；持有 Journal、规则状态、单据、lane、IO 壳、读模型"]
     INT["集成进程 × N<br/>协议清洗 → 信封 + 载荷；凭据终点；独立故障域"]
-    HOST["程序宿主 × M<br/>Wasm 或受监督子进程；解释 §5 值树；预算隔离"]
+    HOST["程序宿主 × M<br/>受监督子进程；解释 §5 值树；预算隔离"]
     HPCOP["可选原生 op 进程 × K<br/>读 Pooled 段视图；不属于核心"]
     SEAL["统一路径封存文件<br/>（OPENALICE_HOME 下）"]
   end
@@ -1215,18 +1216,24 @@ flowchart TB
 ```
 
 - **独立生命周期**：核心独立启动、独立存活、独立停止。Alice 退出、崩溃或重启均不改变核心的订阅、程序、lane 与日志——订阅与程序的 owner 是核心（来源：H5/C5）。断连期间的投递损失按 §3 的 gap 语义显式标记，不伪造连续性。
-- **信任边界是 OS 用户（H7）**：本机非本用户的进程不可信；本用户的进程视为用户本人（它们本就能读该用户的文件与进程环境）。同机进程能连到核心**不等于**有权发写：写权限来自认证得到的 principal × 策略 scope，不来自连接。理由：核心是独立进程后 IPC 成为正式边界，而 UDS 对端凭据 / 命名管道 ACL 的粒度都是 OS 用户。代价：同用户进程之间不互相隔离；若要求进程间隔离则需能力令牌 / 管道句柄传递，是一条升级路径。状态：暂定，受 H7 证伪约束（维护者要求同用户进程互相隔离，或接受"host 即信任边界"）。
+- **信任边界是 OS 用户（H7）**：本机非本用户的进程不可信；本用户的进程视为用户本人（它们本就能读该用户的文件与进程环境）。同机进程能连到核心**不等于**有权发写：写权限来自认证得到的 principal × 策略 scope，不来自连接。理由：核心是独立进程后 IPC 成为正式边界，而 UDS 对端凭据 / 命名管道 ACL 的粒度都是 OS 用户。代价：同用户进程之间不互相隔离；若要求进程间隔离则需能力令牌 / 管道句柄传递，是一条升级路径。状态：已定，证伪条件 §8.4 #8（维护者要求同用户进程互相隔离，或接受"host 即信任边界"）。
 - **凭据链**：`统一路径封存文件 → UTA 核心 → 该集成进程`（来源：C7）。凭据只出现在这条注入链上；程序与消费方只见账户身份。集成进程是凭据终点，也是独立故障域。
 - **单实例**：只写三条可推出的事实——
   1. 共享配置（账户封存信封、封存密钥引用、集成登记、策略/审批规则、程序装载清单）写入 `OPENALICE_HOME` 下的统一路径，核心与 Alice 均从文件读取，不经进程间注入、环境变量或启动参数传递。
   2. 同一用户状态根（`OPENALICE_HOME`，`existing-capabilities.md:239`）只允许单实例运行，由 OS 文件锁 + fence 保证（H10）；第二实例以专用退出码拒绝启动，不做接管。孤儿实例（父进程死而子进程活）是真实威胁（H10），由 fence 回收。
   3. 核心进程独占持有 SQLite 文件（H10 的 OS 文件锁与 SQLite 锁同向生效）；SQLite 与锁文件是核心独有写者的文件，位于同一用户状态根下（具体路径是实现目录，§0.4 非目标）。
-- **传输按 OS 选择**：核心↔集成、核心↔Alice 的语义由一份 IDL 固定（§6.3）；IDL 之下的编码与信道按 OS 选择。Windows 缺少 UDS，传输层退化为本地回环 + 本地令牌或命名管道；这只改编码/信道，**不改 IDL**。默认文本序列化 JSON-RPC（跨语言、可读、可录制回放）；高频推送流实测不达标时可另加二进制编码，定位为同一 IDL 的另一种编码而非第二套协议，触发条件与基准在 spike 中定。
+- **传输按 OS 选择**：核心↔集成、核心↔Alice 的语义由一份 IDL 固定（§6.3）；IDL 之下的编码与信道按 OS 选择。Windows 缺少 UDS，传输层退化为本地回环 + 本地令牌或命名管道；这只改编码/信道，**不改 IDL**。默认文本序列化 JSON-RPC（跨语言、可读、可录制回放）；§8.5 #19 的负载下推送流不达标时另加二进制编码，定位为同一 IDL 的另一种编码而非第二套协议。
 - **集成崩溃的两个故障面**（并列，不混为一谈）：
   - **观察流侧**：集成负责的观察流断代，记录为 `Gap{origin: Source}`；只波及其负责的流，核心不受影响。
   - **写提交侧**：集成在 `submit` 中途崩溃 = 领域返回 `NoResponse` = 写边界状态机进入 `Undetermined`；不区分"集成挂了"与"venue 没回"，区分靠后续对账证据（§6.3、§5.4）。
   - 两者是不同故障面：前者是流内记录、可续/可标 gap；后者是一次可能已发生的写、只能由对账收敛。
-
+- **启动与接管的顺序**（由存储归属 §6.7 与写边界恢复 §5.4 推出）：
+  1. **取 fence**：OS 文件锁 + SQLite 独占（H10）；取不到即以专用退出码退出（上条第 2 点）。锁由进程持有、随进程消亡，所以取到 fence 蕴含旧核心已退出；仍可能存活的是它拉起的集成进程与程序宿主进程（H10 的孤儿）。取到 fence 即在 SQLite 中把 `instance_id`（单调递增的实例序号，与 fence 同事务持久化）加一，旧实例的会话 epoch 全部作废。随后**回收孤儿**：核心拉起的每个集成进程与程序宿主进程都以 `(instance_id, pid, start_time, role)` 登记在 SQLite 进程表（§6.7.2）；新实例对旧 `instance_id` 名下、`(pid, start_time)` 仍匹配的进程先请求退出、超时后强制终止，再清除登记。未登记或匹配失败的孤儿也无法造成双写：它们的会话 epoch 在第 3 步之后一律被边界拒绝，且它们不接触 SQLite（§6.7.1 单写者）。
+  2. **从记录重建**：校验格式版本（C14，失败拒绝启动）；从快照 + 记录 `fold_state` 重建 lane 链、单据、规则状态、订阅表；IO 壳按 §5.4 恢复规则把 `SendBarrier` 无后继者 append 为 `Undetermined(CrashWindow)`。这一步**不接触任何集成**——恢复结论只来自记录，不依赖外部回音。
+  3. **握手**：读统一路径配置（§6.7.3）拉起集成进程并登记，按新会话 epoch 握手取得能力证据（§6.3.5）。**会话 epoch** `SessionEpoch = (instance_id, session_seq)`：`instance_id` 来自第 1 步；`session_seq` 在同一实例内对同一集成每次握手加一（重连、换凭据、重启集成都算一次）。集成把 epoch 回填到它送出的每条推送与回执上；核心以 `epoch == 当前 epoch` 为唯一接受条件，来自其他 epoch 的推送与回执在边界拒绝（§6.3.6）。
+  4. **恢复效应侧**：先为每条 `Undetermined` 启动对账驱动（读，可重试），再对 `Prepared` 无 `SendBarrier` 者过发出前门（§5.4：过期则 `Expired`，否则 `SendBarrier` → `submit`）。顺序理由：取证在前可让已 `Resolved` 的 lane 先解除；发送需要第 3 步的会话。
+  5. **恢复观察侧与消费面**：按订阅表重建路由与回填（`Gap{origin: Source}` 标记断代，§3.2）；交回程序状态并装载程序（§6.5）；最后开放 Alice 会话（§6.4）。消费方在此之前连接得到"启动中"的 readiness（P16），不得到部分状态。
+  任一步失败即整体拒绝启动并记 P14 原因，不进入部分运行态（C14）。
 
 ### 6.2 模块指南
 
@@ -1234,7 +1241,7 @@ flowchart TB
 
 | 元素 | 拥有 | 隐藏的决定 | 假设 | 抽象 |
 |---|---|---|---|---|
-| 集成进程 | 上游协议清洗、投影握手、交互契约对齐（`WriteLaneKey`、`basis` 可引用的流、`target` 身份）、按流位置推进、凭据终点 | 上游账户结构、venue 词汇、载荷形状 | 锚点契约稳定；核心不解释形状 | §2.2 协议=注册单元 |
+| 集成进程 | 上游协议清洗、投影握手、交互契约对齐（`WriteLaneKey`、`basis` 可引用的流、`target` 身份）、提供位置证据（venue seq/cursor/事件时间；`LogPosition` 与 frontier 由核心裁定，§6.3.8）、凭据终点 | 上游账户结构、venue 词汇、载荷形状 | 锚点契约稳定；核心不解释形状 | §2.2 协议=注册单元 |
 | 信封解析入口 | 边界处解析并验证信封字段（parse-don't-validate，隐藏构造器）、载荷字节直通 | 智能构造器、畸形记录拒绝逻辑 | 锚点闭合必填、入口即验 | §2.2 信封 |
 | 观察 `Journal` | 观察侧记录载体、`RetractableDelta` 撤回代数、按 frontier 压缩、保留边界 | 存储原语、`fold_state` 重建、`compact` 实现 | 派生侧可撤回 | §3.1 |
 | 派生 DAG（程序解释①） | 增量重算、cutoff 截断、节点粒度依赖、派生记录写回观察侧 | 增量引擎（`salsa`/differential）、cutoff 判定 | 无自反馈环；执行状态不进 DAG | §3.3 |
@@ -1243,17 +1250,17 @@ flowchart TB
 | 入站处理器注册表 | 字段→处理器映射（观察侧/效应侧分区）、`required_inputs`、触发效果 | 载荷语义解释 | 字段缺失=不触发，不是错误 | §2.2、§5.1 |
 | 出站请求处理器 | `EffectRequest`→读/写处理器分派；读处理器立即执行成观察，写处理器以装载 principal 开单 | 副作用具体种类 | 写处理器不绕效应路径 | §5.1 |
 | 程序解释器（值树） | 两种解释的纯语义、装载期校验（`Id` 越界/环、`required_inputs` 比对） | — | 程序状态显式可序列化 | §2.4、§3.3、§5.1 |
-| 程序宿主 | 隔离运行时、CPU/内存/意图速率/状态大小预算、trap、状态序列化边界 | Wasm 或受监督子进程的选择 | 预算靠宿主进程/沙箱，不靠类型 | §5.1（宿主前提，`[暂定：SP-11]`） |
+| 程序宿主 | 受监督子进程的拉起与登记、CPU/内存/意图速率/状态大小预算、trap、`Load`/`Advance`/`Reset`/`Unload` 协议 | 宿主进程的 OS 机制（rlimit / job object） | 预算靠宿主进程，不靠类型 | §5.1、§6.5 |
 | 单据 | 意图形成期锁（`responsible`）、线性版本链、`basis`、两层对账状态、编辑 diff | 意图类型解释、`Revision<Intent>` | 单据不驱动 IO 壳，只单向读其记录 | §5.2 |
 | STS 规则链 | 顺序固定链（授权→输入约束→审批→lane→过期）、`RuleState`、`Rejection`、放行判定 | 规则内部守卫（组合子 kind enum） | 规则不引用读模型 | §5.3 |
-| lane 驱动 | 每 `WriteLaneKey` 一条有序队列、队首阻塞、按 `Prepared` 位置推进 | 上游账户结构对齐 | 有序与阻塞来自通讯协议，不是 UTA 的锁 | §5.3 |
+| lane 驱动 | 每 `WriteLaneKey` 的阻塞头（lane 规则的 `RuleState`）与按 `Prepared` 位置的执行顺序；同 lane 至多一条未终结 Attempt | 上游账户结构对齐 | 有序与阻塞来自通讯协议，不是 UTA 的锁；等待发生在 `Prepared` 之前 | §5.3 |
 | IO 壳 | 唯一 venue 写接口、`Prepared` 链驱动、两阶段、`SendBarrier`、对账驱动、崩溃恢复 | 转移表、渠道顺序 | 系统唯一效应处；不知道单据存在 | §5.4 |
 | 读模型 | 对执行事实 `Journal` 的可重建只读 fold，非权威，经同一 JSON-RPC 暴露 | fold 的具体数据结构 | 不被规则引用；消费方也可自行 fold 原始记录 | §5.3（读侧） |
-| 控制面 | 认证 principal 传入的运维动作通道（P14）：装卸程序、换凭据、重启集成、请求快照 | 认证机制、传输 | 只经认证 principal，不经进程信号或 flag 文件 | §5（授权）、P14 |
+| 控制面 | 认证 principal 传入的运维动作通道（P14）：§6.4 控制组的操作集（装卸程序、重载配置、换凭据、重启集成、请求快照、推进保留边界、退回 cursor、绕过 lane） | 传输 | 只经认证 principal，不经进程信号或 flag 文件 | §5.3 授权步（控制动作按 (principal, 动作种类) 授权，与写授权同一规则族）；结果为控制记录 `Applied \| Rejected(reason)`（§6.4） |
 | 存储（SQLite 单写者） | 单文件、表主键、事务原子性、append-only 的 Rust 接口保证、快照、格式版本 | SQL、索引、WAL 细节 | 核心独占；集成/宿主不接触 | §6.7（§3.1/§5.4 持久化落点） |
 | 行情派生计算子系统（外部，可选） | `Pooled` 段视图的物化与原生 op 的运行——**属子系统，不属核心** | 全部实现：布局、IPC、段生命周期、作者面 | 核心零影响；未安装即拒绝含 `Pooled` 的程序 | §3.5、§6.6（实现归 `hpc-derivation/design.md`） |
 
-**执行事实 append 链的唯一写入口**：执行事实 `Journal` 只经"存储"元素暴露的 append 接口写入；写入者是单据关闭（`Prepared`）与 IO 壳（`SendBarrier`/回执/对账证据）与集成（外部变更观察）。读模型只读、不写。三者不争同一秘密：append-only 保证归"存储"，写内容归各自元素，只读 fold 归读模型。
+**执行事实 append 链的唯一写入口**：执行事实 `Journal` 只经"存储"元素暴露的 append 接口写入；写入者是单据（`TicketAction`，含 `Close(Prepared)` + 同事务 `Prepared`）、STS 规则链（Decision/`Outcome`/`Rejection`）、IO 壳（`SendBarrier`/回执/`Undetermined`/`ResolutionEvidence`/`Expired`/`CapabilityObserved`）、控制面（控制记录、安全事件）与出站请求处理器（`EffectRequest` 记录）。集成产出的外部变更观察是**观察记录**，落观察 `Journal`（§4 记录归观察）。读模型只读、不写。各方不争同一秘密：append-only 保证归"存储"，写内容归各自元素，只读 fold 归读模型。
 
 **uses 图**（依赖方向；反向不成立）：
 
@@ -1317,7 +1324,7 @@ enum Verdict { Supported(CapabilityProof), Unsupported, Unknown }
 
 | 链路 | 锚点 |
 |---|---|
-| 观察记录 | `StreamId(source, stream, epoch)`、`LogPosition`、`received_at` |
+| 观察记录 | `session_epoch`（§6.1，边界接受条件）、`StreamId(source, stream, epoch)`、`received_at`；`LogPosition` 由核心在接受时分配（§6.3.8） |
 | 意图 | `principal`、`WriteLaneKey`（不透明，由集成从上游账户结构对齐得出）、`OperationKind`、`basis`（可为空集，但必须存在） |
 | 撤单/改单意图 | 上述 + `target: VenueRef \| IdemKey`（构造前提，§5.2） |
 | 尝试/决议 | `attempt_position`（`Prepared` 的 `LogPosition`）、`WriteLaneKey` |
@@ -1342,8 +1349,8 @@ enum Verdict { Supported(CapabilityProof), Unsupported, Unknown }
 
 #### 6.3.4 `payload_schema`
 
-- **已定**：集成把载荷字节原封直通并打 `payload_schema` 标签；核心不解释载荷（nginx 不看 body），只路由字节、存输出。程序（§5）与单据钩子按 `payload_schema` 选择解释器；核心计算的精确类型（守卫字段、`cumulative_filled_quantity`、程序/钩子解释器用的 money/quantity）只在核心计算处出现，信封不含价格。
-- **未决**：`payload_schema` 如何标识、如何登记、如何版本化 → `[未决 OD-8]`。
+- 集成把载荷字节原封直通并打 `payload_schema` 标签；核心不解释载荷（nginx 不看 body），只路由字节、存输出。程序（§5）与单据钩子按 `payload_schema` 选择解释器；核心计算的精确类型（守卫字段、`cumulative_filled_quantity`、程序/钩子解释器用的 money/quantity）只在核心计算处出现，信封不含价格。
+- **身份与版本** [设计]：`payload_schema = (schema_id, schema_version)`，随 `StreamDecl` 在握手声明（§2.2）；同一 `StreamId` 内不变。集成要换载荷版本就为该流开新 epoch（P3：新 epoch 首条记录带 `Gap{origin: Source, reason: schema_change}`），旧 epoch 的记录保留旧标签；核心按 `(schema_id, schema_version)` 精确匹配解释器，未注册的组合不触发解释器、载荷留作字节（§6.3.3：字段不存在→不触发）。schema 内容的登记发生在消费方（程序/钩子的解释器注册），核心不持有 schema 文本。
 
 #### 6.3.5 操作集（IDL）：核心→集成的请求-响应
 
@@ -1351,15 +1358,16 @@ enum Verdict { Supported(CapabilityProof), Unsupported, Unknown }
 
 | 操作 | 语义 | 动作轴（对外） | 返回值（领域） | 核心内部结果 | 错误与 undesired events | 幂等与重试 |
 |---|---|---|---|---|---|---|
-| `handshake → Projection` | 声明作用域/流/能力 | 非动作（声明交换） | `Projection` | 更新路由表、能力证据 | 传输失败→重连；投影不合法→拒绝该集成 | 幂等；可重发 |
+| `handshake(session_epoch) → Projection` | 声明作用域/流/能力 | 非动作（声明交换） | `Projection`（含契约版本） | 更新路由表；append 一版能力证据（§6.7.2）；`required_inputs` 比对；该集成的每条观察流按 P3 决定是否开新 `StreamId.epoch`——集成能以 venue 游标证明续接则续用原 epoch、`Seq` 接续，否则新 epoch 首条为 `Gap{origin: Source}`（会话 epoch 与流 epoch 独立） | 传输失败→重连（新 `session_seq`）；投影不合法→拒绝该集成；契约版本不兼容→拒绝该集成并记 P14 原因（不降级运行）；能力比对缺失→引用该字段的树 fail-closed（§2.4）；`session_epoch` 形状与接受条件见 §6.1 第 3 步 | 幂等；可重发 |
 | `submit(attempt) → Ack \| Reject \| NoResponse` | 投放一次写 | **写** | `Ack(venue_id)`（业务回执）/ `Reject(reason)` / `NoResponse` | `Ack`→`VenueAccepted`；`Reject`→`VenueRejected`；`NoResponse`→`Undetermined` | 超时/集成崩溃/传输 ACK/HTTP 5xx 全部 `NoResponse`→`Undetermined`；venue 单方面决定，无 commit ack | **永不重试**；`SendBarrier` 保证至多首执一次 |
 | `query_by_key(key) → Found \| Absent \| Unavailable` | 按调用方键回读状态 | **读** | `Found(state)` / `Absent` / `Unavailable` | append `ResolutionEvidence(by-key, found/absent/inconclusive)` | `Unavailable`→`Gap{origin: Channel}`，可再发；能力不支持则该渠道跳过 | 可重试、可换渠道 |
-| `list_open(scope)` | 列 open orders | **读** | 订单 listing | append 观察/对账证据 | listing 滞后/不完整（F10）→只作 advisory；配额拒绝 | 可重试 |
-| `list_fills(scope, since)` | 列成交 | **读** | 成交明细 | append 观察/对账证据 | 缺 since 游标→范围保守；配额 | 可重试 |
+| `list_open(scope) → Listing \| Unavailable` | 列 open orders | **读** | `Listing(items)` / `Unavailable` | 命中带归因身份的订单→append 观察记录 + `ResolutionEvidence(listing, found)`；未命中→append `ResolutionEvidence(listing, inconclusive)`（F10：listing 未见不证明未递） | `Unavailable`（超时/断连/配额拒绝）→`Gap{origin: Channel}`，可再发；能力不支持则该渠道跳过；空 `Listing` ≠ `Absent` | 可重试、可换渠道 |
+| `list_fills(scope, since) → Fills \| Unavailable` | 列成交 | **读** | `Fills(items, next_cursor?)` / `Unavailable` | 命中带归因身份的成交→append 观察记录 + `ResolutionEvidence(fills, found)`；未命中→`ResolutionEvidence(fills, inconclusive)` | `Unavailable`（超时/断连/配额拒绝）→`Gap{origin: Channel}`，可再发；缺 `since` 游标→范围按声明保守取，仍只作 advisory；能力不支持则跳过 | 可重试；分页按 `next_cursor` 续 |
 | `cancel(venue_id \| key)` | 撤单 | **写** | 同 `submit` 的回执形态 | 进 `Prepared` 链；`Replace` 的 cancel 腿 | 无回执→`Undetermined`；无 cancel-by-key 能力→拒绝构造 | 永不重试 |
 | `replay_by_key(key) → Original \| Unavailable` | 保留期内重放取原响应 | **读**（形式似写、语义是读） | `Original(response)` / `Unavailable` | append `ResolutionEvidence(replay, …)` | 保留期声明错误即重复下单；默认关闭、按 venue 显式开启、只在声明保留期内调用、渠道顺序排最后 | 保留期内幂等；期外不可用 |
+| `backfill(stream, from, page) → Page \| Unavailable` | 历史回填（P5，§6.3.10） | **读** | `Page{records, next_cursor?}` / `Unavailable` | 记录打 `backfilled` 标记 append 观察 `Journal`；覆盖到 `live_from` 即边界闭合 | `Unavailable`→`Gap{origin: Channel}`，可再发；能力不支持则该流无回填；穷尽未达 `live_from`→`Gap{origin: Source, reason: backfill_incomplete}` | 可重试；分页按 `next_cursor` 续；有 pacing |
 
-新增 IDL 操作 = 改所有集成（IDL 轴，与轴 B 的 `OperationKind` 不同轴——后者只改实现该协议的集成）。`NoResponse` 与 `Unavailable` 是一等返回值而非异常。完整消息 schema 依赖组合子构造子全集 → `[暂定：SP-5/SP-6]`。
+新增 IDL 操作 = 改所有集成（IDL 轴，与轴 B 的 `OperationKind` 不同轴——后者只改实现该协议的集成）。`NoResponse` 与 `Unavailable` 是一等返回值而非异常。操作集、返回值与错误语义已定；消息 schema 的文本形式（IDL 文件）随 release 发布（§0.1），其中构造子的序列化直接取 §2.4 的 enum。
 
 #### 6.3.6 集成→核心的推送（notification）
 
@@ -1367,7 +1375,7 @@ enum Verdict { Supported(CapabilityProof), Unsupported, Unknown }
 
 | 推送 | 语义 | 核心内部结果 | 错误与 undesired events |
 |---|---|---|---|
-| 观察记录 | 按流位置推进观察记录（含 `attribution`、载荷 + `payload_schema`） | append 观察 `Journal`、推进 cursor/frontier、触发处理器与 DAG | 畸形记录（缺锚点）在边界拒绝 |
+| 观察记录 | 集成推送观察记录（含 `session_epoch`、venue seq/cursor 证据、`attribution`、载荷 + `payload_schema`）；`LogPosition` 由核心按到达顺序分配（§6.3.8） | append 观察 `Journal`、推进 cursor/frontier、触发处理器与 DAG | 畸形记录（缺锚点）在边界拒绝；`session_epoch ≠ 当前 epoch` 的推送在边界拒绝、不 append（§6.1 第 3 步）；同一 `StreamId` 内 venue seq 倒退或重复的记录**照常 append** 并打质量标记（P2：`replayed` / `out_of_order`），不去重、不重排——核心不伪造流顺序，重复与乱序由派生侧 fold 按 venue seq 处理，frontier 不因倒退记录后退 |
 | `Gap{origin: Source}` | 集成负责的观察流断代 | 记来源 gap（新 epoch 首条记录，含前一范围与最后 `Seq`、原因） | 只波及其流；核心不受影响 |
 | 能力变更 | 握手后能力/配额变化 | 更新能力证据、重算受影响单据的 `alignment` | 能力收紧使待决单据 `Diverged` |
 | readiness / 健康（P16） | 按集成/账户：reach、tier、连续失败数、最后成功时间；回填 readiness（backfilling/live） | 派生健康观察；订阅状态派生（非损失，不需确认） | 断线→`Gap{origin: Source}`；健康面经读模型对 Alice 可见（§6.4） |
@@ -1387,7 +1395,7 @@ enum Verdict { Supported(CapabilityProof), Unsupported, Unknown }
 
 #### 6.3.8 集成义务清单
 
-集成由 IDL 固定的职责：握手声明投影（作用域、流、能力）；交互契约的对齐——把上游账户结构、市场地址、身份体系对齐到锚点契约（`WriteLaneKey`、`basis` 可引用的流、`target` 用的身份），这是判断性设计动作，每个集成自己负责，做错只影响它自己的流；按流位置推进观察记录；填锚点与已注册字段（含 `attribution`，见下）+ 载荷直通并打 `payload_schema`；响应投放与对账查询（仅限核心 IO 壳调用）；上报 `Gap{origin: Source}`。集成**不持有**规则状态、不做决策、不接触 SQLite。
+集成由 IDL 固定的职责：握手声明投影（作用域、流、能力）；交互契约的对齐——把上游账户结构、市场地址、身份体系对齐到锚点契约（`WriteLaneKey`、`basis` 可引用的流、`target` 用的身份），这是判断性设计动作，每个集成自己负责，做错只影响它自己的流；按流位置推进观察记录；填锚点与已注册字段（含 `attribution`，见下）+ 载荷直通并打 `payload_schema`；把当前 `session_epoch` 回填到每条推送与回执（§6.1 第 3 步）；响应投放、对账查询与回填（仅限核心调用）；上报 `Gap{origin: Source}` 与 readiness（§6.3.10）。集成**不持有**规则状态、不做决策、不接触 SQLite。
 
 - **时间权威**：`LogPosition` 与完备进度只由核心裁定；集成只提供证据（venue seq/cursor/事件时间）。有 venue 游标时完备进度由证据推进，无游标时由核心按声明的滞后界从 `received_at` 保守推导。
 - **归因由谁填**：集成填 `attribution`（它持有 venue 回执与 `idempotency_key` 的对应）；IO 壳在 `VenueAccepted` 时补 `FromAttempt(position)`；集成填不出的记 `Unattributed`，IO 壳按键回读补。记录归观察侧，读它的处理器（lane 决议匹配、归因）注册在效应侧。集成 IDL 因此含 `attribution` 字段。
@@ -1402,40 +1410,60 @@ enum Verdict { Supported(CapabilityProof), Unsupported, Unknown }
 
 #### 6.3.10 回填、实时边界、readiness、健康面（P5/P16）
 
-- **已定语义**：回填（P5）带范围/页/游标，有 pacing，结果与实时流的边界由集成声明 readiness（backfilling→live 切换）；断线重连无 venue 游标时按 `Gap{origin: Source}` 显式标记，不伪造连续（C6）。健康面（P16）经读模型对 Alice 可见。
-- **未决**：回填请求与结果的消息 schema、实时边界的确认语义、readiness 状态机的完整集合、健康面字段的稳定契约 → `[未决 OD-7]`（依赖完整消息 schema，回链 `[暂定：SP-5/SP-6]`）。
+- **回填**（P5）是 IDL 读操作 `backfill(stream, from: Seq | Range, page) → Page{records, next_cursor?} | Unavailable`，由核心按订阅需求与 pacing 发起；返回的记录与实时推送同形、同 epoch，打质量标记 `backfilled` 后 append，`LogPosition` 仍由核心按到达顺序分配（§6.3.8）。`Unavailable` → `Gap{origin: Channel}`，可再发；能力不支持则该流无回填、断代只能标 gap。
+- **实时边界**：集成在 readiness 进入 `Live` 时声明 `live_from: Seq`（首条实时记录的 venue seq）；核心只请求 `< live_from` 的回填范围，回填与实时记录因此按范围不重叠（Q14：同 epoch 无重复 bar，不靠逐条去重）；回填页覆盖到 `live_from` 之前即边界闭合，frontier 才允许越过它；回填穷尽仍未达 `live_from` 则 append `Gap{origin: Source, reason: backfill_incomplete}`，frontier 跳过该区间（C6：不伪造连续）。
+- **readiness 状态机**（按集成 × 流）：`Starting → Backfilling{through: Seq} → Live`；任一状态可进 `Disconnected{since}`，重连回 `Starting`（新 `session_seq`）；`Degraded{reason}` 是 `Live` 的子态（能力收紧、配额受限），不改变记录接受条件。readiness 变化是派生健康观察，不需确认。
+- **健康面**（P16）字段：按集成/账户 `reach: Reachable | Unreachable`、`tier`、`consecutive_failures`、`last_success_at`、`readiness`；经读模型对 Alice 可见（§6.4）。
 
 ### 6.4 核心↔Alice 契约
 
 Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核心通信。
 
-**已定**：
-- 独立生命周期：Alice 退出/崩溃/重启不改变核心的订阅、程序、lane、日志（H5/C5）。
-- 重连语义：Alice 重连后拉取当前状态及 cursor 之后的记录；断连期间的投递损失按 `Gap{origin: Delivery}` 显式标记，不伪造连续性。
-- 读模型：Alice 消费"当前状态"经**读模型**——对执行事实 `Journal` 的可重建只读 fold，非权威、不被规则引用，经同一 JSON-RPC 暴露；消费方也可直接订阅原始记录自行 fold。理由：S10 要求 Alice 消费面可实现，且不应让每个消费方重复 fold。
-- 会话与授权：每个会话绑定一个经传输无关机制认证的 principal（P13）；写类操作按 `(principal, 账户, 操作种类)` 授权（C11）；决定对待决集合版本的期望不匹配→冲突，不执行。
-- 控制面：运维动作（装卸程序、换凭据、重启集成、请求快照）只经控制面（P14）由认证 principal 传入，不经进程信号或 flag 文件。
-- 健康/readiness（P16）经读模型对 Alice 可见。
+**会话与 principal。** 会话以 `handshake(contract_version, actor) → Session{principal, instance_id, contract_version}` 建立：传输给出 OS 对端凭据（UDS peer credential / 命名管道 ACL），这是 H7 信任边界；`actor` 是 Alice 自报的会话内身份（哪个 AI/哪个人）；`principal = (os_user, actor)`。同用户进程视为用户本人（H7），所以 `actor` 无需第二重认证——它是审计与 scope 的键，不是信任来源。契约版本不兼容→拒绝会话并记 P14。写类操作按 `(principal, WriteLaneKey, OperationKind)` 授权（C11），控制动作按 `(principal, 动作种类)` 授权，二者同一规则族（§5.3 授权步）。
 
-**未决**：
-- `[未决 OD-1]` Alice↔核心的消息形状：session handshake 如何取得 principal；订阅原始记录 vs 订阅读模型的消息；创建/修改/送审/批准/否决/查询状态的消息 schema 与错误。必须回答什么：每个操作的请求/响应形状、哪些是读副作用哪些是写副作用、undesired events。关闭事件：给出 Alice API 的 IDL 操作集。影响章节：§6.2、§6.4。
-- `[未决 OD-2]` 确认语义：cursor "确认"指已投递、已持久化还是已处理；重复可见性（重连后哪些记录会再次可见）。必须回答什么：确认点定义 + 重复可见性规则。关闭事件：定出确认语义并写入订阅契约。影响章节：§3.2、§6.4。
-- `[未决 OD-3]` 读模型集合与一致性：读模型暴露哪些集合（订单/持仓/健康/…）；每个集合的 cursor 与 `Gap` 如何与原始记录一致；读模型是否由核心维护 vs 允许 Alice 自 fold；谁是消费契约。必须回答什么：集合清单 + cursor/gap 一致性规则。关闭事件：定出读模型集合与一致性契约。影响章节：§6.2、§6.4。
-- `[未决 OD-4]` 控制面认证与消息：控制面是否 Alice RPC 的一部分；认证与授权如何执行；控制操作与运行期日志如何关联。必须回答什么：控制面认证机制 + 每个控制动作的消息与结果（生效/拒绝+原因）。关闭事件：定出控制面认证与消息契约。影响章节：§6.1（传输/认证回链）、§6.4。
-- `[未决 OD-5]` principal 与授权策略：principal 来源；授权 scope 的存储与版本；授权规则与审批规则的配置表示；规则变更如何与待决单据并存；规则失败如何审计。必须回答什么：principal 来源 + scope 存储 + 规则配置表示 + 变更并存语义。关闭事件：定出授权/审批策略的配置与并存契约。影响章节：§5.3、§6.4、§6.7。
+**操作集**（同一 JSON-RPC；动作轴与核心内部结果分列，同 §6.3.5）：
+
+| 组 | 操作 | 动作轴 | 核心内部结果 | 错误与 undesired events |
+|---|---|---|---|---|
+| 订阅 | `subscribe(selector, mode, from?) → Subscription`；`ack(subscription, cursor)`；`unsubscribe` | 非动作 | 建/改订阅表；`ack` 推进 cursor（确认 = 已处理，§3.2） | selector 引用未声明的流→拒绝；`from` < 保留边界→`BeyondRetention`；断连后从已确认 cursor 重投 |
+| 读模型 | `read_model(kind, as_of?) → Snapshot{value, as_of: Set<LogPosition>, gaps}` | 读（核心内 fold） | 无 | `kind` 未定义→拒绝；`as_of` 未达→`NotYetAvailable{frontier}`；读模型非权威（§3.4） |
+| 单据 | `draft(intent) → TicketId`；`revise(ticket, expected_version, diff)`；`submit_for_decision(ticket, expected_version)`；`decide(ticket, expected_version, Approve \| Reject(reason))`；`send_back`；`withdraw`；`transfer(ticket, to: principal)` | 写（append `TicketAction`） | 单据 fold 转移（§5.2）；`Approve` 触发 STS 链放行（§5.3） | `expected_version ≠ current_version`→`Conflict`，不执行；越权→`Unauthorized`；`Closed` 后任何动作→`Rejected(Closed)`；无 `responsible` 的 `revise`→`Rejected(NotResponsible)` |
+| 控制（P14） | `load_program(manifest_ref)`；`unload_program(id)`；`reload_config(kind)`；`rotate_credential(integration)`；`restart_integration(id)`；`request_snapshot`；`advance_retention(to)`；`rewind_cursor(subscription, to)`；`bypass_lane(ticket)` | 写（append 控制记录） | 每个动作的结果 `Applied(position) \| Rejected(reason)` 作为控制记录 append，带 principal、动作、所读配置版本 hash；生效动作再触发相应记录（新 epoch、`Gap`、绕过 Decision、保留边界推进） | 越权→`Unauthorized`；配置文件不合法→`Rejected(reason)` 并保留上一有效版本（§6.7.3）；`advance_retention` 越过已登记引用→`Rejected(ReferencedBelow{min})`（§2.3）；`bypass_lane` 记为对协议的自觉违反（§5.3） |
+| 健康 | `health() → Vec<IntegrationHealth>` | 读 | 无 | 启动期返回 `Starting`（§6.1 第 5 步） |
+
+**读模型集合与一致性。** 核心维护的读模型：`orders`（按 `WriteScope`，执行事实 + 归因观察的 fold）、`positions`、`lanes`（每 lane 的未终结 Attempt 与 `Undetermined` 列表）、`tickets`、`subscriptions`、`health`。每个 `Snapshot` 带 `as_of: Set<LogPosition>`（fold 吃到的位置集）与 `gaps`（该范围内生效的 `Gap` 记录）；消费者把 `as_of` 与自己的 cursor 比对即知快照含哪些记录。原始记录是消费契约；读模型是对同一 `Journal` 的确定性 fold，Alice 自 fold 与核心读模型在同一 `as_of` 下相等（验收 §8.5 #18）。
+
+**授权与审批策略的表示。** principal → scope（`WriteLaneKey` × `OperationKind` × 是否需人工审批 × 名义阈值）与控制动作授权写在统一路径的策略/审批规则文件（§6.7.3），版本 = 内容 hash，经 `reload_config` 生效。规则不冻结进单据：决策链每次评估读当时生效的规则版本，待决单据在放行时按当时规则重过五步；收紧规则可使待决单据在放行时 `Rejection`，记录带 `rule_version`。负责人失联由规则处理：过期步 `Close(Expired)`，或带 principal 的强制 `transfer`（§5.2）。每条 `Outcome`/`Rejection`/控制记录都带所依据的规则版本 hash，审计由此回链。
+
+**已定事实：**
+- 独立生命周期：Alice 退出/崩溃/重启不改变核心的订阅、程序、lane、日志（H5/C5）。
+- 重连语义：Alice 重连后握手、按 `as_of` 读模型取当前状态、从已确认 cursor 之后订阅记录；断连期间的投递损失按 `Gap{origin: Delivery}` 显式标记，不伪造连续性。
+- 读模型对执行事实 `Journal` 的可重建只读 fold，非权威、不被规则引用；消费方也可直接订阅原始记录自行 fold（S10）。
+- 控制面是同一 RPC 的一组操作，由认证 principal 传入，不经进程信号或 flag 文件。
+- 消息 schema 的文本形式随 IDL 文件发布（§0.1）；本节定义的是操作、返回值与错误语义。
 
 ### 6.5 核心↔程序宿主
 
-**已定**：
-- 程序 = §5 值代数的规范序列化形式（按 schema 校验的 JSON 值树，与 `DerivationNode`/`DecisionStep` 一一对应）；任何面向 AI 的文本糖必须编译到同一值，且不是核心的一部分（表达力问题归 `[暂定：SP-5]`）。
+**宿主 = 受监督子进程** [设计]：每个程序一个宿主进程，由核心拉起并登记（§6.1 第 1 步的进程表）；宿主二进制是随核心发布的值树解释器，程序值不编译——"编译单元"就是 §5 值代数的规范序列化形式。理由：三 OS 无需额外运行时即可构建与运行（Q25）；预算由 OS 进程机制限制；状态经宿主协议显式序列化。Wasm（wasmtime）不选为初始宿主：无 live `Store` 快照/恢复 API、fuel 不限制阻塞 host 调用、三 OS 开箱即用未证（§8.1）；它可作实现阶段的替代宿主，走同一宿主协议，不改本节。
+
+- 程序 = §5 值代数的规范序列化形式（按 schema 校验的 JSON 值树，与 `DerivationNode`/`DecisionStep` 一一对应）；任何面向 AI 的文本糖必须编译到同一值，且不是核心的一部分（表达力扩展 = §2.4 加构造子）。
 - 装载期校验：`Id` 越界与环、`required_inputs` 与握手声明比对，缺失即 fail-closed。
-- 预算靠宿主不靠类型：CPU/内存/意图速率/状态大小的预算由宿主进程/沙箱隔离（C4），超预算被隔离并报告，其他程序、账户、核心不受影响。
-- 状态显式可序列化：无论采用何种运行时，程序状态都必须显式可序列化，不依赖运行时快照。
-- 隔离边界：程序无写能力（Intent 是值而非外部调用）；程序不接触 SQLite 与凭据（C7、H2）；隔离运行时仅作为解释器的宿主，不进入设计中心。
+- 预算靠宿主不靠类型：CPU/内存/意图速率/状态大小的预算由宿主进程隔离（C4），超预算被隔离并报告，其他程序、账户、核心不受影响。
+- 状态显式可序列化：程序状态只经 `Checkpoint` 序列化，不依赖运行时快照。
+- 隔离边界：程序无写能力（Intent 是值而非外部调用）；程序不接触 SQLite 与凭据（C7、H2）；宿主仅作为解释器的宿主，不进入设计中心。
 
-**Wasm 三条判定标准与退回**：Wasm 仅在"三 OS（macOS/Linux/Windows）通用、开箱即用"的方案存在时才可选为隔离运行时。开箱即用判定：(1) 作为普通 Rust 依赖引入即可在三 OS 构建与运行，无需系统级安装、外部工具链或平台特判；(2) 预算手段（fuel/内存上限）与 trap 语义在三 OS 上表现一致；(3) 打包为独立二进制时无平台差异。判定不成立则退回**受监督子进程**：预算由 OS 进程机制限制，状态经内部协议显式序列化；§5 的封闭值代数与两种解释不变 → `[暂定：SP-11]`。
+**宿主协议**（核心 ↔ 宿主进程；同一 IDL 传输）：
 
-**未决**：`[未决 OD-9]` 程序宿主协议：编译单元、装载、预算语义、trap、状态迁移、替换。必须回答什么：宿主与核心之间的装载/预算/trap/状态/替换协议。关闭事件：`[暂定：SP-11]` 得出 Wasm 可/不可结论后，据选定运行时定出宿主协议。影响章节：§5.1、§6.2。依赖 `[暂定：SP-11]`，本节不给确定协议。
+| 操作 | 方向 | 语义 | 结果 / 失败 |
+|---|---|---|---|
+| `Load(program, checkpoint?, budget) → Loaded{state_version} \| LoadRejected(reason)` | 核心→宿主 | 装载程序值；`checkpoint` 是最近一次持久化的 `Checkpoint{bytes, state_version}` | 装载期校验失败或 `state_version` 与程序声明不符→`LoadRejected`，程序不运行 |
+| `Advance(records, to: cursor) → Output{effects, derivations, checkpoint}` | 核心→宿主 | 推进一批记录（解释①/②纯语义）；每次返回都带新 `Checkpoint`。核心把 `effects`（append 为 `EffectRequest` 记录）、`derivations`（append 派生记录）、`checkpoint` 与该程序的 cursor **同一事务**持久化：事务未提交则这批推进视为未发生，重启后重放同一批记录，因此不会重复 `Emit`（§8.5 #16） | 宿主超时/崩溃→视同 trap；`Output` 超预算（意图速率/状态大小）→不持久化、按下文预算语义处理 |
+| `Reset(reason)` | 核心→宿主 | 丢弃状态、冷启动；`reason ∈ {StateVersionMismatch, Replace, Operator}` | append 程序观察 `ProgramReset{reason}`，程序流开新 epoch（`Gap{origin: Source, reason: program_upgrade}`，§3.2），按 H9 回填 |
+| `Unload` | 核心→宿主 | 终止宿主进程并清除登记；最近已持久化的 `Checkpoint` 保留供 `Load` | — |
+
+- **预算语义**：CPU 时间与内存由 OS 进程限制（rlimit / job object）；意图速率与状态大小由核心在 `Output` 上检查。超预算或 trap（宿主进程异常退出）= 核心终止宿主进程、append 失败观察 `ProgramFailed{reason: Budget(kind) | Trap}`，程序停在 `Failed` 直到控制面 `load_program` 重新装载；其他程序、账户、核心不受影响。
+- **状态迁移**：`Checkpoint` 带 `state_version`；程序值声明它接受的 `state_version`；`Load` 时不符→`Reset(StateVersionMismatch)`。替换程序 = `Unload` 旧 + `Load` 新（携旧 checkpoint）；新程序接受旧版本则续跑，否则 `Reset(Replace)`。
+- **崩溃恢复**：核心重启后从与 cursor 同事务持久化的最近 `Checkpoint` `Load`（§6.1 第 5 步）；宿主崩溃同上；程序因此不会看到已折入状态的记录（§3.2）。
 
 ### 6.6 核心↔可选行情派生计算子系统（核心层自包含）
 
@@ -1458,7 +1486,7 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 - **对核心的零影响**（清单）：`Journal`、`LogPosition`、§2.4 的五个 fold、§6.3 处理器注册表的含义不变；`required_inputs` 遇到 `Pooled` 交给子系统解析，其余解析到普通流；效应侧、单据、读模型、§2.3 保留语义不受影响。
 - **原生 op 是注册表黑盒**：原生计算不是新节点种类，而是 §6.3 注册表里由子系统提供的黑盒 op，要求输入是 `Pooled` 的；输出是一条派生观察流，下游节点像读任何派生流一样读它。"程序不是黑盒函数"对决策（解释②）继续成立。若产生外部写，走单据 → STS → IO 壳，不增设旁路（"唤醒对应订单的 AI"是程序里的 `On(pattern) → Emit(EffectRequest)`）。
 - **核心层最小验收**：含 `Pooled` 的程序在无子系统时被拒且其余程序不受影响；子系统 op 的输出对下游是普通派生流（下游节点无需知道它由原生 op 产出）。
-- **实现细节与闸门**：见 `design/hpc-derivation/design.md`；核心只保留一个"子系统是否安装"的外部依赖状态，不复制其闸门。
+- **实现细节与验收**：见 `design/hpc-derivation/design.md`；核心只保留一个"子系统是否安装"的外部依赖状态，不复制其验收标准。
 
 ### 6.7 持久化归属与配置/凭据归属
 
@@ -1468,9 +1496,9 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 
 - **表结构与索引**：每张 trace 表以 `(stream_id, log_position)` 为主键，`pos` 单调；`fold_state`、`AS OF` 以及 cursor 之后的记录查询均退化为引擎原生索引支持的范围扫描。
 - **append 由 Rust 接口保证**：§2.5 第一边界的第二层"执行事实侧只 append"由 **Rust 侧存储接口**保证（对应表的模块 API 仅暴露 `append`），不依赖 SQL 权限约束。派生侧 `compact_below_retention` 实现为保留边界之下的 `DELETE`，仅适用于 `RetractableDelta` 表。
-- **事务原子性**："决策 append + 投递 outbox + 规则状态更新"封装在同一个 SQLite 事务内，单文件事务消解了跨存储系统的原子性问题。单据 `Close(Prepared)` 与 `Prepared` 记录的 append 也在同一事务内（§5.4）。
+- **事务原子性**："决策 append（规则 `Outcome`/Decision 记录）+ 规则状态更新"封装在同一个 SQLite 事务内，单文件事务消解了跨存储系统的原子性问题。单据 `Close(Prepared)` 与 `Prepared` 记录的 append 也在同一事务内（§5.4）。对外投递是订阅者按 cursor 读 `Journal`（§3.2），不设待投递表；记录提交后投递失败只是 cursor 不推进，记录不丢（§7.2 #6）。
 - **单写者**：核心进程独占该数据库文件（H10 的 OS 文件锁与 SQLite 锁同向生效）；集成进程与程序宿主**不接触**数据库，仅通过内部协议与核心交换记录（满足 C7 凭据链与 H2 程序不可信要求）。
-- **快照与版本演进**：状态随时可由 `fold_state` 重建，但重建从保留边界扫起、成本随历史增长——快照因此是**重启延迟的必需项**，不只是加速。格式版本持久化于 schema 表，升级只前进（C14）。快照频率与保留边界的引用登记、边界推进审批、留存时长仍待定 → `[暂定：SP-8]`。
+- **快照与版本演进**：状态随时可由 `fold_state` 重建，但重建从保留边界扫起、成本随历史增长——快照因此是**重启延迟的必需项**，不只是加速。格式版本持久化于 schema 表，升级只前进（C14）。快照频率与派生侧留存窗口是配置参数（§6.7.3 运行期参数）；引用登记方、边界推进审批方与留存语义在 §2.3。
 
 #### 6.7.2 持久化归属表
 
@@ -1478,23 +1506,38 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 
 | 状态 | 侧 | 谁写 | 谁读 | 传播 |
 |---|---|---|---|---|
-| 观察 `Journal` | 观察 | 集成（按流位置推进）、程序解释①（派生记录） | 订阅者、程序、单据 `basis`、读模型 | 按 `LogPosition` 推进；`RetractableDelta` 可撤回可压缩 |
-| 执行事实 `Journal` | 效应 | 单据关闭（`Prepared`）、IO 壳（`SendBarrier`/回执/对账证据）、集成（外部变更观察） | 读模型、单据 `basis`、对账驱动 | 纯 append；位置即顺序 |
+| 观察 `Journal` | 观察 | 集成推送（位置由核心分配，§6.3.8）、程序解释①（派生记录）、一次性读的结果（读处理器、钩子取证、IO 壳对账取证，§3.4） | 订阅者、程序、单据 `basis`/检查项、读模型、IO 壳（复合链读终态观察） | 按 `LogPosition` 推进；`RetractableDelta` 可撤回可压缩 |
+| 执行事实 `Journal` | 效应 | 单据（各 `TicketAction`，含 `Close(Prepared)` 与同事务 `Prepared`）、STS 规则链（Decision/`Outcome`/`Rejection` 记录）、IO 壳（`SendBarrier`/回执/`Undetermined`/`ResolutionEvidence`/`Expired`/`CapabilityObserved`）、控制面（控制记录 `Applied \| Rejected`、安全事件，§6.4）、程序出站（`EffectRequest` 记录，§5.1） | 读模型、单据 `basis`、lane 规则（阻塞头）、IO 壳（重启重建链）、对账驱动 | 纯 append；位置即顺序；lane 链状态与 `Resolved` 是它的 fold，不另存 |
 | 规则状态（`RuleState`） | 效应 | STS 规则链（`step` 的输出） | STS 规则链 | 与决策 append 同一事务 |
 | 单据记录（`TicketAction`） | 效应 | 单据负责人 / 决定者（各 `TicketAction`） | 单据 fold、审批人视图 | 每条带 principal 与依据；`Ticket` 是这些记录的 fold |
-| 订阅表 / cursor | 观察 | 订阅需求写入（消费方/程序）、核心推进 cursor | 集成路由、投递、gap 判定 | cursor 前进；损失以 `Gap{origin: Delivery}` 标记 |
+| 订阅表 / cursor | 观察 | 物理写者只有核心的"持久订阅"元素（§6.2）：订阅需求来自消费方/程序的 RPC，cursor 推进来自 `ack`（确认 = 已处理，§3.2）；两类写在该元素内串行化，同一订阅的需求变更与 cursor 推进不交叠 | 集成路由、投递、gap 判定、重连恢复 | cursor 前进；退回只经控制面 `rewind_cursor`；损失以 `Gap{origin: Delivery}` 标记 |
+| 能力证据（握手 `Projection.capabilities`、`CapabilityObserved`） | 效应 | 每次集成握手由核心 append 一版（执行 J）；IO 壳在运行期观察到能力变化时 append `CapabilityObserved` | STS `Context`、单据 `AlignmentCheck` 解析、IO 壳取证渠道集、`required_inputs` 比对 | 只 append，最新一版生效；重启后由最近握手重建；取证渠道按**当前**能力证据选（取证是读，按当前能力才可执行），旧 Attempt 不绑定历史版本 |
+| 程序状态（`Checkpoint`） | 观察（程序解释①的 `Scan`/`Window` 累加器）与效应（解释②的执行状态：冷却、等待、过期） | 程序宿主按宿主协议（§6.5）交出 `Checkpoint{bytes, state_version}`，核心随该程序的 cursor 同事务持久化（状态与 cursor 原子对应，重放边界由此确定） | 核心重启后按宿主协议 `Load` 交回宿主；`state_version` 不兼容时 `Reset` 并显式记录（C14） | 字节形状由宿主解释器定义、核心不解释；`state_version` 是核心可比对的整数 |
+| 进程表 | 核心 | 核心拉起集成进程/程序宿主时写 `(instance_id, pid, start_time, role)`，退出时清除 | 新实例启动时回收旧实例进程（§6.1 第 1 步） | 与 fence 同库；`instance_id` 单调递增 |
+| 保留边界与引用登记 | 两侧 | 核心（边界推进由控制面 `advance_retention` 经审批写新边界；引用登记随 `Prepared`/`Checkpoint`/`ResolutionEvidence` 的 append 自动写入，§2.3） | `compact_below_retention`、`basis_valid`（`BeyondRetention` 判定）、快照 | 边界只前进；推进不得越过 `min(已登记引用)` |
 | 快照 | 两侧 | 核心（按 P15 快照规则） | 重启恢复 | 加速 `fold_state` 重建，不改 append-only 语义 |
 | 段池（不持久） | 观察（扩展） | 可选子系统（洗入）/ 原生 op | 原生 op | 运行期快照，有内部有效期，不外泄；重启由 `Pooled` 重洗（§6.6） |
 
 #### 6.7.3 配置与凭据归属
 
 - **统一路径**：所有核心与 Alice 共享的配置以文件形式持久化在 `OPENALICE_HOME` 下的统一路径，两个进程均从文件读取，不经进程间注入、环境变量或启动参数传递。
-- **文件清单**：账户封存信封、封存密钥引用、集成登记、策略/审批规则、程序装载清单。
+- **文件清单与每文件契约**：
+
+  | 文件 | 写者 | 内容 | 重载 |
+  |---|---|---|---|
+  | 账户封存信封 | Alice | 每账户的封存凭据密文与账户身份（`WriteScope` 对齐用的上游账户标识） | `rotate_credential` 重建目标集成会话（新 `session_seq`）并强制该集成各流开新 epoch（`Gap{origin: Source, reason: credential_rotated}`，不续接） |
+  | 封存密钥引用 | Alice | 解封密钥的位置引用（OS keychain / 文件路径），不含密钥本体 | 同上 |
+  | 集成登记 | Alice | 每个集成的二进制路径、启动参数、负责的账户集、契约版本 | `restart_integration` / 启动期拉起 |
+  | 策略/审批规则 | Alice | principal → scope 表（`WriteLaneKey` × `OperationKind` × 是否人工审批 × 名义阈值）、控制动作授权、`deadline` 缺省 | `reload_config(rules)`；版本 = 内容 hash，写进此后每条 `Outcome`/`Rejection`/控制记录（§6.4） |
+  | 程序装载清单 | Alice | 程序值文件引用、预算、接受的 `state_version` | `load_program` / `unload_program` |
+  | 运行期参数 | Alice | 快照频率、派生侧留存窗口、`deadline` 全局缺省、投递缓冲上限 | `reload_config(runtime)` |
+  | 运行期登记 | UTA | 当前 `instance_id`、格式版本、最近快照位置 | 只由核心写；Alice 只读 |
+
+  每个文件带格式版本；schema 的文本形式（JSON schema）随 IDL 一起作为 release 产物发布，是实现阶段工件。
 - **每文件唯一写者**：每个文件有且仅有唯一写者——Alice 写账户与规则，UTA 写运行期登记；对端只读并依据控制面通知或文件变更重载。
 - **格式版本只前进**：文件附带格式版本，升级只前进（C14）；迁移失败拒绝启动而非部分迁移。
 - **凭据链**：`统一路径封存文件 → UTA 核心 → 该集成进程`；程序与消费方只见账户身份（C7）。Alice 侧的适配（密钥位置调整、移除 flag 重启）属于接入阶段，不在本设计范围内；本设计只定义核心读取的文件契约。
-- **原子替换与重载失败**：配置文件以整文件原子替换（临时文件 + rename，与既有快照 index 的写法一致，O9/`existing-capabilities.md:189`），不存在半写可见态；运行期重载失败保留上一有效版本，结果按 P14 记"拒绝 + 原因"；启动期读取失败按 C14 拒绝启动而非部分迁移。
-- 各配置文件的 schema 与版本随其消费契约一起定：策略/审批规则随 OD-5，集成登记与程序装载清单随 OD-1/OD-7 的 IDL → `[未决 OD-6]`。
+- **原子替换与重载失败**：配置文件以整文件原子替换（临时文件 + rename，与既有快照 index 的写法一致，O9/`existing-capabilities.md:189`），不存在半写可见态；运行期重载失败保留上一有效版本，控制结果为 `Rejected(reason)` 记录（§6.4）；启动期读取失败按 C14 拒绝启动而非部分迁移。
 
 ### 6.8 Rust 映射
 
@@ -1517,15 +1560,15 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 
 痛点全是同一个缺口——Rust 没有类型级和/积的自动构造——的不同面孔；规避一律是"值化 + 启动期校验"或"具名类型 + 显式 `From`"。
 
-增量引擎按指标是否可撤回选节点图（Incremental 式）或 differential，二者不是任选，都不能承载外部 unknown Write。不迁移 tagless-final 多态与 Haxl `<*>` 违反 `ap` 的技巧。reify/解释器的性能代价需实测 → `[暂定：SP-6]`。
+增量引擎按指标是否可撤回选节点图（Incremental 式）或 differential，二者不是任选，都不能承载外部 unknown Write。不迁移 tagless-final 多态与 Haxl `<*>` 违反 `ap` 的技巧。
 
-**Rust 形状不反向决定 §2–§5 的模型**：上表是把已定的类型与抽象落到 Rust 的可行形状；性能与样板量仍待 `[暂定：SP-6]`。若实测推翻某个形状，改的是落点而非模型——模型由 §2–§5 的推导与不变量决定，不由 Rust 表达能力反推。
+**Rust 形状不反向决定 §2–§5 的模型**：上表是把已定的类型与抽象落到 Rust 的可行形状；性能与样板量由实现期 profiling 定落点。若实测只推翻某个落点（如 `salsa` vs 手写节点图、`dyn` vs 静态分发、文本 JSON-RPC vs 同一 IDL 的二进制编码），改的是落点而非模型——模型由 §2–§5 的推导与不变量决定，不由 Rust 表达能力反推。唯一例外是 §8.4 #1：若规则/程序/处理器需要不同代数或生命周期、或同一树得不到稳定规范化描述，改的是 §2.4/§3.3/§5.1/§5.3 的表示而不只是落点。
 
 ## 7 走查
 
-本章不新增任何定义。它把 §2–§6 已冻结的抽象放到具体刺激上逐步走：7.1 沿质量场景 Q 走正常路径与失败/扩展路径，每步写“输入 → 经过哪个元素/抽象（§x.y）→ 输出/append 的记录（持久化落点 §6.7）→ 对外可见结果 → 当前唯一行动者/恢复者与其稳定身份或 fence 依据”；7.2 把崩溃窗口逐行排出，恢复结论由状态机（§5.2/§5.4）与存储归属（§6.7）推出而非期望；7.3 收集走查暴露的卡点，分类并指向补哪一章，已被 SP/OD 覆盖的标同号，未覆盖的标“新”。
+本章不新增任何定义。它把 §2–§6 已定的抽象放到具体刺激上逐步走：7.1 沿质量场景 Q 走正常路径与失败/扩展路径，每步写"输入 → 经过哪个元素/抽象（§x.y）→ 输出/append 的记录（持久化落点 §6.7）→ 对外可见结果 → 当前唯一行动者/恢复者与其稳定身份或 fence 依据"；7.2 把崩溃窗口逐行排出，恢复结论由状态机（§5.2/§5.4）与存储归属（§6.7）推出而非期望；7.3 收集走查暴露的卡点，分类并指向补哪一章。
 
-走查约定：走通 = 整条路径能由冻结设计闭合，且每步的行动者与恢复归属可推出；可走查、卡于 X = 路径能推进但某步命中未决项 X（SP/OD），结论状态不强于 X；卡点 = 缺概念/选错抽象/接口不够/归属不明，登记进 7.3。持久化落点简称：**观察 J** = 观察 `Journal`；**执行 J** = 执行事实 `Journal`（纯 append，§2.5 第二层/§6.7）；**RuleState**、**单据记录**（`TicketAction`）、**订阅表/cursor**、**快照**、**段池**（不持久，§6.6）。两处同事务耦合由 §6.7 保证：单据 `Close(Prepared)` 与 `Prepared` append 同一 SQLite 事务；决策 append + 投递 outbox + `RuleState` 更新同一事务。
+走查约定：走通 = 整条路径能由已定设计闭合，且每步的行动者与恢复归属可推出；卡点 = 缺概念/选错抽象/接口不够/归属不明，登记进 7.3。持久化落点简称：**观察 J** = 观察 `Journal`；**执行 J** = 执行事实 `Journal`（纯 append，§2.5 第二层/§6.7）；**RuleState**、**单据记录**（`TicketAction`）、**订阅表/cursor**、**程序状态**、**快照**按 §6.7.2 归属表。
 
 ### 7.1 场景 trace
 
@@ -1535,7 +1578,7 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 1. 程序解释②在满足规则时 `Emit(EffectRequest{effect_kind: trade.place, basis, key})`（§5.1）。行动者：程序宿主（§6.5），以其**装载 principal** 为身份。输出：`EffectRequest` 值，未定型。对外可见：无。
 2. 核心出站写处理器接手（§5.1/§6.2），以装载 principal 为 `responsible` 开单 `Draft{basis}`（§5.2）。append 单据记录（执行 J）。对外可见：审批人/读模型可见一张 `Drafting` 单据，负责人 = 装载 principal。
 3. `SubmitForDecision` 冻结 `current_version`，`Drafting → AwaitingDecision`（§5.2）。STS 顺序固定链：授权 → 输入约束 → 审批 → lane → 过期（§5.3）；放行前读单据 fold 的 `basis_validity == Fresh`、必要项 `alignment == Aligned`、版本一致（§4/§5.2）。append RuleState + 单据记录（执行 J，同事务）。行动者：STS 规则链，身份 = 决定的 principal。
-4. 放行：同一事务 append `Prepared` 并 `Close(Prepared(position))`（§5.2/§6.7）。`Prepared` 是观察→效应唯一接触点（§4）。行动者：单据（交出）→ IO 壳（接手）。
+4. 放行：同一事务 append `Prepared` 并 `Close(Prepared(position))`（§5.2/§6.7）。`Prepared` 是单据 → IO 壳的唯一交出点（两者同属效应宇宙；跨宇宙的边只有 `basis`，§4）。行动者：单据（交出）→ IO 壳（接手）。
 5. IO 壳按 lane 顺序取 `Prepared`（§5.4），durable append `SendBarrier`（fsync，执行 J），再调用集成 `submit(attempt)`（§6.3.5）。行动者：IO 壳，身份 = `attempt_position`（`Prepared` 的 `LogPosition`，§6.3.2 锚点）+ `WriteLaneKey`。
 6. venue 受理并给出身份 → 集成 `submit` 返回 `Ack(venue_id)` → append `VenueAccepted(venue_order_id)`（执行 J，§5.4）。IO 壳补 `attribution: FromAttempt(position)`（§4）。
 7. 部分成交、成交依次到达 → 集成推送带 `attribution` 的订单状态/成交观察记录（观察 J，§6.3.6/P2/P9）；读模型 fold 出最终成交状态（§3.4/§6.4）。对外可见：订阅者依次收到受理、部分成交、成交，字段与原生身份保真（C13）；读模型最终 = 成交。
@@ -1548,26 +1591,26 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 
 **正常—失败路径（SendBarrier 后崩溃）。**
 1. 承 W1 步 5：IO 壳 durable append `SendBarrier`（fsync，执行 J）后、取得业务回执前，核心 `kill -9`。持久状态：`Prepared` 有、`SendBarrier` 有、无后继。
-2. 重启：IO 壳从执行 J 重建各 lane 链状态（§5.4 崩溃恢复）。`SendBarrier` 无后继 → append `Undetermined(crash_window)`（执行 J），进入对账驱动。行动者/恢复者：IO 壳（唯一效应处，§5.4），身份 = `attempt_position` + `WriteLaneKey`。对外可见：该尝试 = `Undetermined`；lane 队首阻塞（§5.3），无第二次 `SendBarrier`（不变量 §2.5-8）。
+2. 重启：IO 壳从执行 J 重建各 lane 链状态（§5.4 崩溃恢复）。`SendBarrier` 无后继 → append `Undetermined(CrashWindow)`（执行 J），进入对账驱动。行动者/恢复者：IO 壳（唯一效应处，§5.4），身份 = `attempt_position` + `WriteLaneKey`。对外可见：该尝试 = `Undetermined`；lane 队首阻塞（§5.3），无第二次 `SendBarrier`（不变量 §2.5-8）。
 3. 收敛按 `CapabilityProof` 声明的渠道**自动**依次取证（§5.4/§6.3.5，读副作用可重试）：
    - **按键回读** `query_by_key`：`Found(state)` → append `ResolutionEvidence(by-key, found)` → 自动 `Resolved`，lane 解除；`Absent` → 自动 `Resolved(未发生)`。
    - **listing+身份** `list_open`/`list_fills`：命中带归因身份的订单/成交 → append 回执与 `ResolutionEvidence`；listing 未见按 F10 只作 advisory，不证明未递。
    - **无渠道**：渠道穷尽仍 `inconclusive` → append 后停在带 principal 的人工 `ResolutionEvidence`（§5.4），IO 壳永不 heuristic（C1/C2/C12）。
    对外可见：三种环境末态可枚举（found→补回执 / absent→未发生 / 无渠道→人工）；人工态只能由带身份凭证关闭。
-4. 迟到回执收敛：旧集成实例迟到送来的回执若带可关联身份（`venue_order_id`/`idempotency_key` 经 `attribution`，§4/§6.3.8），由归因去重并入同一尝试，不产生第二次下单。
+4. 迟到回执收敛：旧会话的回执不经旧会话进入核心（旧 epoch 的推送在边界被拒，§6.3.6）；集成在新会话上以**观察记录**重新送达带可关联身份的回执（`venue_order_id`/`idempotency_key` 经 `attribution`，§4/§6.3.8），由归因去重并入同一尝试，不产生第二次下单。集成进程本身已死则无此路径，收敛全靠对账（步 3）。
 
-**脑裂变体（Q2③）。** 核心重启建立新集成会话 B 后，旧实例 A 迟发的合法 `submit` 可能已调用 venue。安全性由三条不变量共同保证，不依赖 A 的回执到达：`SendBarrier` durable = “可能已发出”（不变量 §2.5-8）；同 lane 无新 Attempt（不变量 §2.5-1，队首阻塞 §5.3）；对账驱动经会话 B 独立取证收敛（§5.4）。对外可见：fixture venue 调用 ≤ 1；该意图恰一条 `SendBarrier`。**卡于 SP-1**（`Undetermined` 写结果与证据渠道的记录模型）与 **SP-10**（发出后-持久化前崩溃窗口恢复协议实测）。**卡点 → 7.3-a**：A 的旧会话在核心重启后能否/如何提交回执、旧会话回执的接受/丢弃/转交归属，契约未定义（收敛不依赖它，故不阻塞安全，但归属缺口需登记）。
+**脑裂变体（Q2③）。** 旧核心退出前已把 `submit` 交给其集成进程 A；核心重启并建立新集成会话 B 后，A 作为孤儿仍可能把那次 `submit` 送达 venue。安全性由三条不变量共同保证，不依赖 A 的回执到达：`SendBarrier` durable = "可能已发出"（不变量 §2.5-8）；同 lane 无新 Attempt（不变量 §2.5-1，队首阻塞 §5.3）；对账驱动经会话 B 独立取证收敛（§5.4）。A 的回执归属由会话 epoch 定（§6.1 第 3 步）：A 的 epoch 已作废，它送来的回执在边界丢弃；A 按 §6.1 第 1 步被回收；若 venue 已受理，B 的对账取证或新会话上的观察记录（步 4）把它并入同一 Attempt。对外可见：fixture venue 调用 ≤ 1；该意图恰一条 `SendBarrier`。
 
-**可走查，卡于 SP-1/SP-10；脑裂旧会话归属 → 7.3-a（新）。**
+**走通**（崩溃注入验收 §8.5 #8；取证记录模型验收 §8.5 #17）。
 
 #### W3（Q4）Prepared 未发前崩溃
 
 **失败路径。**
 1. 承 W1 步 4：同事务 append `Prepared` + `Close(Prepared)` 已提交，但 IO 壳尚未 durable append `SendBarrier` 时 `kill -9`。持久状态：`Prepared` 有、无 `SendBarrier`。
-2. 重启：IO 壳重建链，`Prepared` 无 `SendBarrier` = **确未发出**（不变量 §2.5-8）→ 仍是可安全发送的 `Prepared`（§5.4）。恢复者：IO 壳。行动分岔：按 lane 顺序正常 `submit`（继续 W1），或若 `deadline` 已过则过期规则 `Close(Expired)`（§5.3 过期步 / H6），意图**不误升为 `Undetermined`**。
-3. 对外可见：fixture venue 调用数 = 0；不存在 `SendBarrier` 记录；末态可枚举为“重发”或“过期终态”。
+2. 重启：IO 壳重建链，`Prepared` 无 `SendBarrier` = **确未发出**（不变量 §2.5-8）→ 仍是可安全发送的 `Prepared`（§5.4）。恢复者：IO 壳。过发出前门（§5.4，读 `Prepared` 自带的 `deadline` 字段，不触碰单据——单据已 `Closed`，§5.2）：未过期则 durable append `SendBarrier` 后 `submit`（继续 W1）；已过期则 append `Expired(deadline)` 终结该链，意图**不误升为 `Undetermined`**、不补偿（H6）。
+3. 对外可见：fixture venue 调用数 = 0；不存在 `SendBarrier` 记录；末态可枚举为“重发”或 `Expired`。
 
-**走通**（崩溃窗口实测归 SP-10）。
+**走通**（崩溃注入验收 §8.5 #8(a)/#14）。
 
 #### W4（Q6）外部变更归因
 
@@ -1581,13 +1624,13 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 #### W5（Q7）同 lane 并发与队首阻塞
 
 **正常—失败路径。**
-1. UI 与 AI 在 100 ms 内各提交一笔到同一 `WriteLaneKey`（交易协议下 = (账户, 子账户)，§5.3）。两笔各自走 W1 步 2–4，各得一条 `Prepared`（执行 J），按 append 顺序进同一 lane 队列。行动者：lane 驱动（§6.2），身份 = `WriteLaneKey`。
-2. 第一笔 `submit` 后进入 `Undetermined`（承 W2）。队首阻塞：`Undetermined` 未 `Resolved` 前同 lane 无新 Attempt（不变量 §2.5-1/§5.3），第二笔在 lane 队列等待并告警。理由：后续写语义依赖队首结果（buying power、venue 侧顺序），是通讯协议语义非 UTA 的锁（§5.3/§5.5）。
+1. UI 与 AI 在 100 ms 内各提交一笔到同一 `WriteLaneKey`（交易协议下 = (账户, 子账户)，§5.3）。两笔各自走 W1 步 2–3 进入 `AwaitingDecision`；STS 链的 lane 步按 append 顺序放行第一笔（W1 步 4，得 `Prepared`），第二笔因 lane 已有未终结 Attempt 停在 lane 步（`RuleState` 的 lane 阻塞头，§5.3），单据保持 `AwaitingDecision`，不产生 `Prepared`。行动者：STS 规则链（lane 规则），身份 = `WriteLaneKey`。
+2. 第一笔 `submit` 后进入 `Undetermined`（承 W2）。队首阻塞：`Undetermined` 未 `Resolved` 前同 lane 无新 Attempt（不变量 §2.5-1/§5.3），第二笔继续停在 lane 步并告警；等待期间它的 `basis_validity`/`alignment` 照常重算（偏离是状态，§5.2），`deadline` 到期则过期步 `Close(Expired)`（H6）。队首 `Resolved` 后 lane 规则放行，链重新过依据有效性门（§5.3）再 append `Prepared`。理由：后续写语义依赖队首结果（buying power、venue 侧顺序），是通讯协议语义非 UTA 的锁（§5.3/§5.5）；等待发生在 `Prepared` 之前，所以不存在"已放行却等待"的记录。
 3. 另一账户（不同 `WriteLaneKey`）的写同时进行，不等待（H4；§5.3 粒度权衡）。对外可见：fixture 调用不重叠；`Undetermined` 期间无第二次调用；其他账户不受阻。
 
-**扩展路径。** 队首取证期间 lane 只允许决议动作（按键查询/listing/对账/作为决议手段的 cancel-by-key），非队列项（§5.3）；带 principal 的显式绕过须记为 Decision（对协议的自觉违反，§5.3）。**卡于 SP-7**（多 `Undetermined` 叠加、部分收敛与解除阻塞条件）。
+**扩展路径（显式绕过）。** 队首取证期间 lane 只允许决议动作（按键查询/listing/对账/作为决议手段的 cancel-by-key），非队列项（§5.3）。带 principal 的显式绕过记为 Decision（对协议的自觉违反，§5.3）：第二笔越过 lane 步得 `Prepared`，lane 阻塞头成为两条未终结 Attempt 的集合；各自的对账驱动独立收敛，集合清空即 lane 解除；绕过记录带 principal 与被绕过的阻塞头位置集。对外可见：绕过期间该 lane 有两条 `SendBarrier`（各属不同 Attempt）；其他 lane 不受影响。
 
-**可走查，卡于 SP-7 → 7.3-b。**
+**走通。**
 
 #### W6（Q11+Q12+Q31）行情断线 gap、慢消费者、三种消费方式
 
@@ -1597,12 +1640,12 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 
 **失败路径（慢消费者，Q12）。**
 3. 三订阅者一个不确认，缓冲耗尽 → 投递调度对该订阅者停投并 append `Gap{origin: Delivery}`（原因 `slow_consumer` 或 `conflated`，§3.2），带 from/to `Seq`，需显式确认。行动者：投递调度（§6.2），身份 = 订阅 cursor。对外可见：慢者收 gap 且停投；两快者不受影响、cursor 持续推进（§6.2 跨订阅者不阻塞）。
-4. **卡于 OD-2**：cursor“确认”指已投递/已持久化/已处理，以及确认后重复可见性，未定义（§3.2/§6.4）。
+4. 确认语义（§3.2）：`ack` = 消费方已处理；停投的慢者恢复后从其已确认 cursor 之后重收，未确认区间可能重复可见，按 `LogPosition` 去重；已确认区间不重投。
 
 **扩展路径（三种消费方式，Q31）。**
-5. 同一组流被三种消费者声明消费（§3.2）：`await-all` 按**完备进度**（frontier）触发而非 cursor（§2.3）；`ordered` 按单流顺序背压不跳过；`latest/conflated` 允许合并，损失以 `Gap{origin: Delivery, conflated}` 或消费者声明的窗口界记（§3.2）。对外可见：每次合并可追溯到声明窗口或 gap（B5/C6）。**卡于 OD-3**（读模型集合与 cursor/gap 一致性）。
+5. 同一组流被三种消费者声明消费（§3.2）：`await-all` 按**完备进度**（frontier）触发而非 cursor（§2.3）；`ordered` 按单流顺序背压不跳过；`latest/conflated` 允许合并，损失以 `Gap{origin: Delivery, conflated}` 或消费者声明的窗口界记（§3.2）。对外可见：每次合并可追溯到声明窗口或 gap（B5/C6）。读模型消费者拿到的 `Snapshot` 带 `as_of` 与 `gaps`（§6.4），与自己的 cursor 比对即知快照覆盖范围。
 
-**可走查，卡于 OD-2/OD-3 → 7.3-c、7.3-d。**
+**走通。**
 
 #### W7（Q17）核心 append 中途崩溃
 
@@ -1616,33 +1659,33 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 #### W8（Q18）配置热变更 / 换凭据（经控制面与统一路径文件）
 
 **正常路径（改规则）。**
-1. 运维者经**控制面**（认证 principal，P14/§6.4）提交策略变更；写入 `OPENALICE_HOME` 统一路径的策略/审批规则文件（每文件唯一写者 = Alice，§6.7.3）。核心据控制面通知或文件变更重载。对外可见：下一笔意图使用新策略。
-2. 待决单据并存：`AwaitingDecision` 单据的必要项 `alignment`/授权在规则变更后由单据 fold 重算（§5.2 偏离是状态）；世界/规则变了 → 单据呈 `Diverged`，审批人看到（§5.2）。**卡于 OD-5**（规则变更与待决单据并存、principal 来源、scope 存储、规则配置表示）。
+1. 运维者经**控制面** `reload_config(rules)`（认证 principal，P14/§6.4）提交策略变更；规则文件在 `OPENALICE_HOME` 统一路径（每文件唯一写者 = Alice，§6.7.3），版本 = 内容 hash。核心重载并 append 控制记录 `Applied(position)`。对外可见：下一笔意图使用新策略；此后每条 `Outcome`/`Rejection` 带新 `rule_version`。
+2. 待决单据并存：规则不冻结进单据（§6.4）；`AwaitingDecision` 单据的必要项 `alignment`/授权在规则变更后由单据 fold 重算（§5.2 偏离是状态）；放行时按当时规则重过五步，收紧规则使其 `Rejection`（带 `rule_version`）。世界/规则变了 → 单据呈 `Diverged`，审批人看到（§5.2）。
 
 **正常路径（换凭据）。**
-3. 换一个集成的凭据：凭据经链 `统一路径封存文件 → UTA 核心 → 该集成进程`（C7/§6.7.3）；只该集成会话重建并显式标 `Gap{origin: Source}`，其他集成 `Seq` 连续（§6.3.6）。恢复者：核心（凭据注入）+ 该集成（会话重建）。对外可见：目标集成会话重建与原因可见；其他流不受影响。
+3. 控制面 `rotate_credential(integration)`：凭据经链 `统一路径封存文件 → UTA 核心 → 该集成进程`（C7/§6.7.3）；只该集成会话重建（新 `session_seq`，§6.1）并显式标 `Gap{origin: Source}`，其他集成 `Seq` 连续（§6.3.6）。恢复者：核心（凭据注入）+ 该集成（会话重建）。对外可见：目标集成会话重建与原因可见；其他流不受影响。
 
-**扩展/失败路径（重载失败）。** 文件原子替换（临时文件 + rename）保证无半写可见态；重载失败保留上一有效版本并按 P14 记拒绝 + 原因（§6.7.3）。**卡于 OD-6**（各文件 schema）**与 OD-4**（控制面认证与消息）。
+**扩展/失败路径（重载失败）。** 文件原子替换（临时文件 + rename）保证无半写可见态；重载失败保留上一有效版本，控制记录 `Rejected(reason)`（§6.4/§6.7.3）。对外可见：控制记录可读；生效配置版本 hash 未变。
 
-**可走查，卡于 OD-4/OD-5/OD-6 → 7.3-e、7.3-f、7.3-g。**
+**走通。**
 
 #### W9（Q20）双实例
 
 **失败路径。**
 1. 第二个核心对同一用户状态根启动。单实例由 OS 文件锁 + fence 保证（H10/§6.1）；第二实例以专用退出码拒绝启动、**不做接管**（§6.1）。对外可见：退出码/诊断可观测；不产生双写。行动者：OS 文件锁持有者判定。
-2. **持有者死亡后接管变体。** 原持有者死亡 → 孤儿实例（父死子活，H10）由 fence 回收；新实例按 fence 接管（§6.1）。恢复者：新实例，身份 = fence 令牌。接管后在途 `SendBarrier`/`Undetermined` 由新实例 IO 壳从执行 J 重建（§5.4，同 W2）。
-3. **卡于 OD-10**：fence 接管的具体机制、旧在途 `submit`/对账在接管边界的归属、旧实例失权时点未定义（§6.1/§6.7）。此与 W2 的旧会话归属属同一安全边界（fencing）。对外可见：接管不产生双写（由不变量 §2.5-2 单写者 + fence 保证），但接管归属语义待定。
+2. **持有者死亡后接管变体。** 原持有者死亡，锁随进程释放；它拉起的集成/宿主进程可能仍存活（父死子活，H10 的孤儿）。新实例取 fence 接管（§6.1），身份 = fence 令牌。接管后在途 `SendBarrier`/`Undetermined` 由新实例 IO 壳从执行 J 重建（§5.4，同 W2）。
+3. 接管边界（§6.1 第 1 步）：新实例取 fence 即 `instance_id` 加一，旧实例失权时点 = 该事务提交；旧实例登记的集成/宿主进程按进程表回收；旧 epoch 的推送与回执在边界丢弃（§6.3.6）。旧在途 `submit` 的命运与 W2 脑裂变体相同：由 `SendBarrier` 记录 + 新实例对账收敛，不依赖旧实例。对外可见：接管不产生双写（不变量 §2.5-2 单写者 + fence）；进程表中无旧 `instance_id` 名下的存活进程。
 
-**可走查，卡于 OD-10 → 7.3-h（与 7.3-a、7.3-m 同边界）。**
+**走通。**
 
 #### W10（Q25）程序超预算隔离
 
 **失败路径。**
 1. 程序死循环 / 超内存 / 超意图速率（H2/C4）。预算由**程序宿主**进程/沙箱隔离而非类型系统（§5.1/§6.5）。行动者：程序宿主，身份 = 程序制品 hash + 装载 principal（P12）。
 2. 超预算 → 宿主隔离该程序并产出失败观察（观察 J，派生失败记录）；其他程序、账户、核心不受影响（C4/§6.5）。对外可见：预算违规、隔离状态、其他主体可用性可观测。
-3. **卡于 SP-11/OD-9**（程序宿主协议：编译单元、装载、预算语义、trap、状态迁移）与 **SP-4**（程序状态显式序列化，不依赖运行时快照）。预算值由程序装载时声明（P12），不是设计常量。
+3. 宿主协议（§6.5）：超预算或 trap = 核心终止宿主进程、append `ProgramFailed{reason: Budget(kind) | Trap}`，程序停在 `Failed` 直到控制面重新 `load_program`；程序状态经最近 `Checkpoint`（与 cursor 同事务持久化，§6.7.2）在重新装载时 `Load` 交回。预算值由程序装载时声明（P12），不是设计常量。
 
-**可走查，卡于 SP-11/OD-9/SP-4 → 7.3-i。**
+**走通**（三 OS 预算与隔离验收 §8.5 #15；状态跨重启验收 §8.5 #16）。
 
 #### W11（Q26）单据并发编辑与 SendBack
 
@@ -1650,36 +1693,36 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 1. 单据已有负责人 `responsible`（锁 = 该字段存在，§5.2），`current_version` 已前进。第二个 principal 对该单据 `Revise` → 被拒（持锁期间仅 `responsible` 可 `Revise`，不排队不分叉，§5.2）。行动者：单据锁；线性化点 = 单写者 append 顺序 + `Ticket` fold（§3.1/§6.7）。对外可见：冲突结果、负责人、版本可读。
 2. **SendBack 分支。** 送审后 `AwaitingDecision`，审批人 `SendBack{reason}` → `AwaitingDecision → Drafting`，`responsible` 不变（§5.2 穷尽转移）。`SendBack` 后 `Revise` 使 `current_version` 前进，旧 Decision 自然失效（§5.2）。`AwaitingDecision` 期间 `Revise` 被拒（决定绑定 `current_version`，C11）。append 单据记录（执行 J，每条带 principal 与依据）。
 3. **决定版本冲突（Q10 同型）。** 两 principal 对同一 `current_version` 决定，第二个返回冲突、不执行、不改状态（C11/§5.2）。
-4. **卡于 OD-5**：负责人失联的强制 `Transfer`/`Expired` 的 principal 与时限属授权/审批策略配置（§5.3 权衡/OD-5）。
+4. 负责人失联：由策略层处理（§5.2 权衡）——过期步在 `deadline` 到期 `Close(Expired)`；或持有控制授权的 principal 经 `transfer(ticket, to)` 强制转移（§6.4 操作集），转移记录带 principal 与依据。对外可见：单据要么 `Closed(Expired)`，要么 `responsible` 变更且可追溯。
 
-**可走查（并发/锁/线性化走通），卡于 OD-5（失联策略）→ 7.3-f。**
+**走通。**
 
 #### W12（Q27）Replace 无原子能力（含撤单腿 Undetermined）
 
 **失败路径。**
 1. 改单意图类型 `Replace [交易协议]`，构造期必须携带 `target: VenueRef | IdemKey`（parse-don't-validate，§5.2/§6.3.2）。venue 无原子 cancel/replace → IO 壳在**同一条 Attempt 链**解释为 `SendBarrier(cancel) → 目标订单终态证据 → SendBarrier(new)`（§5.2/§5.4）；这是 `>>=`，第二腿读第一腿结果，发生在 IO 壳内。行动者：IO 壳，身份 = `attempt_position` + `WriteLaneKey`。
 2. 撤单腿 `submit` 无回执 → `Undetermined`（§5.4）→ 整条链停在对账，新单腿**不发**（§5.2）。新单数量按意图口径从撤单腿终态观察（含 `cumulative_filled_quantity`）算出（§5.2/§6.3.3）。对外可见：读模型显示原操作与后续操作的关联及未决状态。
-3. **卡于 SP-1**（`ResolutionEvidence` 指尝试、派生侧终态与成交量是观察记录，共享一次 venue 交互落两侧记录的输入契约）。链的时限即该意图的 `deadline`（H6；§6.3.3 `deadline` 处理器）：撤单腿停在对账期间 `deadline` 到期 → append 过期记录、新单腿永不发出、不补偿；撤单腿的 `Undetermined` 仍由对账独立收敛。
+3. 取证记录模型（§5.4）：撤单腿的每次取证同一事务落一条观察记录（目标订单终态与累计成交量，`provenance: Reconciliation`）与一条 `ResolutionEvidence`（`Found` 引用该观察记录）；新单腿从那条观察记录算量。链的时限即该意图的 `deadline`（H6；§6.3.3 `deadline` 处理器），由 IO 壳在每条腿的发出前门读取（§5.4）：撤单腿停在对账期间 `deadline` 到期，则撤单腿收敛后新单腿过门失败 → append `Expired(deadline)` 终结该链、新单腿永不发出、不补偿、lane 解除；撤单腿的 `Undetermined` 仍由对账独立收敛（`Expired` 不替代它的决议）。
 
-**可走查，卡于 SP-1 → 7.3-a（记录模型子项）。**
+**走通**（验收 §8.5 #14/#17）。
 
 #### W13（Q28）保留边界推进与被引用位置
 
 **失败路径。**
-1. retention 推进时仍有单据 `basis` 或程序输入引用的 `LogPosition`（§2.3/§4）。观察侧可压缩（`compact_below_retention` 仅对 `RetractableDelta`，§3.1/§6.7.1）；执行事实只 append 不压缩（§2.5 第二层）。
+1. retention 推进时仍有单据 `basis` 或程序 `Checkpoint` cursor 引用的 `LogPosition`（§2.3/§4）；核心 `Window` 节点的累加器随 `Checkpoint` 持久化，不回读历史；`Pooled` 窗口从 `Journal` 重洗历史但不登记，越界只得 `BeyondRetention`（§6.6 条件 4）。观察侧可压缩（`compact_below_retention` 仅对 `RetractableDelta`，§3.1/§6.7.1）；执行事实只 append 不压缩（§2.5 第二层）。
 2. 边界推进前必须显式处理仍被引用的位置（不变量 §2.5-3）：保留对应历史、保存必要证据，或缩小重放承诺（`AS OF ≥ retention frontier`，§2.3）；否则拒绝推进。恢复者：核心（保留协议）。落到边界下的 `basis` 位置在 prepare 只读校验时为 `BeyondRetention`（§4 `basis_validity`）。对外可见：压缩后所有仍被引用的 `LogPosition` 均在保留边界内。
-3. **卡于 SP-8**（引用登记方、边界推进审批方、原始证据与派生历史留存时长）。
+3. 登记与审批（§2.3）：引用由核心在 `Prepared`/`Checkpoint`/`ResolutionEvidence` append 时自动登记；推进经控制面 `advance_retention(to)`，`to` 越过 `min(已登记引用)` → `Rejected(ReferencedBelow{min})`；留存窗口是运行期参数（§6.7.3）。对外可见：控制记录可读；压缩后无已登记引用落到边界之下（§8.5 #4）。
 
-**可走查，卡于 SP-8 → 7.3-j。**
+**走通。**
 
 #### W14（Q29）Alice 断连重连
 
 **失败路径。**
 1. Alice 崩溃/重启，UTA 独立存活；订阅与程序 owner 是核心（H5/C5/§6.1）。行动者：核心（生命周期独立）。
 2. 重连后 Alice 会话（P13）取当前状态经**读模型**（§3.4/§6.4）与 cursor 之后记录；断连期间损失以 `Gap{origin: Delivery}` 显式标记，不伪造逐条补发（§6.4）。对外可见：当前状态、cursor 后记录、gap 原因可读。
-3. **卡于 OD-1**（Alice↔核心消息形状、session handshake 取 principal）、**OD-2**（确认语义与重复可见性）、**OD-3**（读模型集合一致性）。
+3. 重连协议（§6.4）：`handshake(contract_version, actor)` 取 `principal = (os_user, actor)`；`read_model(kind)` 得带 `as_of` 与 `gaps` 的 `Snapshot`；`subscribe(selector, mode, from = 已确认 cursor)` 续收；未确认区间可能重复可见，按 `LogPosition` 去重（§3.2）。对外可见：`as_of` 与 cursor 可比对，重复只出现在未确认区间。
 
-**可走查，卡于 OD-1/OD-2/OD-3 → 7.3-c、7.3-d、7.3-k。**
+**走通。**
 
 #### W15（Q24）含 Pooled 的程序：无子系统 / 有子系统且 op 崩溃
 
@@ -1690,9 +1733,9 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 2. 四条前置条件由输出类型 fold 在装载期判定（定长/位置线性/无指针/可容忍 ring 回收，§6.6）；满足则 `Pooled` 输入交子系统物化为段视图（§6.6 一次洗入；实现见 hpc-derivation/design.md §1.4–§1.5、§5）。行动者：子系统洗入器；段身份由子系统契约表标定（hpc-derivation/design.md §5.2）。
 3. 原生 op 借用只读段计算、发布输出派生流；下游像读任何派生流一样读它（§6.6）。op 进程 panic/OOM → 只死计算进程，核心记失败观察（观察 J 派生失败记录），**不改名**为 `Gap{origin: Source}` 或 `NoResponse`（§6.6；hpc-derivation/design.md §5.3/§6.3）。恢复者：子系统的借用回收 + H10 fence（hpc-derivation/design.md §5.3/§6.5）。
 4. 核心崩溃时 op 成孤儿，由 fence 回收（§6.1 fence；hpc-derivation/design.md §6.5）。若消费者产生外部写，仍经单据 → STS → IO 壳（§6.6，走 W1）。
-5. **卡于 SP-12 / SP-13 / SP-14**（子系统内部：跨平台映射与回收、布局 hash 规范化、触发与背压语义；见 hpc-derivation/design.md §11.1）。
+5. 核心层对外可见结论到此闭合：装载期拒绝、失败观察、孤儿回收、外部写仍经效应路径都由 §6.6 与 §6.1 给出。段的跨平台映射与回收、布局 hash 规范化、触发与合并语义是子系统内部决定（hpc-derivation/design.md §5/§6，验收其 §10），不改变核心可见结论。
 
-**可走查，卡于 SP-12/SP-13/SP-14 → 7.3-l。**
+**走通**（核心层最小验收 §8.5 #7；子系统验收在其 §10）。
 
 #### W16 行情修订撤回旧派生信号但不动已发执行事实
 
@@ -1713,191 +1756,177 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 
 **走通。**
 
+#### W18（Q8+Q9+Q10）创建期否决、人工审批与过期、决定版本冲突
+
+**失败路径（Q8，三种输入）。**
+1. 消费方经会话（P13，principal 已认证，§6.1/C11）提交三笔意图：instrument 属他账户、数量非法、只读账户下单。写处理器以会话 principal 为 `responsible` 开单 `Draft`（§5.1/§5.2），append 单据记录（执行 J）。行动者：单据，身份 = principal。
+2. `SubmitForDecision` 后 STS 链逐步读记录（§5.3）：只读账户在**授权**步被拒（`Rejection::Unauthorized`，另 append 安全事件记录，C11）；他账户 instrument 与非法数量在**输入约束**步被拒（守卫字段处理器，C9/C10）。每笔否决 = `Close(DecisionRejected)` + 规则 `Outcome` 记录，带 principal、时间、依据位置（执行 J）。链在拒绝处停止，后续步不执行。对外可见：三对意图/否决记录；安全事件可读；fixture venue 调用数 = 0，无 `Prepared`。
+
+**正常—失败路径（Q9，人工审批与过期）。**
+3. 策略要求人工：**审批**步把单据留在 `AwaitingDecision(current_version)`（§5.2），待决集合对审批人可见（读模型，§3.4）。审批人 principal 提交 Decision，引用 `current_version` 与期望的待决集合版本（C11）；批准 → 链继续 lane → 过期 → 放行 append `Prepared` + `Close(Prepared)`（W1 步 4）；否决 → `Close(DecisionRejected)`。每条 Decision 带谁、何时、依据 `LogPosition`、绑定版本（执行 J）。
+4. 另一笔超过 `deadline` 仍未获决定：**过期**步按 `Input::超时` 触发 → `Close(Expired)`（H6，§5.2 状态机允许 `AwaitingDecision → Closed`），不补偿、不递送。对外可见：读模型可回答谁、何时、依据什么批准；过期意图无 `Prepared`/`SendBarrier`。
+
+**失败路径（Q10，决定版本冲突）。**
+5. 两个 principal 以同一期望版本对同一意图作决定：第一条 Decision 使单据 `Close(Prepared)` 或 `Close(DecisionRejected)`；第二条到达时单据已 `Closed`，状态机无出边（§5.2 至多一次 `Close`），且待决集合版本已前进 → 返回冲突记录（C11），不执行、不改状态。对外可见：冲突记录存在；意图状态不变。
+
+**走通**（策略表示在 §6.4：principal → scope 表、是否人工审批、名义阈值，版本 = 内容 hash；验收 §8.5 #11）。
+
+#### W19（Q19）会话身份与未授权控制
+
+**失败路径（三类输入）。**
+1. 未认证连接发起写或控制请求：会话未完成 `handshake`（§6.4：传输给出 OS 对端凭据，`principal = (os_user, actor)`），核心在会话层拒绝，不进入任何处理器；append 安全事件记录（执行 J，P7）。对外可见：无单据、无 venue 调用、无配置变更。
+2. 已认证会话在请求体里伪造另一 principal：写处理器只取**会话绑定的 principal**（C11 "每个 P13 会话绑定一个 principal"），请求体身份字段不参与授权；以会话 principal 开单后，授权步按 (principal, `WriteLaneKey`, `OperationKind`) 判定，越权则 `Close(DecisionRejected)` + 安全事件。对外可见：安全事件可读；无 `Prepared`。
+3. 已认证但无 scope 的控制请求（`load_program`/`rotate_credential`/`restart_integration`/`request_snapshot` 等，§6.4 操作集）：控制动作按 (principal, 动作种类) 授权，策略文件（§6.7.3）的 scope 不含该动作 → 控制记录 `Rejected(Unauthorized)`，无副作用。对外可见：配置文件未变（§6.7.3 每文件唯一写者）、集成会话未重建、无安全副作用之外的记录。
+
+**走通**（验收 §8.5 #13）。
+
 ### 7.2 崩溃矩阵
 
-行 = 崩溃窗口；列 = 崩溃后持久状态 / 重启后恢复动作（由谁）/ 对外可见结果 / 依据（§x.y）/ 未决（SP/OD）。每行恢复结论由状态机（§5.2/§5.4）与存储归属（§6.7）推出。
+行 = 崩溃窗口；列 = 崩溃后持久状态 / 重启后恢复动作（由谁）/ 对外可见结果 / 依据（§x.y）/ 验收项（§8.5 编号或子系统验收编号）。每行恢复结论由状态机（§5.2/§5.4）与存储归属（§6.7）推出。
 
-| # | 崩溃窗口 | 崩溃后持久状态 | 重启后恢复动作（由谁） | 对外可见结果 | 依据 | 未决 |
+| # | 崩溃窗口 | 崩溃后持久状态 | 重启后恢复动作（由谁） | 对外可见结果 | 依据 | 验收 |
 |---|---|---|---|---|---|---|
-| 1 | 单据 `Close(Prepared)` + `Prepared` 同事务中途 | 事务未提交 → 二者皆无 | 核心：SQLite 事务原子回滚；单据仍 `AwaitingDecision` | 无 `Prepared`；单据可重新放行 | §5.2；§6.7.1（同事务） | — |
-| 2 | `Prepared` 已持久、`SendBarrier` 未持久 | `Prepared` 有、无 `SendBarrier` | IO 壳：`Prepared` 无 `SendBarrier` = 确未发出 → 可安全发送或按 `deadline` 过期 | venue 调用 0；不误升 `Undetermined` | §5.4；不变量 §2.5-8 | SP-10 |
-| 3 | `SendBarrier` 已 fsync、`submit` 未发 | `SendBarrier` 有、无后继 | IO 壳：`SendBarrier` 无后继 = 可能已发出 → append `Undetermined` 进对账 | 尝试 = `Undetermined`；lane 队首阻塞；无第二 `SendBarrier` | §5.4；不变量 §2.5-1/8 | SP-1/SP-10 |
-| 4 | `submit` 已发、回执未到 | `SendBarrier` 有、无回执 | IO 壳：同 #3，对账驱动按渠道取证收敛 | `Undetermined` → found/absent/人工 | §5.4；C1/C2 | SP-1 |
-| 5 | 回执已到、未 append | `SendBarrier` 有、回执丢在内存 | IO 壳：视为无后继 → `Undetermined` → 对账（按键回读会重得同一回执） | `Undetermined` 经对账收敛为 `VenueAccepted` | §5.4；§5.5（读可重试） | SP-1 |
-| 6 | 记录已 append 提交，投递/cursor 推进/对外发布前崩溃 | 记录已提交、cursor/投递未推进 | 核心：`fold_state` 重建；订阅者按其 cursor 重收（可能重复可见） | 记录不丢；重复可见性未定义 | §3.4；§6.7；§3.2 | OD-2 |
-| 7 | 对账取证中途 | 部分 `ResolutionEvidence` 已 append | IO 壳：取证是读副作用、可重放；未收敛者继续按渠道取证 | 收敛进度不丢；渠道穷尽仍 `inconclusive` 停人工 | §5.4；§5.5 | SP-1 |
-| 8 | `Replace`：cancel 腿终态已持久、new 腿未过 `SendBarrier` 时崩溃 | cancel 腿终态证据有、无 new 腿 `SendBarrier` | IO 壳：同一 Attempt 链续跑，读 cancel 终态观察算新单量后发 new 腿（确未发出，#2 语义） | 复合操作按链续；new 腿未重复 | §5.2/§5.4；不变量 §2.5-8 | SP-1 |
-| 9 | 观察 append 中途 | 半写事务未提交 | 核心：单写者原子回滚；半写不可见；`fold_state` 重建 | 无半条记录；订阅者按 cursor 续接 | §3.1；§6.7.1；不变量 §2.5-2 | — |
-| 10 | 派生 DAG 重算中途 | 派生记录部分 append（`RetractableDelta`） | 核心：派生侧可重算，未提交贡献重建；无自反馈环 | 派生结果最终一致；可撤回可压缩 | §3.1/§3.3 | SP-3 |
-| 11 | 快照写入中途 | 快照部分写、原记录完整 | 核心：快照仅加速；半写快照丢弃，从保留边界 `fold_state` 重建 | 不改 append-only 语义；重启延迟增大 | §6.7.1/§6.7.2 | SP-8 |
-| 12 | 配置文件重载中途 | 统一路径文件原子替换半途 | 核心：rename 未落则旧文件完整可读；rename 已落则新文件完整；重载失败保留上一有效版本并按 P14 记拒绝；启动期失败按 C14 拒绝启动 | 重载成功或整体拒绝；无半写可见态 | §6.7.3；C14；O9 | OD-4（结果消息）/OD-6（文件 schema） |
-| 13 | 集成崩溃（观察流侧） | 观察流断代 | 核心+集成：记 `Gap{origin: Source}`，续传/重连补齐 | 该流 gap 显式；核心与其他流不受影响 | §3.2；§6.1（两故障面） | OD-7 |
-| 14 | 集成崩溃（`submit` 中） | 已 `SendBarrier`、`submit` 中途 | IO 壳：`NoResponse` = `Undetermined` → 对账；不区分“集成挂”与“venue 没回” | 尝试 `Undetermined`，靠证据非猜 | §5.4；§6.1/§6.3.7 | SP-1 |
-| 15 | 新核心接管时旧核心/旧集成会话仍存活并继续送回执 | 双实例/旧会话在途回执 | 新实例：fence 接管、旧实例失权；旧会话回执路由/接受/丢弃归属未定义（收敛靠对账不靠它） | 不产生双写；旧会话回执归属待定 | §6.1（fence）；§5.4（对账） | OD-10 |
-| 16 | 程序宿主崩溃 | 程序 state 依宿主 | 宿主：程序状态须显式可序列化重建，不依赖运行时快照；H9 跨重启恢复 | 程序恢复或显式冷启动 + 回填 | §5.1/§6.5；H9 | SP-4/SP-11 |
-| 17 | 可选子系统 op 崩溃 | 段借用未释放 | 子系统回收借用 + H10 fence；核心记失败观察 | op 失败观察；核心与其他消费者不受影响 | §6.6；hpc-derivation/design.md §5.3/§6.5 | SP-12 |
-| 18 | 可选子系统 op 已产生结果、核心在结果持久化前崩溃/断连 | 输出段在段池、未接入派生流持久点 | 核心：段池不持久，重启由 `Pooled` 重洗重算；未发布结果不半接入下游 | 结果重算；下游只见成功发布的派生流 | §6.6；hpc-derivation/design.md §1.5/§5.3 | SP-12/SP-14 |
-| 19 | 核心崩溃时可选子系统 op 孤儿 | op 进程存活、核心死 | 新核心 + fence：op 为孤儿由 H10 fence 回收；重连后重新握手 | 无双写；孤儿被回收 | §6.1；hpc-derivation/design.md §6.5 | SP-12；OD-10 |
-| 20 | Alice 崩溃 | 核心订阅/程序/lane 完整 | 核心：独立存活；Alice 重连拉当前状态 + cursor 后记录 + gap | 断连损失显式标 gap，不伪造补发 | §6.1/§6.4；H5/C5 | OD-1/OD-2 |
+| 1 | 单据 `Close(Prepared)` + `Prepared` 同事务中途 | 事务未提交 → 二者皆无 | 核心：SQLite 事务原子回滚；单据仍 `AwaitingDecision` | 无 `Prepared`；单据可重新放行 | §5.2；§6.7.1（同事务） | §8.5 #8(d) |
+| 2 | `Prepared` 已持久、`SendBarrier` 未持久 | `Prepared` 有、无 `SendBarrier` | IO 壳：`Prepared` 无 `SendBarrier` = 确未发出 → 过发出前门（§5.4）：`deadline` 未过则 durable append `SendBarrier` 后 `submit`；已过则 append `Expired(deadline)` 终结该链 | venue 调用 0；不误升 `Undetermined`；末态为"已发"或 `Expired` | §5.4；不变量 §2.5-8 | §8.5 #8(a)/#14 |
+| 3 | `SendBarrier` 已 fsync、`submit` 未发 | `SendBarrier` 有、无后继 | IO 壳：`SendBarrier` 无后继 = 可能已发出 → append `Undetermined(CrashWindow)` 进对账 | 尝试 = `Undetermined`；lane 阻塞；无第二 `SendBarrier` | §5.4；不变量 §2.5-1/8 | §8.5 #8(b)(c) |
+| 4 | `submit` 已发、回执未到 | `SendBarrier` 有、无回执 | IO 壳：同 #3，对账驱动按渠道取证收敛 | `Undetermined` → found/absent/人工 | §5.4；C1/C2 | §8.5 #3/#17 |
+| 5 | 回执已到、未 append | `SendBarrier` 有、回执丢在内存 | IO 壳：视为无后继 → `Undetermined` → 对账（按键回读会重得同一回执） | `Undetermined` 经对账收敛为 `VenueAccepted` | §5.4；§5.5（读可重试） | §8.5 #3/#17 |
+| 6 | 记录已 append 提交，投递/cursor 推进前崩溃 | 记录已提交、cursor 未推进 | 核心：`fold_state` 重建；订阅者从已确认 cursor 之后重收（§3.2：未确认的记录可重复可见，按 `LogPosition` 去重） | 记录不丢；重复只出现在未确认区间 | §3.2；§3.4；§6.7 | — |
+| 7 | 对账取证中途 | 部分 `ResolutionEvidence` 已 append | IO 壳：取证是读副作用、可重放；未收敛者继续按渠道取证（下一渠道由 fold 重建） | 收敛进度不丢；渠道穷尽仍 `inconclusive` 停人工 | §5.4；§5.5 | §8.5 #17 |
+| 8 | `Replace`：cancel 腿终态已持久、new 腿未过 `SendBarrier` 时崩溃 | cancel 腿终态证据有、无 new 腿 `SendBarrier` | IO 壳：同一 Attempt 链续跑，读 cancel 终态观察算新单量，过发出前门后发 new 腿（确未发出，#2 语义；`deadline` 已过则 `Expired(deadline)`，new 腿永不发） | 复合操作按链续；new 腿未重复 | §5.2/§5.4；不变量 §2.5-8 | §8.5 #8(c)/#14 |
+| 9 | 观察 append 中途 | 半写事务未提交 | 核心：单写者原子回滚；半写不可见；`fold_state` 重建 | 无半条记录；订阅者按 cursor 续接 | §3.1；§6.7.1；不变量 §2.5-2 | §8.5 #8(d) |
+| 10 | 派生 DAG 重算中途 | 派生记录部分 append（`RetractableDelta`） | 核心：派生侧可重算，未提交贡献重建；无自反馈环 | 派生结果最终一致；可撤回可压缩 | §3.1/§3.3 | — |
+| 11 | 快照写入中途 | 快照部分写、原记录完整 | 核心：快照仅加速；半写快照丢弃，从保留边界 `fold_state` 重建 | 不改 append-only 语义；重启延迟增大 | §6.7.1/§6.7.2 | — |
+| 12 | 配置文件重载中途 | 统一路径文件原子替换半途 | 核心：rename 未落则旧文件完整可读；rename 已落则新文件完整；重载失败保留上一有效版本并 append 控制结果 `Rejected(reason)`；启动期失败按 C14 拒绝启动 | 重载成功或整体拒绝；无半写可见态 | §6.7.3；C14；O9 | — |
+| 13 | 集成崩溃（观察流侧） | 观察流断代 | 核心+集成：记 `Gap{origin: Source}`，按 §6.3.10 回填补齐或标 gap | 该流 gap 显式；核心与其他流不受影响 | §3.2；§6.1（两故障面）；§6.3.10 | §8.5 #9 |
+| 14 | 集成崩溃（`submit` 中） | 已 `SendBarrier`、`submit` 中途 | IO 壳：`NoResponse` = `Undetermined` → 对账；不区分"集成挂"与"venue 没回" | 尝试 `Undetermined`，靠证据非猜 | §5.4；§6.1/§6.3.7 | §8.5 #9 |
+| 15 | 旧核心已退出但其集成/宿主进程仍存活（孤儿），新核心接管 | 孤儿进程持旧会话 epoch、可能有在途回执 | 新实例：取 fence、`instance_id` 加一；按进程表回收孤儿（§6.1 第 1 步）；旧 epoch 推送与回执在边界丢弃；venue 已受理的写经新会话观察记录或对账取证并入同一 Attempt（§6.3.6、W2.4） | 不产生双写；旧会话回执不经旧会话进入 | §6.1；§6.3.6；§5.4 | §8.5 #8(c) |
+| 16 | 程序宿主崩溃，或核心在 `Advance` 输出持久化前崩溃 | 程序 state 依最近已提交的 `Checkpoint`；未提交的 `Output` 整体不存在 | 核心：从与 cursor 同事务持久化的 `Checkpoint` 重新 `Load`，重放该 cursor 之后的记录（§6.5）；`state_version` 不兼容则 `Reset` 记录 + 冷启动回填（H9） | 程序从 checkpoint 续跑，不重复 `Emit`；或显式冷启动 | §3.3/§6.5/§6.7.2 | §8.5 #16 |
+| 17 | 可选子系统 op 崩溃 | 段借用未释放 | 子系统回收借用 + H10 fence；核心记失败观察 | op 失败观察；核心与其他消费者不受影响 | §6.6；hpc-derivation/design.md §5.3/§6.5 | hpc §10 #3/#4 |
+| 18 | 可选子系统 op 已产生结果、核心在结果持久化前崩溃/断连 | 输出段在段池、未接入派生流持久点 | 核心：段池不持久，重启由 `Pooled` 重洗重算；未发布结果不半接入下游 | 结果重算；下游只见成功发布的派生流 | §6.6；hpc-derivation/design.md §1.5/§5.3 | hpc §10 #7/#13 |
+| 19 | 核心崩溃时可选子系统 op 孤儿 | op 进程存活、核心死 | 新核心 + fence：op 为孤儿由 H10 fence 回收；重连后重新握手 | 无双写；孤儿被回收 | §6.1；hpc-derivation/design.md §6.5 | hpc §10 #3 |
+| 20 | Alice 崩溃 | 核心订阅/程序/lane 完整 | 核心：独立存活；Alice 重连后握手取 principal，读模型取 `as_of`，从已确认 cursor 之后订阅原始记录（§6.4） | 断连损失显式标 gap，不伪造补发 | §6.1/§6.4；H5/C5 | — |
 
-可进 §8.5 验收的可测项：#2/#3/#8 的 fsync 崩溃注入证明“`Prepared` 无 `SendBarrier` 确未发、`SendBarrier` 无后继升 `Undetermined`、复合链不重复投放”（对应 SP-10）；#3 的 fixture venue 调用 ≤ 1；#9 半写不可见、无半条记录；#1 同事务原子回滚；#13/#14 两故障面唯一判别边界（`submit` 路径与否）。
+可进 §8.5 验收的可测项：#2/#3/#8 的 fsync 崩溃注入证明"`Prepared` 无 `SendBarrier` 确未发、`SendBarrier` 无后继升 `Undetermined`、复合链不重复投放"（§8.5 #8/#14）；#3 的 fixture venue 调用 ≤ 1；#9 半写不可见、无半条记录；#1 同事务原子回滚；#13/#14 两故障面唯一判别边界（`submit` 路径与否）；#16 程序状态跨重启（§8.5 #16）。
 
 ### 7.3 卡点清单
 
-每条：分类（缺概念 / 选错抽象 / 接口不够 / 归属不明）· 位置（场景.步）· 需哪章补什么 · 覆盖（SP/OD 同号）或“新”。不给修复方案。
-
-| 编号 | 分类 | 位置 | 需哪章补什么 | 覆盖 |
-|---|---|---|---|---|
-| 7.3-a | 接口不够 | W2.3–4 脑裂 / W12.3 / 崩溃矩阵 #3–5/#8/#15 | §5.4/§6.3 补 `Undetermined` 写结果与证据渠道的记录模型、共享一次 venue 交互落两侧记录的输入契约、发出后-持久化前崩溃窗口恢复协议 | SP-1、SP-10 |
-| 7.3-b | 接口不够 | W5.2–3 | §5.3 补 lane 多 `Undetermined` 叠加、部分收敛与解除阻塞条件 | SP-7 |
-| 7.3-c | 接口不够 | W6.4 / W14.2 / 崩溃矩阵 #6/#20 | §3.2/§6.4 补 cursor“确认”指投递/持久化/处理，及确认后重复可见性规则 | OD-2 |
-| 7.3-d | 接口不够 | W6.5 / W14.3 | §6.4 补读模型集合清单与 cursor/gap 一致性、核心维护 vs Alice 自 fold | OD-3 |
-| 7.3-e | 接口不够 | W8.4 / 崩溃矩阵 #12 | §6.4 补控制面认证机制与每个控制动作的消息与结果（生效/拒绝+原因） | OD-4 |
-| 7.3-f | 归属不明 | W8.2 / W11.4 | §5.3/§6.4 补 principal 来源、scope 存储、规则配置表示、规则变更与待决单据并存、负责人失联的强制 Transfer/Expired 策略 | OD-5 |
-| 7.3-g | 接口不够 | W8.4 / 崩溃矩阵 #12 | §6.7.3 补各配置文件（账户封存信封、封存密钥引用、集成登记、策略/审批规则、程序装载清单）的 schema 与版本 | OD-6（随 OD-5 的规则配置表示与 OD-1/OD-7 的 IDL 一起定） |
-| 7.3-h | 归属不明 | W9.2–3 / 崩溃矩阵 #15/#19 | §6.1 补 fence 接管的具体机制、旧在途 `submit`/对账在接管边界的归属、旧实例失权时点 | OD-10 |
-| 7.3-i | 接口不够 | W10.3 / 崩溃矩阵 #16 | §6.5 补程序宿主协议（编译单元、装载、预算语义、trap、状态迁移、替换）与程序状态显式序列化 | SP-11、OD-9、SP-4 |
-| 7.3-j | 接口不够 | W13.3 / 崩溃矩阵 #11 | §2.3/§6.7 补引用登记方、边界推进审批方、原始证据与派生历史留存时长 | SP-8 |
-| 7.3-k | 接口不够 | W14.3 | §6.4 补 Alice↔核心消息形状、session handshake 取 principal、订阅原始记录 vs 读模型的消息 | OD-1 |
-| 7.3-l | 接口不够 | W15.5 / 崩溃矩阵 #17–19 | hpc-derivation/design.md §5/§6 补跨平台映射与借用/崩溃/在途段回收、触发/背压/失败观察语义登记、布局 hash 稳定规范化（子系统内部卡点，核心接口 §6.6 不变） | SP-12、SP-13、SP-14 |
-| 7.3-m | 接口不够 / 归属不明 | W2.4 脑裂 / 崩溃矩阵 #15 | §6.1（实例/会话生命周期）/§6.3（握手/推送契约）补集成会话 epoch/fencing、核心重启后旧会话在途回执的接受/丢弃/转交规则、最终判定权归属 | **OD-10**。已定部分：收敛不依赖旧会话回执（对账驱动经新会话独立取证）；不重复投放由 `SendBarrier` durable + lane 队首阻塞保证。与 SP-1/SP-10 相关但不被其替代 |
-| 7.3-n | 接口不够 | W15.2 / W6.2 / 崩溃矩阵 #13 | §6.3 补回填请求与结果 schema、实时边界确认语义、readiness 状态机完整集合、健康面字段稳定契约 | OD-7（依赖 SP-5/SP-6 完整消息 schema） |
-
-暂定状态向下游传播：命中 SP-5/SP-6（构造子/序列化全集暂定）的场景，其消息 schema 相关卡点（7.3-n）状态不强于 SP-5/SP-6；命中 SP-11（程序宿主运行时未决）的 7.3-i 不给确定宿主协议；命中 SP-1（unknown 记录模型）的 7.3-a 记录模型不写“已定”。
+无。W1–W19 与崩溃矩阵 #1–#20 每步的行动者、恢复归属与对外可见结论都由 §2–§6 已定内容推出；需要实测才能给出数字的步（崩溃注入、宿主预算、秒级负载）是 §8.5 的验收项，不是卡点；可选子系统的实现期数字是 hpc-derivation/design.md §10 的验收项，核心接口 §6.6 不依赖其结果。
 
 ## 8 评估
 
-本章不产生新决定：它把 §2–§7 已定的抽象、契约与走查放到"替代 / 风险 / 未决 / 证伪 / 验收 / 不做"六个视角下检验。每个重要决定给出可信替代与不选理由（§8.1）；每条风险对应一个决定或一个未决并指明它影响哪个 Q 的响应（§8.2）；每个未决有关闭事件（§8.3）；每条证伪条件给出会推翻本设计的观测（§8.4）；验收标准（§8.5）与明确不做（§8.6）划定可测边界。
+本章不产生新决定：它把 §2–§7 已定的抽象、契约与走查放到"替代 / 风险 / 证伪 / 验收 / 不做"五个视角下检验。每个重要决定给出可信替代与不选理由（§8.1）；每条风险对应一个决定并指明它影响哪个 Q 的响应（§8.2）；每条证伪条件给出会推翻本设计的观测（§8.4）；验收标准（§8.5）与明确不做（§8.6）划定可测边界；§8.3 说明为何没有未决设计项。
 
 ### 8.1 替代方案对比表
 
-每个重要决定至少一个可信替代，写它在 §1.4 质量场景下的后果、不选理由、证据与状态。全部从 §2–§7 现有正文提取，不发明新方案。受 SP/OD 约束的决定，状态列列全约束项。可选子系统内部的替代方案在 `hpc-derivation/design.md §8.2`，这里只评估它的接入方式。
+每个重要决定至少一个可信替代，写它在 §1.4 质量场景下的后果、不选理由、证据与状态。全部从 §2–§7 现有正文提取，不发明新方案。状态列附该决定的证伪条件（§8.4）或验收项（§8.5）编号。可选子系统内部的替代方案在 `hpc-derivation/design.md §8.2`，这里只评估它的接入方式。
 
 | 决定 | 选中方案 | 在 Q 场景下的后果 | 不选的替代及理由 | 证据 | 状态 |
 |---|---|---|---|---|---|
-| 判断状态如何承载（§2.1、§2.2、§3.4） | 记录 + 对执行事实 `Journal` 的 fold / 非权威读模型 | Q1/Q5/Q6：回执按 `LogPosition` 顺序保真、原始负载完整、外部变更可独立归因 | 同时承载 provider 字段与业务状态的大对象（`Order`/`Account`）——不选：把上游权威冒充为本地模型，随每个 venue 膨胀，核心一旦要知道"能做什么"就被迫定义"长什么样" | fp-00 §1；fp-02 命题 12；fp-03 命题 8 | 已定 |
-| 信封解析范围（§2.2、§6.3.2、§6.3.3） | 锚点（必填、入口即验）+ 按字段触发的处理器，其余原封载荷直通 | Q5/Q13：只对被路由的少数字段做状态映射并保留 `Unmapped(raw)`；新 venue 字段只注册处理器不改锚点 | 信封全字段解析——不选：等于预先构建每家 venue 的结构，随 venue 膨胀且冒充上游模型 | fp-04 命题 15/16；域 F2/F6/C13 | 已定 |
-| 判断的底层表示（§2.4、§5.3） | 一个 `enum` 值树 + 五个 fold，装载/启动期求值 | Q22/Q23/Q31：规则、处理器、检查项、程序四处共用同一表示与校验，`required_inputs` 与失败并集由 fold 求出 | 泛型关联类型派生（cardano 式 `Embed`）——不选：Rust 无类型级和/积自动构造，泛型嵌套是 O(N²) 样板或退化到 `BoxError` catch-all | fp-01 M9/M10；fp-03 条目 2/4 | 暂定（受 SP-5、SP-6 约束） |
-| 程序的表示（§3.3、§5.1、§2.4） | deep embedding 的封闭值树，两种解释（派生 / 决策） | Q25：可静态检查、可预算、状态显式可序列化；死循环/超内存被隔离 | 黑盒函数 `(State,Input)->(State,Output)`——不选：无法预算、无法静态检查、状态可序列化仅依赖作者承诺 | fp-01 M9/M10；§5.1 | 暂定（受 SP-5 约束） |
-| 程序副作用出口（§5.1） | 单一 `EffectRequest` 值，由处理器决定响应 | Q25/Q1：新副作用只加处理器不改程序代数；请求是被 append 的值不是调用 | 对每种副作用各加一个 `DecisionStep` 构造子——不选：代数随副作用膨胀，退化为 Pine-with-limits | fp-01 M7 | 已定（记录模型受 SP-1 约束） |
-| 写结果不确定的建模（§5.4） | 两阶段协议 + `Undetermined` 一等持久状态 + 对账收敛 | Q2/Q3/Q4：发出后无回执进入 `Undetermined`，按能力声明渠道自动收敛或停人工，永不自动重发 | 单阶段"发一次、超时即算失败"——不选：无 unknown 收敛路径，违反 C1（unknown 不得自动产生新尝试）与 C13 | fp-06 命题 1；域 F5/H1 | 已定（恢复协议受 SP-1、SP-10 约束） |
-| 首执一次的静态保证（§5.4） | move-semantics token（`SendBarrier` 无 `Copy`、构造器私有、内含 durable append） | Q2/Q17：`submit` 只接受 `SendBarrier` 值；崩溃后从记录重建走恢复路径而非类型保证 | 泛型 typestate——不选：在崩溃恢复路径失效（从记录重建不能产回不同类型） | §5.4 | 已定（受 SP-10 约束） |
-| IO 壳的厚度（§5.4） | 效应侧的解释器：`Prepared` 之后、决议之前全部在其中 | Q2/Q3：两阶段、unknown、队列、对账驱动集中一处 | 把 IO 壳做薄（"就是个 HTTP 调用"）——不选：两阶段、unknown 与队列语义会散落到规则与集成里 | §5.4 | 已定（受 SP-1、SP-7、SP-10 约束） |
-| 意图形成期的并发控制（§5.2） | `responsible` 字段的存在即锁（责任持有） | Q7/Q26：无死锁、无超时释放复杂性；第二 principal 对已有负责人的单据被拒或返回冲突 | 互斥原语作锁——不选：死锁与超时释放复杂；负责人失联改由策略层处理 | §5.2 | 已定 |
-| 单据版本模型（§5.2） | 不可变量的线性版本链，`Revise` 锁内追加 | Q26/Q27：一份单据只有一种交易意图，版本冲突可判定 | 分叉/合并（git 式）——不选：一次订单草稿理应只有一种交易意图 | §5.2；域 C11 | 已定 |
-| 偏离/对账的触发（§5.2） | 偏离是单据 fold 的状态字段（解释①） | Q1/Q9：依据流推进、撤回、gap 或能力变化时重算，单据始终知道与世界的关系 | 外部触发对账——不选：把偏离做成动作需外部触发，状态化更简单 | §5.2 | 已定 |
-| 规则组合（§5.3） | 具名 struct/enum 的可交换集 + 顺序固定链 | Q8/Q9：授权→输入约束→审批→lane→过期逐步读前一步记录；可交换集过交换性测试 | cardano 式泛型 `Embed`——不选：Rust 无类型级和/积自动构造，O(N²) 样板或 `BoxError` catch-all；"任意装配顺序不改变结果"作默认前提也不成立 | fp-03 命题 6；条目 2/4 | 暂定（受 SP-9、SP-6 约束） |
+| 判断状态如何承载（§2.1、§2.2、§3.4） | 记录 + 对执行事实 `Journal` 的 fold / 非权威读模型 | Q1/Q5/Q6：回执按 `LogPosition` 顺序保真、原始负载完整、外部变更可独立归因 | 同时承载 provider 字段与业务状态的大对象（`Order`/`Account`）——不选：把上游权威冒充为本地模型，随每个 venue 膨胀，核心一旦要知道"能做什么"就被迫定义"长什么样" | fp-00 §1；fp-02 命题 12；fp-03 命题 8 | 已定（验收 §8.5 #1/#12） |
+| 进度的表示（§2.3） | 三种进度（cursor / frontier / retention）互不替代，各有承载 | Q11/Q12/Q31：`await-all` 按完备进度触发；慢消费者的 cursor 落后不影响 frontier；保留边界推进前显式处理引用 | 单一"进度"标量同时表达消费、完备与保留——不选：把"读到哪"与"之前不再变"混同，`latest` 消费者被误当作已跟上完备进度，阈值策略误触发 | fp-05 案例 10④/11⑤/13⑤；fp-04 命题 10 | 已定（证伪 §8.4 #4；验收 §8.5 #4/#6） |
+| 派生内容的载体（§3.1） | `Journal<RetractableDelta>`：可撤回、可压缩，状态由 fold 重建 | Q11/Q17/Q28：迟到 tick 撤回旧贡献重算子图；半写不可见；压缩不删仍被引用的位置 | 把执行历史也建成可撤回 delta——不选：负 diff 不能当外部 Write 的补偿；让状态由规则原地修改而非 fold——不选：无法随时重建与缓存，重放/审计失去依据 | fp-05 命题 12；fp-03 命题 1 | 已定 |
+| 两个宇宙间的依赖方向（§2.5、§4） | 唯一跨宇宙依赖是效应侧 → 观察侧（经 `basis`），反向不编译 | Q1/Q6/Q28：观察侧派生可自由撤回/压缩而不牵动执行事实；效应侧决定可追溯到当时看到的位置 | 双向引用或共用一套类型——不选：为对账设计的类型扩到观察侧污染认知，撤回/gap 无法传播；把观察状态复制进效应对象——不选：造出第二份状态并引入反向耦合 | fp-05 命题 12；fp-03 命题 1/2 | 已定 |
+| 决定依据的表示（§4） | `basis = Set<LogPosition>`（位置集），有效性经 `basis_valid` 只读校验 | Q9/Q28：审批人可回看"当时看到了什么"；依据落到保留边界之下得 `BeyondRetention` 而非静默失真 | 把观察状态快照复制进意图——不选：并行第二份状态、撤回与 gap 无法传播；把目标身份塞进 `basis`——不选：位置语义与名义关联混同 | fp-03 命题 2；域 F9/P11 | 已定（验收 §8.5 #4/#11） |
+| 信封解析范围（§2.2、§6.3.2、§6.3.3） | 锚点（必填、入口即验）+ 按字段触发的处理器，其余原封载荷直通 | Q5/Q13：只对被路由的少数字段做状态映射并保留 `Unmapped(raw)`；新 venue 字段只注册处理器不改锚点 | 信封全字段解析——不选：等于预先构建每家 venue 的结构，随 venue 膨胀且冒充上游模型 | fp-04 命题 15/16；域 F2/F6/C13 | 已定（验收 §8.5 #5/#12） |
+| 判断的底层表示（§2.4、§5.3） | 一个 `enum` 值树 + 五个 fold，装载/启动期求值 | Q22/Q23/Q31：规则、处理器、检查项、程序四处共用同一表示与校验，`required_inputs` 与失败并集由 fold 求出 | 泛型关联类型派生（cardano 式 `Embed`）——不选：Rust 无类型级和/积自动构造，泛型嵌套是 O(N²) 样板或退化到 `BoxError` catch-all | fp-01 M9/M10；fp-03 条目 2/4 | 已定（证伪 §8.4 #1） |
+| 程序的表示（§3.3、§5.1、§2.4） | deep embedding 的封闭值树，两种解释（派生 / 决策）；表达力扩展 = 加构造子 | Q25：可静态检查、可预算、状态显式可序列化；死循环/超内存被隔离 | 黑盒函数 `(State,Input)->(State,Output)`——不选：无法预算、无法静态检查、状态可序列化仅依赖作者承诺 | fp-01 M9/M10；§5.1 | 已定（证伪 §8.4 #1） |
+| 程序副作用出口（§5.1） | 单一 `EffectRequest` 值，由处理器决定响应 | Q25/Q1：新副作用只加处理器不改程序代数；请求是被 append 的值不是调用 | 对每种副作用各加一个 `DecisionStep` 构造子——不选：代数随副作用膨胀，退化为 Pine-with-limits | fp-01 M7 | 已定（验收 §8.5 #10） |
+| 写结果不确定的建模（§5.4） | 两阶段协议 + `Undetermined` 一等持久状态 + 对账收敛 | Q2/Q3/Q4：发出后无回执进入 `Undetermined`，按能力声明渠道自动收敛或停人工，永不自动重发 | 单阶段"发一次、超时即算失败"——不选：无 unknown 收敛路径，违反 C1（unknown 不得自动产生新尝试）与 C13 | fp-06 命题 1；域 F5/H1 | 已定（验收 §8.5 #8/#14） |
+| 首执一次的静态保证（§5.4） | move-semantics token（`SendBarrier` 无 `Copy`、构造器私有、内含 durable append） | Q2/Q17：`submit` 只接受 `SendBarrier` 值；崩溃后从记录重建走恢复路径而非类型保证 | 泛型 typestate——不选：在崩溃恢复路径失效（从记录重建不能产回不同类型） | §5.4 | 已定（验收 §8.5 #8） |
+| IO 壳的厚度（§5.4） | 效应侧的解释器：`Prepared` 之后、决议之前全部在其中 | Q2/Q3：两阶段、unknown、队列、对账驱动集中一处 | 把 IO 壳做薄（"就是个 HTTP 调用"）——不选：两阶段、unknown 与队列语义会散落到规则与集成里 | §5.4 | 已定 |
+| 意图形成期的并发控制（§5.2） | `responsible` 字段的存在即锁（责任持有） | Q7/Q26：无死锁、无超时释放复杂性；第二 principal 对已有负责人的单据被拒或返回冲突 | 互斥原语作锁——不选：死锁与超时释放复杂；负责人失联改由策略层处理 | §5.2 | 已定（验收 §8.5 #11） |
+| 单据版本模型（§5.2） | 不可变量的线性版本链，`Revise` 锁内追加 | Q26/Q27：一份单据只有一种交易意图，版本冲突可判定 | 分叉/合并（git 式）——不选：一次订单草稿理应只有一种交易意图 | §5.2；域 C11 | 已定（验收 §8.5 #11） |
+| 偏离/对账的触发（§5.2） | 偏离是单据 fold 的状态字段（效应侧评估 `Comb<Observed, CheckResult>`） | Q1/Q9：依据流推进、撤回、gap 或能力变化时重算，单据始终知道与世界的关系 | 外部触发对账——不选：把偏离做成动作需外部触发，状态化更简单 | §5.2 | 已定 |
+| 规则组合（§5.3） | 具名 struct/enum 的可交换集 + 顺序固定链 | Q8/Q9：授权→输入约束→审批→lane→过期逐步读前一步记录；步内独立守卫可交换并累积 | cardano 式泛型 `Embed`——不选：Rust 无类型级和/积自动构造，O(N²) 样板或 `BoxError` catch-all；"任意装配顺序不改变结果"作默认前提也不成立 | fp-03 命题 6；条目 2/4 | 已定（验收 §8.5 #2） |
 | 规则的耦合范围（§5.3） | 按 stream 参数化（Equinox 模式） | Q8：规则集闭合、无全局耦合 | 全局 effect enum——不选：把互不相关的规则耦进一个全局类型 | fp-03；§5.3 | 已定 |
-| 运行期能力的类型化（§2.2） | 三值 `Verdict{Supported/Unsupported/Unknown}` 属握手阶段 | Q16：向声明 unsupported 的集成请求返回 typed `Unsupported`，不返回看似成功的空数组 | 类型级 capability——不选：把运行期未知冒充静态保证；F6 的"部分未文档化"能力不可能是静态保证 | fp-03 命题 3 | 暂定（受 SP-2 约束） |
-| 写通道粒度（§5.3） | `WriteLaneKey`，集成通常对齐为 (账户, 子账户) | Q7：同 (账户,子账户) 写全序，队首 `Undetermined` 时后续等待，其他账户不等待 | 按 instrument 分 lane——不选：无法阻止"资金状态未知时继续加仓"（unknown 占用的 buying power 不按 instrument 隔离，venue 限流按账户生效）；整账户 lane——不选：单笔卡住冻结无关子账户 | 域 H4/H1 | 已定（并发协议受 SP-7 约束；键已定） |
-| 程序隔离运行时（§5.1、§6.5） | 未决：Wasm 满足三 OS 开箱即用判定才选，否则退回受监督子进程 | Q25：预算靠宿主进程/沙箱不靠类型；两者都只是解释器宿主 | 直接锁定 Wasm 或直接锁定子进程——不选：三 OS 开箱即用性与预算一致性未实测，不得预设 | §6.5；`investigation/rust-feasibility.md` | 暂定（受 SP-11 约束） |
-| 增量引擎落点（§6.8） | 按指标可撤回性选 Incremental 式节点图或 differential | Q22：秒级清洗与增量指标在节点粒度重算 | 只用其一并强制承载外部 unknown Write——不选：二者都不能承载外部不可逆写 | §6.8；fp-05 | 暂定（受 SP-6 约束） |
-| 持久化引擎（§6.7） | 单个 SQLite 文件（WAL），核心独占单写者 | Q17/Q21：追加/替换订阅表中途崩溃后只恢复完整记录；格式版本只前进 | 自写分段日志 + 索引——不选：需要自己写索引；okaywal 自述不宜生产 | §6.7；`investigation/rust-feasibility.md` | 已定（表结构成本受 SP-3、快照受 SP-8 约束） |
-| 两侧存储的共享程度（§3.1、§6.7） | 抽象不共享类型宇宙；存储原语是否共表待测 | Q17：观察侧可压缩、执行事实侧纯 append，两套抽象不互相污染 | 两侧共用同一表结构与代数——不选：为对账设计的类型扩到全体会污染认知，负 diff 不能当外部 Write 的补偿 | fp-05 命题 12；fp-03 命题 1 | 暂定（共表成本受 SP-3 约束；抽象不共享已定） |
-| 快照与重建（§6.7、§2.3） | 快照 = 重启延迟的必需项，状态仍可由 `fold_state` 重建 | Q17：重启延迟随历史长度受控 | 纯 fold 重放、不设检查点——不选：`fold_state` 重建从保留边界扫起、成本随历史增长 | fp-05 命题 13 | 暂定（频率/留存受 SP-8 约束） |
+| 运行期能力的类型化（§2.2） | 三值 `Verdict{Supported/Unsupported/Unknown}` 属握手阶段，作运行期值消费 | Q16：向声明 unsupported 的集成请求返回 typed `Unsupported`，不返回看似成功的空数组 | 类型级 capability——不选：把运行期未知冒充静态保证；F6 的"部分未文档化"能力不可能是静态保证（§8.6） | fp-03 命题 3 | 已定（验收 §8.5 #5/#10） |
+| 写通道粒度（§5.3） | `WriteLaneKey`，集成通常对齐为 (账户, 子账户) | Q7：同 (账户,子账户) 写全序，lane 有未终结 Attempt 时后续在 `Prepared` 之前等待，其他账户不等待 | 按 instrument 分 lane——不选：无法阻止"资金状态未知时继续加仓"（unknown 占用的 buying power 不按 instrument 隔离，venue 限流按账户生效）；整账户 lane——不选：单笔卡住冻结无关子账户 | 域 H4/H1 | 已定（证伪 §8.4 #5/#6；验收 §8.5 #3） |
+| 程序隔离运行时（§5.1、§6.5） | 受监督子进程：每程序一个宿主进程，预算由 OS 进程机制限制，状态经宿主协议显式序列化 | Q25：三 OS 上无需额外运行时即可构建；超预算 = kill 进程并记失败观察 | Wasm（wasmtime）——不选为初始宿主：无 live `Store` 快照/恢复 API、fuel 不限制阻塞 host 调用、三 OS 开箱即用未证；它可作实现阶段的替代宿主，走同一宿主协议，不改设计 | §6.5；`investigation/rust-feasibility.md` | 已定（证伪 §8.4 #3；验收 §8.5 #15/#16） |
+| 增量引擎落点（§6.8） | 按指标可撤回性选 Incremental 式节点图或 differential；具体库由实现期 profiling 定 | Q22：秒级清洗与增量指标在节点粒度重算 | 只用其一并强制承载外部 unknown Write——不选：二者都不能承载外部不可逆写 | §6.8；fp-05 | 已定（验收 §8.5 #19） |
+| 持久化引擎（§6.7） | 单个 SQLite 文件（WAL），核心独占单写者 | Q17/Q21：追加/替换订阅表中途崩溃后只恢复完整记录；格式版本只前进 | 自写分段日志 + 索引——不选：需要自己写索引；okaywal 自述不宜生产 | §6.7；`investigation/rust-feasibility.md` | 已定（验收 §8.5 #19） |
+| 两侧存储的共享程度（§3.1、§6.7） | 抽象不共享类型宇宙；存储原语共用单 SQLite 文件，是否物理共表由实现定 | Q17：观察侧可压缩、执行事实侧纯 append，两套抽象不互相污染 | 两侧共用同一表结构与代数——不选：为对账设计的类型扩到全体会污染认知，负 diff 不能当外部 Write 的补偿 | fp-05 命题 12；fp-03 命题 1 | 已定 |
+| 快照与重建（§6.7、§2.3） | 快照 = 重启延迟的必需项，状态仍可由 `fold_state` 重建；快照周期与留存时长是配置参数 | Q17：重启延迟随历史长度受控 | 纯 fold 重放、不设检查点——不选：`fold_state` 重建从保留边界扫起、成本随历史增长 | fp-05 命题 13 | 已定 |
 | 写的批处理/去重（§5.4、§8.6） | 写永不批处理、不去重、不由 replay 重发 | Q2：无键 venue 做不到只执行一次，UTA 只保证自身不主动重复 | 对写做批处理/去重/replay 重发——不选：违反 C1，无键 venue 无法幂等 | 域 F5/C1；`investigation/venue-capabilities.md` | 已定 |
-| 格式演进策略（§6.7） | 格式版本只前进，迁移失败拒绝启动 | Q21：N+1 读 N 支持、反向拒绝、迁移中断电不出现第三态 | 双向迁移 / 部分迁移——不选：部分迁移会产生半迁移态，违反 C14 | 域 O9/C14 | 已定 |
-| 集成的进程边界（§6.1） | 每个集成一个独立 OS 进程，语言不限 | Q18：换一个集成的凭据只使目标集成重建并标 gap，其他流保持连续 | 集成与核心同进程——不选：失去独立故障域与凭据终点，且会强制集成用核心语言 | §6.1 | 已定 |
-| 核心↔外部的线缆编码（§6.1、§6.3） | 一份 IDL 固定语义，默认文本 JSON-RPC | Q22：跨语言、可读、可录制回放 | 默认二进制协议——不选：牺牲可读与跨语言；二进制作为同一 IDL 的另一种编码保留，触发条件在 spike | §6.1；`investigation/rust-feasibility.md`（gRPC 单流有序、流间独立） | 暂定（高频推送编码受 SP-6 实测触发） |
-| 执行事实的下游读取（§3.4、§6.4） | 对执行事实 `Journal` 的可重建非权威读模型，消费方也可自 fold | Q1/Q29：Alice 消费面可实现，不重复 fold；读模型不被规则引用 | 让规则直接引用读模型（当权威）——不选：读模型是可重建 fold，被规则依赖就要承担权威与一致性，违反核心状态最小化；为每消费方各自 fold——不选：S10 要求可实现且重复 fold 易分叉 | §3.4；域 S10 | 已定（集合与一致性受 OD-3 约束） |
+| 格式演进策略（§6.7） | 格式版本只前进，迁移失败拒绝启动 | Q21：N+1 读 N 支持、反向拒绝、迁移中断电不出现第三态 | 双向迁移 / 部分迁移——不选：部分迁移会产生半迁移态，违反 C14 | 域 O9/C14 | 已定（验收 §8.5 #8(d)） |
+| 集成的进程边界（§6.1） | 每个集成一个独立 OS 进程，语言不限 | Q18：换一个集成的凭据只使目标集成重建并标 gap，其他流保持连续 | 集成与核心同进程——不选：失去独立故障域与凭据终点，且会强制集成用核心语言 | §6.1 | 已定（验收 §8.5 #9） |
+| 核心↔外部的线缆编码（§6.1、§6.3） | 一份 IDL 固定语义，默认文本 JSON-RPC | Q22：跨语言、可读、可录制回放 | 默认二进制协议——不选：牺牲可读与跨语言；二进制作为同一 IDL 的另一种编码保留，§8.5 #19 不达标时启用 | §6.1；`investigation/rust-feasibility.md`（gRPC 单流有序、流间独立） | 已定（验收 §8.5 #19） |
+| 执行事实的下游读取（§3.4、§6.4） | 对执行事实 `Journal` 的可重建非权威读模型，消费方也可自 fold | Q1/Q29：Alice 消费面可实现，不重复 fold；读模型不被规则引用 | 让规则直接引用读模型（当权威）——不选：读模型是可重建 fold，被规则依赖就要承担权威与一致性，违反核心状态最小化；为每消费方各自 fold——不选：S10 要求可实现且重复 fold 易分叉 | §3.4；域 S10 | 已定（验收 §8.5 #18） |
 | UTA 自身的锁（§5.5） | 无锁定位：唯一的锁是单据 | Q1/Q6：venue 域事实（账户/持仓/订单/成交/价格）由 venue 裁决，UTA 无权决定是否消费 | 给 UTA 造悲观/乐观锁——不选：UTA 不是消费者，锁不在它这里 | §5.5；域 F1 | 已定 |
-| 可选行情派生计算的接入（§3.5、§6.6） | 单一读侧组合子 `Pooled` + 注册表黑盒原生 op；子系统独立进程、独立文档 | Q24/Q30：含 `Pooled` 的程序无子系统时装载期被拒，其余程序不受影响；op 输出对下游是普通派生流 | 把原生计算做成新节点种类——不选：程序代数随算法膨胀（§3.3 红线）；把段池做成 `Journal` 的热层——不选：两套存储互不派生（§6.6）；op 与核心同进程——不选：无独立故障域（§6.6） | §6.6；hpc-derivation/design.md §1.3、§8.2 | 已定（子系统内部决定受 SP-12/13/14 约束，见其文档） |
+| 可选行情派生计算的接入（§3.5、§6.6） | 单一读侧组合子 `Pooled` + 注册表黑盒原生 op；子系统独立进程、独立文档 | Q24/Q30：含 `Pooled` 的程序无子系统时装载期被拒，其余程序不受影响；op 输出对下游是普通派生流 | 把原生计算做成新节点种类——不选：程序代数随算法膨胀（§3.3 红线）；把段池做成 `Journal` 的热层——不选：两套存储互不派生（§6.6）；op 与核心同进程——不选：无独立故障域（§6.6） | §6.6；hpc-derivation/design.md §1.3、§8.2 | 已定（验收 §8.5 #7；子系统验收其 §10） |
 
 ### 8.2 风险 / 敏感点 / 权衡点
 
-#### 8.2.1 风险（每条对应一个决定或一个未决，并指明它影响哪个 Q 的响应）
+#### 8.2.1 风险（每条对应一个决定，并指明它影响哪个 Q 的响应）
 
-- **崩溃窗口恢复未实测（对应 SP-1、SP-10）**：`Prepared`/`SendBarrier`/`submit` 三个窗口的 SQLite WAL/fsync 崩溃注入尚未做；影响 Q2/Q4/Q17 的"不重复投放 / 不误升 / 半写不可见"响应能否成立。
-- **程序隔离运行时未决（对应 SP-11）**：Wasm 三 OS 开箱即用性与预算一致性未测；影响 Q25 的"超预算被隔离且其他程序/账户/核心不受影响"响应。
-- **同一 enum 类型视图与 fold 开销未测（对应 SP-5、SP-6）**：构造子全集、值树 fold 求值开销与 `dyn` 分发成本未测；影响 Q22/Q23/Q31 的派生与消费响应；若推翻"同一 enum 类型视图"，§2.4 的统一表示与 §5.3/§6.3 的下游序列化一并受影响。
-- **可选子系统跨平台闸门未过（对应 SP-12）**：影响 Q30 的扇出端到端响应；风险明细在 hpc-derivation/design.md §9。
-- **运行期能力证据是否抬进类型未决（对应 SP-2）**：影响 Q16 的能力不支持响应能否在类型层给出更强保证。
-- **lane 并发协议未决（对应 SP-7）**：多 unknown 叠加、部分收敛、解除阻塞条件未定；影响 Q7 的队首阻塞与解除响应。
-- **配置文件 schema 未定（对应 OD-6，回链 OD-5/OD-1/OD-7）**：策略/审批规则、集成登记、程序装载清单的文件 schema 随其消费契约定；影响 Q18/Q21 的热变更与格式升级响应。
-- **完整消息 schema 未定（对应 OD-7，回链 SP-5/SP-6）**：回填、实时边界、readiness、健康面的线缆 schema 依赖构造子全集；影响 Q1–Q6/Q14/Q32 的响应可实现性。
+- **崩溃窗口恢复（§5.4，验收 §8.5 #8/#14）**：`Prepared`/`SendBarrier`/`submit` 三个窗口的 fsync 崩溃注入是实现期验收；影响 Q2/Q4/Q17 的"不重复投放 / 不误升 / 半写不可见"响应。
+- **同一 enum 类型视图（§2.4，证伪 §8.4 #1）**：若真实策略需要超出 `DerivationNode` 的代数，扩展轴是加构造子；若需要不同代数或生命周期则 §2.4 的统一表示被推翻，§5.3/§6.3 的下游序列化一并受影响；影响 Q22/Q23/Q31。
+- **可选子系统跨平台验收（hpc-derivation/design.md §10 #1–#5、#7）**：`iceoryx2` 在 macOS/Windows 的跨进程映射与回收实测决定段池是否保留；影响 Q30 的扇出端到端响应；风险明细在其 §9，证伪在其 §11。
+- **单写者吞吐（§6.7.1，验收 §8.5 #19）**：单 SQLite 文件、单写者在 Q22 负载下的写放大与重启延迟；不改变抽象不共享的裁决。
+- **受监督子进程作为唯一宿主（§6.5）**：预算靠 OS 进程机制，粒度粗于 Wasm fuel；影响 Q25 的"超预算被隔离"响应的及时性，不影响其成立。
 
 #### 8.2.2 敏感点（改这里，某个质量响应剧变）
 
-- **`fold_state` 重建成本 vs 快照频率（SP-8）**：快照频率下调则 Q17 重启延迟随历史长度线性恶化；上调则写放大增加，触碰单写者吞吐（见 B1 敏感点）。
+- **`fold_state` 重建成本 vs 快照周期（§6.7.3 配置）**：快照周期拉长则 Q17 重启延迟随历史长度线性恶化；缩短则写放大增加，触碰单写者吞吐（见 B1 敏感点）。
 - **lane 阻塞半径（`WriteLaneKey` 粒度）**：粒度细化则 Q7 队首阻塞半径缩小但失去 H4 写全序与 H1 资金隔离；粗化则冻结无关子账户。
 - **保留时长（retention）**：缩短则 Q28 中仍被单据/程序引用的 `LogPosition` 更易越界，边界推进更常被拒；延长则存储与重建成本上升。
-- **单 SQLite 写者吞吐 vs B1**：秒级 K 线清洗与大量增量指标（Q22）若超过单写者吞吐，则派生分发响应劣化；这是"单文件单写者"裁决的敏感点，实测项归 SP-3/SP-8。
+- **单 SQLite 写者吞吐 vs B1**：秒级 K 线清洗与大量增量指标（Q22）若超过单写者吞吐，则派生分发响应劣化；这是"单文件单写者"裁决的敏感点，验收 §8.5 #19。
 - **`basis` 有效性窗口（`basis_validity`）**：判定 `Fresh` 的窗口收紧则 Q1/Q9 更多决策因依据滞后被门拦下；放宽则可能据过期依据下写。
 
 #### 8.2.3 权衡点（改这里，同时影响多个质量属性）
 
-- **IO 壳体量 vs 语义集中（§5.4）**：IO 壳是效应侧最大而非最薄的组件——集中带来审计完整与重启零丢失，代价是内部转移表与渠道策略成为设计重点（走查 §7 + SP-1/SP-7/SP-10）。
-- **每步取证写日志的体积 vs 审计（§5.4、§6.7）**：每次取证都 append 一条记录，换来重启零丢失与审计完整，代价是存储体积与噪音（留存受 SP-8 约束）。
+- **IO 壳体量 vs 语义集中（§5.4）**：IO 壳是效应侧最大而非最薄的组件——集中带来审计完整与重启零丢失，代价是内部转移表与渠道策略成为设计重点（走查 §7 + §8.5 #8/#14 崩溃注入）。
+- **每步取证写日志的体积 vs 审计（§5.4、§6.7）**：每次取证都 append 一条记录，换来重启零丢失与审计完整，代价是存储体积与噪音（留存时长是 §6.7.3 的配置参数）。
 - **值树启动/装载期校验 vs 编译期（§2.4）**：装载期 fold 让 AI 程序与核心规则共用一套校验与表示，代价是"引用了没有集成提供的字段"这类检查落在启动/装载期而非编译期。
 - **JSON-RPC 可读可回放 vs 高频吞吐（§6.1）**：默认文本编码换来跨语言、可读、可录制回放，代价是高频推送流吞吐可能不达标，需另加二进制编码作同一 IDL 的另一种编码。
 - **`responsible` 字段 vs 互斥原语（§5.2）**：无死锁、无超时释放的复杂性，代价是"负责人失联"必须由策略层（§5.3）经 `Expired` 或带 principal 的强制 `Transfer` 处理——责任归规则而非锁机制。
 
 ### 8.3 未决
 
-未决分两类：`SP-n` 是需要一次决定性实验或实测闸门关闭的 spike；`OD-n` 是需要一次设计决定或外部契约关闭的开放设计项。每条给出关闭事件（最小决定性实验及其观测）、推翻时影响的章节与接口、当前允许确定到什么层级。任何依赖某未决的下游陈述引用同号，状态不强于本表。
+无。设计层面的每个问题都在 §2–§6 作了决定；设计不为自己登记待做实验。以下三类内容不是设计未决：
 
-#### 8.3.1 Spike：SP-1…SP-15
+- **实现期才能量的数字**（fold 求值开销、`dyn` 分发、`salsa` cutoff 粒度、两侧是否物理共表、文本编码吞吐、秒级 K 线负载）：由实现 profiling 定落点，落点变化不改模型（§6.8）；能写成可测标准的是 §8.5 的验收项（#19）。
+- **会推翻决定的观测**（同一 enum 类型视图、首执一次、程序隔离前提、三种进度、H1/H4/H5/H7）：是 §8.4 的证伪条件，设计已按当前决定写完，命中时改决定而非打补丁。
+- **可选子系统的实现期数字**（跨平台映射与回收、扇出预算分项、列式段对比、原语集与 gap 序列）：是 `hpc-derivation/design.md §10` 的验收标准，会推翻其决定的观测在其 §11；核心只拥有 §6.6 接口，接口不依赖任何验收结果。
 
-| SP | 问题 | 依据 | 关闭事件（实验 + 观测） | 推翻/否定时影响的章节·接口 | 当前允许确定到什么层级 |
-|---|---|---|---|---|---|
-| SP-1 | unknown 写结果与证据渠道的记录模型；同一次 venue 交互落执行侧 `ResolutionEvidence` 与派生侧观察两条记录的共享输入契约 | fp-06 命题 1–6 | 定出记录模型并在一次 venue 交互上验证两侧各落一条、可交叉引用同一 `LogPosition` | §5.2、§5.4；`EffectRequest`/`ResolutionEvidence`/`Resolved` 记录 schema、§6.3 操作集 | `Undetermined` 是一等持久状态、取证是读副作用、`submit` 永不重试 —— 已定；两侧共享输入的记录字段暂定 |
-| SP-2 | 运行期能力证据在 Rust 中是否值得抬进类型 | fp-03 未覆盖 | 原型对比"三值 `Verdict` 属握手阶段" vs "能力证据进类型"的样板量与误配率 | §2.2、§6.3.1；`Projection`/`Capability`/`Verdict` | 三值 `Verdict` 属握手阶段、能力未知≠结果未知 —— 已定；是否进类型 暂定 |
-| SP-3 | 观察侧与效应侧共用同一存储原语/表结构的成本 | fp-05 未覆盖末条 | 在单 SQLite 文件上对比两侧共表 vs 分表的写放大与查询成本 | §3.1、§6.7；`Journal` 存储接口、持久化归属表 | 抽象不共享类型宇宙 —— 已定；共用存储原语/表结构 暂定 |
-| SP-4 | 程序状态的显式序列化 / 版本化 / 重放边界 | fp-01 M7 前提 | 对一个带状态的程序做序列化→重启→重放，验证状态版本不兼容时显式重置而非静默丢失 | §3.3、§6.5；程序状态 schema、宿主协议 | 状态必须显式可序列化、不依赖运行时快照 —— 已定；序列化/版本化/重放边界 暂定 |
-| SP-5 | 小程序语言的表达力与抗膨胀 | fp-01 M9/M10 | 用小语言表达一组真实策略，观察是否需超出五个 fold 的算子、是否膨胀为 Pine-with-limits；**证伪范围含"同一 enum 类型视图"**：若规则/程序/处理器需不同代数或生命周期则该视图不成立 | §2.4、§3.3、§5.1；`DerivationNode`/`DecisionStep` 构造子全集；连带 §5.3/§6.3 下游序列化 | 值树 + 两种解释 —— 已定；构造子全集与"同一 enum 类型视图" 暂定 |
-| SP-6 | `enum` 值树 + 五个 fold 的求值开销与代码体量；`dyn Handler`/`dyn AlignmentCheck` 分发成本；`salsa` 在派生 DAG 上的 cutoff 粒度 | fp-03 条目 2/4；`investigation/rust-feasibility.md` | 微基准量出 fold 求值开销与 `dyn` 分发成本，与手写对照；**若同一组合子树不能得到稳定规范化描述则"同一 enum 类型视图"被否定** | §2.4、§5.3、§6.8；值树落点、增量引擎 Rust 形状 | 表示与 fold 语义 —— 已定；性能与代码体量 暂定；落点由实测定而非反推模型 |
-| SP-7 | lane 的并发协议（多 unknown 叠加、部分收敛）与解除阻塞条件 | 域 H4 | 走查/原型多 unknown 叠加与部分收敛，定出解除阻塞条件并验证队首阻塞语义 | §5.3、§5.4；lane 队列、`WriteLaneKey` 推进 | lane = 有序队列 = unknown 阻塞半径、键已定 —— 已定；并发协议 暂定 |
-| SP-8 | 保留边界的引用登记、边界推进审批、留存时长；`fold_state` 重建成本随历史长度的曲线决定快照频率 | fp-05 命题 13；`investigation/rust-feasibility.md` | 量出 `fold_state` 重建成本随历史长度的曲线，据此定快照频率；定出引用登记方与边界推进审批方 | §2.3、§6.7；保留协议、快照、持久化归属 | 推进前必须显式处理仍被引用的 `LogPosition` —— 已定；登记方/审批方/留存时长/快照频率 暂定 |
-| SP-9 | 规则组合的可交换性分类表；具名 struct/enum 组合下三层规则的样板量实测 | fp-03 命题 6；`investigation/rust-feasibility.md` | 列出可交换集与顺序固定链的分类表并过交换性测试；实测三层规则样板量 | §5.3；`Rule`/`Rejection`、顺序固定链 | 区分可交换集与顺序固定链、顺序由代码固定 —— 已定；分类表与样板量 暂定 |
-| SP-10 | 发出后-持久化前崩溃窗口的恢复协议实测：SQLite WAL/fsync 崩溃注入于 `Prepared`/`SendBarrier`/`submit` 各窗口，验证不重复投放（与 SP-1 合并） | 域 F5/C1 | 三窗口崩溃注入后重启，观测：venue 调用不超过 1、无 `SendBarrier` 的 `Prepared` 不误升、无后继 `SendBarrier` 记为 `Undetermined` | §5.4；IO 壳恢复、`SendBarrier` move token | 恢复规则（从记录重建各 lane 链状态） —— 已定；崩溃注入未过 |
-| SP-11 | Wasm 三 OS 开箱即用性与预算一致性实测；不成立则退回受监督子进程 | §6.5；`investigation/rust-feasibility.md` | 按三条判定标准实测 Wasm 在 macOS/Windows/Linux 的开箱即用、fuel/内存/trap 一致性；不成立则退回受监督子进程 | §5.1、§6.5；程序宿主协议（OD-9） | 隔离运行时仅作解释器宿主、状态显式序列化 —— 已定；运行时选择与宿主协议 暂定 |
-| SP-12 | 可选子系统的段池数据面：跨进程映射、借用/崩溃/在途段回收、契约表归一、端到端扇出是否成立 | hpc-derivation/design.md §11.1 | hpc-derivation/design.md §10 闸门 1–5、7–9 各平台实测 | hpc-derivation/design.md §2、§5、§6、§8–§10；本文只保留 §6.6 的"子系统是否安装"外部依赖状态 | 接口（§6.6）已定；子系统内部见其文档 |
-| SP-13 | 可选子系统的布局 hash 规范化与三 OS 工具链交付 | hpc-derivation/design.md §11.1 | hpc-derivation/design.md §10 闸门 6 + target triple 矩阵实验 | hpc-derivation/design.md §4、§7、§10 | 接口（§6.6）已定；子系统内部见其文档 |
-| SP-14 | 可选子系统的触发/背压/替换控制面形状 | hpc-derivation/design.md §11.1 | 业务确认 + 端到端积压/重复触发走查 | hpc-derivation/design.md §2、§6、§9 | 接口（§6.6）已定；子系统内部见其文档 |
-| SP-15 | 高频行情流作为 `Journal` 的持久化策略（全量 / 抽样 / 仅 gap 标记）与保留协议 | 域 B1 秒级行情负载；`Journal` 单写者吞吐 | 在秒级行情负载上对比三种持久化策略的存储与重建成本，选定策略并写入保留协议 | §2.3、§6.7；`Journal` 持久化、段池不参与 | 行情持久化归 `Journal`、段池不参与 —— 已定；持久化策略 暂定 |
-
-#### 8.3.2 开放设计项：OD-1…OD-10
-
-综合 §2–§7 各章登记的开放设计项与 §7.3 走查新卡点，去重后统一编号为 OD-1…OD-10。依赖 spike 的 OD 在关闭事件处回链同号，状态不强于该 spike。
-
-| OD | 问题 | 必须回答什么 | 关闭事件 | 影响章节与接口 | 当前允许确定到什么层级 |
-|---|---|---|---|---|---|
-| OD-1 | 核心↔Alice 消息形状与操作集 | 会话握手如何取得 principal；订阅原始记录 vs 订阅读模型的消息；创建/修改/送审/批准/否决/查询状态各操作的请求/响应形状、读/写副作用划分、undesired events | 给出 Alice API 的 IDL 操作集并在一次"下单→查询→审批"往返上演练 | §6.2、§6.4；Alice IDL 操作集 | 独立生命周期、重连拉当前状态与 cursor 后记录 —— 已定；消息 schema 未决 |
-| OD-2 | 确认语义与重复可见性 | cursor"确认"指已投递、已持久化还是已处理；重连后哪些记录会再次可见 | 定出确认点定义与重复可见性规则并写入订阅契约 | §3.2、§6.4；`Gap{origin: Delivery}`、消费游标 | gap 必须显式标记、不伪造逐条补发 —— 已定；确认点与重复可见性 未决 |
-| OD-3 | 读模型集合与 cursor/gap 一致性 | 读模型暴露哪些集合（订单/持仓/健康…）；由核心维护还是允许消费方自 fold；每个集合的 cursor 与 `Gap` 如何与原始记录一致 | 给出集合清单与一致性规则并完成历史回填、慢消费者、断连恢复走查 | §3.4、§6.2、§6.4；读模型契约 | 读模型非权威、不被规则引用、消费方可自 fold —— 已定；集合与一致性 未决 |
-| OD-4 | 控制面认证与消息 | 控制面是否 Alice RPC 的一部分；认证与授权如何执行；每个控制动作（装卸程序、换凭据、重启集成、请求快照）的消息与结果（生效/拒绝+原因）及与运行期日志的关联 | 完成认证矩阵并在未认证、越权、合法三类路径上实测 | §6.1、§6.4；控制面 P14 | 控制动作只经认证 principal、不经信号或 flag 文件 —— 已定；认证机制与消息 未决 |
-| OD-5 | principal 来源与授权/审批策略配置 | principal 来源；授权 scope 的存储与版本；授权规则与审批规则的配置表示；规则变更如何与待决单据并存；规则失败如何审计 | 定出授权/审批策略的配置与并存契约并在规则变更 × 待决单据并存场景上走查 | §5.3、§6.4、§6.7；`Rule` 配置、scope 存储 | 写按 (principal,账户,操作种类) 授权、版本期望不匹配即冲突 —— 已定；配置与并存契约 未决 |
-| OD-6 | 配置文件 schema 与版本 | 统一路径下各文件（账户封存信封、封存密钥引用、集成登记、策略/审批规则、程序装载清单）的 schema、格式版本与迁移规则 | 随 OD-5 的规则配置表示与 OD-1/OD-7 的 IDL 一起给出各文件 schema，并完成一次成功和一次失败重载演练 | §6.7.3；配置/凭据归属 | 统一路径、每文件唯一写者、原子替换、重载失败保留上一有效版本、格式版本只前进、单实例与核心独占 SQLite —— 已定；各文件 schema 未决 |
-| OD-7 | 核心↔集成完整消息 schema / 回填 / 实时边界 / readiness / 健康面 | 回填请求与结果的消息 schema、实时边界确认语义、readiness 状态机完整集合、健康面字段的稳定契约 | 为一个集成写完整消息 schema，并完成能力缺失、会话重建、回执映射、回填/实时边界演练 | §6.3.5、§6.3.10；集成 IDL、`Projection`、健康/readiness | 已定语义（回填带范围/页/游标、readiness backfilling→live、断线无游标标 `Gap{origin: Source}`、健康经读模型可见）—— 已定；完整 schema 暂定（受 SP-5、SP-6 约束） |
-| OD-8 | `payload_schema` 登记 | `payload_schema` 如何标识、登记、版本化、演进；可选子系统导出制品的版本矩阵在其文档内随此项一起定 | 定出 `payload_schema` 登记契约 | §2.2、§6.3.4；hpc-derivation/design.md §4、§6、§7 | 载荷原封直通并打 `payload_schema`、核心不解释载荷 —— 已定；标识/版本化 未决 |
-| OD-9 | 程序宿主协议 | 编译单元、装载、预算语义、trap、状态迁移、替换 | `[暂定：SP-11]` 得出 Wasm 可/不可结论后，据选定运行时定出宿主协议 | §5.1、§6.2、§6.5；核心↔程序宿主协议 | 预算靠宿主不靠类型、状态显式序列化 —— 已定；确定协议 暂定（受 SP-11 约束） |
-| OD-10 | 集成会话 epoch/fencing 与接管 | 核心重启后旧核心/旧集成会话在途回执的接受、丢弃或转交规则；最终判定权归属；会话 epoch 握手字段 | 定义会话 epoch 握手字段与在途回执路由规则，并在 SP-10 崩溃注入中验证 | §6.1、§6.3；集成会话重建、回执映射、H10 fence | 收敛不依赖旧会话回执（对账经新会话独立取证）、不重复投放由 `SendBarrier` durable + lane 队首阻塞保证 —— 已定；epoch/fence 握手与在途回执路由 未决 |
+跨语言 IDL 文件与各配置文件的 JSON schema 是实现阶段制品（§0.1、§6.3、§6.7.3），其语义、错误与 undesired events 已在 §6.3–§6.5、§6.7.3 定义。
 
 ### 8.4 证伪条件
 
-以下观测会推翻本设计的相应决定，而不是用补丁保留结论。前四条从不变量与 SP 关闭事件导出，后三条从假设 H 的证伪条件导出；可选子系统的证伪条件在 `hpc-derivation/design.md §12`。
+以下观测会推翻本设计的相应决定，而不是用补丁保留结论。前四条从不变量与验收项导出，后四条从假设 H 的证伪条件导出；可选子系统的证伪条件在 `hpc-derivation/design.md §11`。
 
-1. **同一 enum 类型视图（SP-5/SP-6）**：实测表明规则、程序、处理器需要不同代数或不同生命周期，或同一组合子树不能得到稳定规范化描述 → §2.4 的"一个 enum 值树 + 五个 fold"被推翻，§2.4/§3.3/§5.1/§5.3/§6.3 四处使用须拆分。
-2. **首执一次不变量（SP-1/SP-10）**：`Prepared`/`SendBarrier`/`submit` 崩溃注入后重启，出现同一意图的第二次 venue 调用或无 `SendBarrier` 的 `Prepared` 被误升 → §5.4 的两阶段 + move token 恢复协议与 C1 不变量被推翻。
-3. **程序隔离前提（SP-11）**：三 OS 上既无开箱即用的 Wasm，受监督子进程也无法给出一致的 CPU/内存/意图速率预算与 trap 语义 → §5.1 的"预算靠宿主"与 C4 隔离前提被推翻。
-4. **三种进度互不替代（§2.3）**：`latest` 消费者被当作已跟上完备进度、阈值策略据此误触发 → §2.3 用完备进度而非消费位置触发 `await-all` 的不变量被推翻。
+1. **同一 enum 类型视图（§2.4）**：实现表明规则、程序、处理器需要不同代数或不同生命周期，或同一组合子树不能得到稳定规范化描述 → §2.4 的"一个 enum 值树 + 五个 fold"被推翻，§2.4/§3.3/§5.1/§5.3/§6.3 四处使用须拆分。加构造子不算推翻（§2.4 扩展轴）。
+2. **首执一次不变量（§8.5 #8/#14）**：`Prepared`/`SendBarrier`/`submit` 崩溃注入后重启，出现同一意图的第二次 venue 调用或无 `SendBarrier` 的 `Prepared` 被误升 → §5.4 的两阶段 + move token 恢复协议与 C1 不变量被推翻。
+3. **程序隔离前提（§6.5）**：受监督子进程在某个目标 OS 上无法给出 CPU/内存/意图速率预算与 kill 语义（§8.5 #15）→ §5.1 的"预算靠宿主"与 C4 隔离前提被推翻，宿主须换为进程外沙箱或放弃不可信程序前提。
+4. **三种进度互不替代（§2.3）**：某来源的完备进度可由消费位置或保留边界之一确定性算出（即存在一个标量在全部 §1.4 场景下同时正确表达三者，且迟到数据从不越过它）→ §2.3 的三种进度模型可塌为单一进度，§3.2 的 `await-all` 触发条件与 §6.7 的保留协议须重写。
 5. **H1 宁重复不漏单**：维护者对某账户类别明确接受"宁重复不漏单" → C1"unknown 不得自动产生新尝试"对该类别放宽，§5.4 的自动化边界须分类。
 6. **H4 写并发确定排序**：某 venue 文档保证并发写的确定性排序 → §5.3 的"同 (账户,子账户) 需一个全序"lane 前提对该 venue 放宽。
 7. **H5 订阅生命周期**：维护者决定程序/订阅随消费方连接存亡 → §6.1/§6.4 的"订阅与程序 owner 是核心、与消费方连接无关"（C5）被推翻，Q29 的重连语义改写。
+8. **H7 信任单位是 OS 用户**：维护者要求同用户进程之间也互相隔离（能力令牌 / 句柄传递），或接受"host 即信任"→ §6.1 的信任边界与 C11 的会话认证模型改写，Q19 的判定依据与 §6.4 的 `principal = (os_user, actor)` 握手随之重定。
 
 ### 8.5 验收标准
 
-以下标准可测；用 §1.4 的 Q 与 §7.2 崩溃矩阵作为可观测入口。术语与章节号取本设计冻结版（读模型、`LogPosition`、`Prepared`/`SendBarrier`/`Undetermined`）。
+以下标准可测；用 §1.4 的 Q 与 §7.2 崩溃矩阵作为可观测入口。术语与章节号取本设计当前已定内容（读模型、`LogPosition`、`Prepared`/`SendBarrier`/`Undetermined`/`Expired`）。
 
 1. **结构（§2.1、§3.4）**：代码库中不存在同时承载 provider 字段与业务状态的 `struct`；订单与持仓只作为对执行事实 `Journal` 的 `fold` 或非权威读模型存在。（对应 Q1/Q5）
 2. **规则确定性（§5.3）**：可交换规则集通过交换性测试；顺序固定链的顺序由代码显式固定并有测试。（对应 Q8/Q9）
 3. **写边界状态（§5.4）**：任一 `Undetermined` 记录在 `Resolved` 前，同 lane 无新 Attempt；重启后无后继的 `SendBarrier` 被记为 `Undetermined`，无 `SendBarrier` 的 `Prepared` 不被误升。（对应 Q2/Q4/Q7）
-4. **保留边界（§2.3、§6.7）**：压缩后所有仍被引用的 `LogPosition` 均 ≥ 保留边界。（对应 Q28）
+4. **保留边界（§2.3、§6.7）**：压缩后所有已登记引用的 `LogPosition` 均 ≥ 保留边界；未登记引用在 `basis_valid` 得 `BeyondRetention`。（对应 Q28）
 5. **provider 正交性（§2.2、§6.3）**：新 provider 接入不改核心 crate；新 `OperationKind` 必然改实现该协议的全部 provider；新 IDL 操作必然改全部集成。（对应 Q18）
 6. **窗口追溯（§3.2）**：`latest` 消费者的每次合并都可追溯到声明的窗口界或 `conflated` gap。（对应 Q31）
 7. **核心层最小验收（§6.6）**：含 `Pooled` 的程序在无可选子系统时被拒且其余程序不受影响；子系统 op 的输出对下游是普通派生流（下游节点无需知道它由原生 op 产出）。（对应 Q24/Q30）
-8. **崩溃矩阵可测项（§7.2 #1–#3、#8、#9；关闭事件回链 SP-10）**：`Prepared`/`SendBarrier`/`submit` 各窗口 fsync 崩溃注入后重启，观测——(a) 无 `SendBarrier` 的 `Prepared` 确未发出；(b) 无后继的 `SendBarrier` 升为 `Undetermined`；(c) 复合链不重复投放，fixture venue 调用 ≤ 1；(d) 追加/替换中途崩溃后无半条记录、同事务原子回滚、订阅者可按游标恢复。（对应 Q2/Q4/Q17）
+8. **崩溃矩阵可测项（§7.2 #1–#3、#8、#9）**：`Prepared`/`SendBarrier`/`submit` 各窗口 fsync 崩溃注入后重启，观测——(a) 无 `SendBarrier` 的 `Prepared` 确未发出；(b) 无后继的 `SendBarrier` 升为 `Undetermined`；(c) 复合链不重复投放，fixture venue 调用 ≤ 1；(d) 追加/替换中途崩溃后无半条记录、同事务原子回滚、订阅者可按游标恢复。（对应 Q2/Q4/Q17）
 9. **两故障面唯一判别（§5.4、§6.3）**：集成崩溃的观察流侧（`Gap{origin: Source}`）与写提交侧（`NoResponse`→`Undetermined`）的判别边界唯一 = 是否落 `submit` 路径。（对应 Q11/Q18/Q2）
+10. **fail-closed 与效应路径唯一（§2.4、§5.1、§5.2）**：引用了握手未提供字段的树在装载/启动期被拒（无运行期 fail-open）；注册为写处理器的 `EffectRequest` 只能经单据 → STS → IO 壳到达集成 `submit`，代码中不存在第二条到集成写接口的调用路径；一张单据在 `Close(Prepared)` 后拒绝任何 `TicketAction`。（对应 Q8/Q25/Q26）
+11. **决定与审批可追溯（§5.2、§5.3）**：每条 `Close(Prepared|DecisionRejected|Expired)` 都可回答谁、何时、依据哪些 `LogPosition`、绑定哪个 `current_version`；同一版本的第二次决定返回冲突且不改状态；过期意图无 `SendBarrier`。（对应 Q9/Q10/Q26）
+12. **外部变更与状态保真（§4、§2.2、§5.6）**：对不上任何本地 Attempt 的观察记录归因为 `External`/`Unattributed` 且无意图引用；venue 状态映射表中不存在"其他 → rejected"，未列举值以 `Unmapped(raw)` 保留。（对应 Q5/Q6）
+13. **未授权控制无副作用（§6.1、§6.4）**：未认证连接、伪造请求体身份、已认证但无 scope 的控制请求均被拒绝并记安全事件，期间无 venue 调用、无配置变更、无单据状态变化。（对应 Q19/Q20）
+14. **未发出即到期（§5.4）**：崩溃恢复窗口内 `deadline` 已过的 `Prepared` 与复合链腿间 `deadline` 已过的后续腿，均记 `Expired(deadline)`、无 `SendBarrier`、fixture venue 调用数为 0，且 lane 随之解除。（对应 Q4/Q27）
+15. **宿主预算与隔离（§6.5）**：在三个目标 OS 上，死循环、超内存、超意图速率的程序分别在声明预算内被 kill 并产出失败观察；同宿主协议下其他程序、账户、核心的响应度量不变。（对应 Q25）
+16. **程序状态跨重启（§3.3、§6.5、§6.7.2）**：带状态程序在若干次 `Advance` 后重启，`Load` 最近已提交的 `Checkpoint` 并从与之同事务持久化的 cursor 续读，不重复 `Emit`；在 `Advance` 输出持久化前崩溃则该批记录整批重放且无重复 `Emit`；`state_version` 不兼容时显式 `Reset` 记录而非静默丢失。（对应 Q25、H9）
+17. **一次取证两侧一条（§5.4）**：任一取证渠道的一次 venue 交互恰产生一条观察记录（观察 J，带 `attribution`/`provenance`）与一条 `ResolutionEvidence`（执行 J，`Found` 时引用该观察记录的 `LogPosition`），二者同一事务提交。（对应 Q3/Q27）
+18. **读模型可重建（§3.4、§6.4）**：任一读模型 `Snapshot{value, as_of, gaps}` 与消费者对同一原始记录集（≤ `as_of`）自行 fold 的结果相等；`as_of` 与订阅 cursor 可比对；断连重连后重复只出现在未确认区间且按 `LogPosition` 去重后与不断连时结果相同。（对应 Q29/Q31）
+19. **秒级负载不落后（§3.3、§6.7.1、§6.1）**：以 Q24 沟通场景规模（约 1500 流选 15、24 h 逐秒）构造 Q22 负载，秒级 bar 的清洗 + 增量指标在下一根 bar 到达前完成，积压不随时间增长，分发不阻塞清洗；推送流的文本 JSON-RPC 在同一负载下不丢记录、不触发 `slow_consumer`，否则启用同一 IDL 的二进制编码（§6.1）后须达标。（对应 Q22、B1）
 
 ### 8.6 明确不做
 
@@ -1941,6 +1970,14 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 | `EffectRequest` | 程序的唯一出口：一个副作用请求值，由处理器决定响应 | §5.1 |
 | 观察宇宙 / 效应宇宙 | 不可写 / 可写两套独立类型宇宙，不共享类型 | §2.5 |
 | `Ticket` / `TicketAction` | 意图形成期的锁 = 责任持有；`responsible` 字段的存在即锁 | §5.2 |
+| `Attempt` | 一条 `Prepared` 记录及其后继阶段链；身份 = `attempt_position`（该 `Prepared` 的 `LogPosition`）；同 lane 至多一条未终结 | §5.4 |
+| `Prepared` / `SendBarrier` / `Undetermined` / `Expired` | 阶段链的记录：已放行待执行 / 发送屏障（已 fsync，之后才可 `submit`）/ 已发出但结果未知 / 未发出即到期 | §5.4 |
+| `Resolved` | 阶段链的 fold 状态而非记录：链已达终态（`VenueAccepted`/`VenueRejected`/`Expired`，或 `Undetermined` 已由 `ResolutionEvidence` found/absent 或人工证据收敛） | §5.4 |
+| `basis` / `basis_validity` | 效应侧引用观察侧的唯一边：位置集 `Set<LogPosition>`；其有效性 `Fresh`/`Stale`/`Retracted`/`BeyondRetention` | §4 |
+| `Journal` | 记录载体；观察侧 `Journal<RetractableDelta>` 可撤回可压缩，执行事实侧只 append | §3.1 §2.5 |
+| STS / lane | 决策代数：顺序固定规则链（授权 → 输入约束 → 审批 → lane → 过期）/ 每 `WriteLaneKey` 的写通道全序 | §5.3 |
+| `Gap{origin}` | 显式标记的缺口记录，`origin ∈ {Source, Delivery, Channel}` | §3.2 |
+| `Pooled` | 值树里的读侧组合子，核心暴露给可选子系统的唯一接口 | §3.5 §6.6 |
 | `IntentAlignment` / `Revision` | 意图专属逐项对账 / 意图版本间的结构差 | §5.2 |
 | `WriteScope` / `WriteLaneKey` | 可写作用域（多账户在核心里的存在形式） / 其不透明键 | §2.2 §5.3 |
 | `Capability` / `Verdict` | (scope, operation) → `Supported`/`Unsupported`/`Unknown` 的能力证据 | §2.2 |
@@ -1948,13 +1985,17 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 | 段视图 | `Pooled` 物化完整窗口后交给原生 op 的可借用视图（非逐条值） | §3.5 |
 | money / quantity / 身份 / 时间 | 交易协议处理器计算处用的基础值类型；不进信封 | §5.6 |
 | 集成进程（integration） | 一个独立 OS 进程，把某上游协议清洗为信封 + 载荷，握手声明投影，是凭据终点与独立故障域 | §6.1、§6.3 |
-| 程序宿主（program host） | 解释 §5 值树程序的运行时（Wasm 或受监督子进程），只提供隔离与预算，不进设计中心 | §6.1、§6.5 |
+| 程序宿主（program host） | 解释 §5 值树程序的受监督子进程，只提供隔离与预算，不进设计中心；协议 = `Load`/`Advance`/`Reset`/`Unload` | §6.1、§6.5 |
+| `Checkpoint` / `state_version` | 程序状态的显式序列化字节及其版本号；与程序 cursor 同事务持久化 | §6.5、§6.7.2 |
+| `SessionEpoch` / `instance_id` | 会话 epoch `(instance_id, session_seq)`：`instance_id` 随 fence 单调递增，`session_seq` 每次握手加一；推送与回执只在 epoch 相等时接受 | §6.1 |
+| principal | 会话绑定的身份 `(os_user, actor)`：OS 对端凭据给出 `os_user`，Alice 自报 `actor`；授权与审计的键 | §6.4 |
+| `Snapshot` / `as_of` | 读模型的一次读取结果及其吃到的位置集 `Set<LogPosition>` 与范围内生效的 `gaps` | §6.4 |
 | 信任边界 = OS 用户 | 写权限来自认证得到的 principal × 策略 scope，不来自连接；同用户进程视为用户本人（H7） | §6.1 |
 | 凭据链 | `统一路径封存文件 → UTA 核心 → 该集成进程`；程序与消费方只见账户身份 | §6.1、§6.7 |
 | 单实例（single instance） | 同一用户状态根（`OPENALICE_HOME`）只允许一个核心实例，由 OS 文件锁 + fence 保证 | §6.1、§6.7 |
 | 传输（transport） | IDL 之下的编码/信道，按 OS 选择（本地回环 + 令牌或命名管道），不改变 IDL | §6.1、§6.3 |
 | 模块指南（module guide） | 每个元素的 拥有 / 隐藏 / 假设 三列，及其对应的 §2–§5 抽象 | §6.2 |
-| uses 图 | 模块间的依赖方向；观察 → 效应的方向不可反 | §6.2 |
+| uses 图 | 模块间的依赖方向；唯一跨宇宙依赖是效应侧 → 观察侧（经 `basis`），反向不成立 | §6.2 |
 | 操作集（operation set） | 核心 IO 壳对集成的调用与集成对核心的推送，构成跨协议 IDL 契约 | §6.3 |
 | 持久化归属表 | 每份状态谁写、谁读、怎么传播 | §6.7 |
 | 配置/凭据归属 | 统一路径下的文件契约：每文件唯一写者、格式版本只前进 | §6.7 |
@@ -1976,7 +2017,7 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 | 词 / 概念对 | 甲 | 乙 | 区分依据 | 节 |
 |---|---|---|---|---|
 | 意图的三个阶段 | `EffectRequest`：程序发出的请求，未定型、无负责人 | `Ticket` 的 `Version<Intent>`：定型的意图，有负责人与 `basis` | 第三阶段是 STS 的 `Input`：规则输入，含意图、回执、超时、证据 | §5.1 §5.2 §5.3 |
-| `Prepared` | `Ticket.Close(Prepared(position))` 的结果：单据关闭 | IO 壳链的起点：`Prepared → SendBarrier → …` | 同一条记录，观察→效应单向边唯一接触点；单据认"我已交出"，IO 壳认"我该做的" | §2.5 §5.2 §5.4 |
+| `Prepared` | `Ticket.Close(Prepared(position))` 的结果：单据关闭 | IO 壳链的起点：`Prepared → SendBarrier → …` | 同一条记录，单据 → IO 壳的唯一交出点，两者同属效应宇宙；单据认"我已交出"，IO 壳认"我该做的" | §2.5 §5.2 §5.4 |
 | 对账 / 决议 | 对账（alignment）：我的意图还对不对世界（`IntentAlignment`） | 决议（resolution）：我的动作发生了没有（`ResolutionEvidence`） | 前者在 `Prepared` 之前、只看观察侧；后者在之后、由 IO 壳驱动 | §5.2 §5.4 |
 | 修订 / 偏离 | 修订（`Revision<Intent>`）：意图改了，世界没变 | 偏离（`Diverged`）：世界变了，意图没变 | 来源不同（`Revise` vs 观察推进） | §5.2 |
 | 修订 / 撤回 | `Revision<Intent>`：意图版本间结构差，无逆元需求 | `RetractableDelta`：观察侧撤回代数，有逆元 | 前者属效应宇宙，后者属观察宇宙 | §5.2 §3.1 |
@@ -1985,7 +2026,7 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 | `SendBarrier` / `AwaitingDecision` | IO 壳发送屏障：`Prepared` 之后，外部动作即将发生 | 单据送审：`Prepared` 之前，无外部动作 | 二者相隔整条 STS 链 | §5.4 §5.2 |
 | `basis` / `required_inputs` | 值：这张单据实际引用了哪些 `LogPosition` | 类型：这个检查/处理器要读哪些 `StreamKind` | `required_inputs` 从组合树派生；`basis` 从实际评估记录 | §5.2 §2.4 |
 | `LogPosition` / `Hash` | 日志位置：顺序身份 | 内容寻址：版本身份 | `current_version` 是 `Hash`，`Prepared(position)` 是 `LogPosition` | §3.1 §5.2 |
-| 三种"过期" | `Ticket.Close(Expired)`：负责人失联或审批超时（H6） | `DecisionStep::Expire(Deadline)`：程序规则时限 | 第三种是 IO 壳超时，不是终态，只是 `Undetermined` 的原因之一 | §5.2 §5.1 §5.4 |
+| 四种"过期" | `Ticket.Close(Expired)`：负责人失联或审批超时，或 lane 等待期间到期（H6，STS 过期步，在 `Prepared` 之前） | `DecisionStep::Expire(Deadline)`：程序规则时限 | 第三种：链记录 `Expired(deadline)`——已放行但某腿发出前 `deadline` 已过，IO 壳不发并终结该链（只在崩溃恢复窗口与复合链腿间可达）；第四种：IO 壳超时，不是终态，只是 `Undetermined` 的原因之一 | §5.2 §5.1 §5.4 |
 | 两种"拒绝" | `VenueRejected`：写已发出，venue 拒了——执行事实、终态之一 | `DecisionRejected`：审批拒了——单据关闭，从未进入 `Prepared` | 前者在链上，后者在单据上 | §5.4 §5.2 |
 | 两种"证据" | `CapabilityProof`：venue 有这个能力（握手结果） | `ResolutionEvidence`：我的尝试发生了没（对账结果） | 前者进 `Projection.capabilities`，后者进链 | §2.2 §5.4 |
 | 形状 / 投影 | 形状：上游对象长什么样，藏在集成里，核心从不持有 | 投影：有几个作用域、几条流、各支持什么——UTA 定 schema、集成填、UTA 转发 | 账户只是特例；订单、持仓、流、渠道、程序都如此 | §2.2 |
@@ -1994,13 +2035,13 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 | 锚点 / 处理器字段 | 锚点：缺失 = 畸形记录，链路不成立 | 处理器字段：缺失 = 处理器不触发，不是错误 | 前者闭合、入口即验；后者开放、按注册表 | §2.2 |
 | 入站处理器 / 出站处理器 | §2.2：集成进来的字段出现 → 做什么 | §5.1：程序出去的请求出现 → 做什么 | 同一形状，方向相反；后者必须声明读/写 | §2.2 §5.1 |
 | `Pooled` 组合子 / 原生 op | `Pooled`：值树里的读侧组合子，核心暴露给可选子系统的唯一接口 | 原生 op：子系统提供的注册表黑盒，要求输入是 `Pooled` 的 | 前者属核心代数，后者属可选子系统 | §3.5 §6.6 |
-| 窗口 / delta | 触发时可见的完整 `LogPosition` 区间（常驻引用，物化为若干段） | 本次推进的增量记录 | 记录渐进不要求算法渐进；增量在节点粒度 | §3.3 §3.5 |
+| 窗口 / delta | 触发时可见的完整 `LogPosition` 区间，在段池里物化为若干段的有序引用集；不向 §2.3 保留边界登记，越界得 `BeyondRetention` | 本次推进的增量记录 | 记录渐进不要求算法渐进；增量在节点粒度 | §3.3 §3.5 §6.6 |
 | `Journal` / 段池 | 记录的载体，持久于 SQLite，由 §2.3 保留语义管理 | 为高性能计算设计的运行期快照，由 `Pooled` 洗入，永不持久 | 两套存储，互不派生；只共用 `LogPosition` 标定 | §3.1 §3.5 §6.7 |
 | 读副作用 / 写副作用 | 读：不改变世界，可重试、可批、可丢，结果总可判定 | 写：改变世界，一次，可能 `Undetermined` | 与 §2.5 的对象轴正交；对账取证是读 | §5.5 |
-| `Program` 值 / 程序运行时 | JSON 值树，核心解释它 | Wasm 或子进程，解释器的宿主 | 运行时选择不改变值；预算靠宿主不靠类型 | §3.3 §5.1 |
+| `Program` 值 / 程序运行时 | JSON 值树，核心解释它 | 受监督子进程（宿主协议 §6.5；Wasm 是走同一协议的替代宿主），解释器的宿主 | 运行时选择不改变值；预算靠宿主不靠类型 | §3.3 §5.1 §6.5 |
 | `Transfer` / 协作 | 换负责人：单据始终只有一个负责人 | 协作：核心之外（另起单据、给负责人建议） | 单据不支持共同编辑 | §5.2 |
 | lane 队首阻塞 / 锁 | 通讯协议语义：后续写的含义依赖队首结果 | 锁：消费者自己持有的互斥 | UTA 不是消费者；队列有序才重要 | §5.3 §5.5 |
-| `Gap{origin}` 三种来源 | `Source`：集成断线，流有缺口 | `Delivery`：慢消费者或 conflated，投递有缺口 | 第三种 `Channel`：对账取证渠道不可用 | §3.2 §6.3 §5.4 |
+| `Gap{origin}` 三种来源 | `Source`：集成断线，流有缺口 | `Delivery`：慢消费者或 conflated，投递有缺口；程序作为订阅消费者滞后被跳过的区间也是这一种 | 第三种 `Channel`：对账取证渠道不可用 | §3.2 §6.3 §5.4 |
 
 ---
 
@@ -2015,10 +2056,10 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 | `design/research/fp-02-scala-jvm-cases.md` | Scala/JVM 交易与 provider 栈（gvolpe/trading、Fetch、Stitch、ZIO、fs2 等） | §2.1（命题 12）、§2.2（命题 1/2）；§8.1 大对象行 |
 | `design/research/fp-03-effect-composition-and-open-providers.md` | 效应组合与开放 provider 的理论/库（tagless final、Free/DTC、Servant、能力三阶段、reify+event sourcing） | §2.2（命题 3/8）、§2.4（条目 2/4/5）、§5.3（命题 6）、§3.4（命题 1）；§8.1 泛型 Embed / 类型级 capability / 全局 effect enum 行 |
 | `design/research/fp-04-base-types-and-domain-primitives.md` | 基础类型与域原语（safe-money、Squants、DMMF、Incremental、幂等、位置/时钟） | §2.2（命题 15/16）、§2.3（命题 10/11）、§5.6；§8.1 信封解析行 |
-| `design/research/fp-05-streams-incremental-frp.md` | 观察侧流/增量/FRP（fs2、Incremental、Salsa、Differential、Materialize、Pine Script） | §2.3（案例 13⑤）、§2.5（命题 12）、§3.1（命题 12）、§6.8；§8.1 增量引擎 / 两侧共表 / 快照重建行；SP-8 |
-| `design/research/fp-06-reconciliation-and-in-doubt.md` | 写边界 / in-doubt / 对账的一手出处（2PC 先例、四面泄漏、命题 1–6） | §5.4；§8.1 两阶段行；SP-1 |
-| `design/hpc-derivation/research/fp-07..12-*.md` | 可选子系统的一手证据（类型导出与外部编译、段池选库、算法层与 SIMD、数组中间层、闸门 9 原语实证、L2 订单簿 demo） | hpc-derivation/design.md §13 逐篇索引；本设计只经 §6.6、Q24/Q30、SP-12–SP-14 引用 |
-| `design/investigation/alice-consumers.md` | Alice 消费面真实入口（SDK/路由/UI/connector/CLI） | §1.3.1（A 表）、§1.4、§1.6.4；S10/S11；OD-1/OD-3 |
+| `design/research/fp-05-streams-incremental-frp.md` | 观察侧流/增量/FRP（fs2、Incremental、Salsa、Differential、Materialize、Pine Script） | §2.3（案例 13⑤）、§2.5（命题 12）、§3.1（命题 12）、§6.8；§8.1 增量引擎 / 两侧共表 / 快照重建行 |
+| `design/research/fp-06-reconciliation-and-in-doubt.md` | 写边界 / in-doubt / 对账的一手出处（2PC 先例、四面泄漏、命题 1–6） | §5.4；§8.1 两阶段行；§8.5 #8/#17 |
+| `design/hpc-derivation/research/fp-07-*.md` … `fp-12-*.md`（含 `fp-11-appendix-*.md`） | 可选子系统的一手证据（类型导出与外部编译、段池选库、算法层与 SIMD、数组中间层、原语集实证、L2 订单簿 demo） | hpc-derivation/design.md §12 逐篇索引；本设计只经 §6.6、Q24/Q30 引用 |
+| `design/investigation/alice-consumers.md` | Alice 消费面真实入口（SDK/路由/UI/connector/CLI） | §1.3.1（A 表）、§1.4、§1.6.4；S10/S11；§6.4 操作集与读模型集合 |
 | `design/investigation/existing-capabilities.md` | 旧 UTA 可观察行为、后台任务、持久化与 20 条缺陷 | §1.1（O11）、§1.3.1；C9–C14；Q8/Q17/Q19/Q20 |
 | `design/investigation/venue-capabilities.md` | venue 能力矩阵（推送流/幂等键/回读/续传游标；限额与 pacing） | §1.1（F6/F7）、§1.2（P1）、§1.6.1；§8.1 写批处理行 |
-| `design/investigation/rust-feasibility.md` | Rust 生态可行性（tonic/Windows UDS、Wasmtime 快照缺口、fuel/epoch、gRPC 流、rust_decimal） | §1.6.2、§6.1、§6.8；SP-6/SP-11；§8.1 持久化引擎 / 线缆编码 / Wasm 行 |
+| `design/investigation/rust-feasibility.md` | Rust 生态可行性（tonic/Windows UDS、Wasmtime 快照缺口、fuel/epoch、gRPC 流、rust_decimal） | §1.6.2、§6.1、§6.5、§6.8；§8.1 持久化引擎 / 线缆编码 / 程序隔离运行时行 |
