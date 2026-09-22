@@ -65,7 +65,7 @@ flowchart TB
   RES -->|"未命中（listing / fills 空 ≠ absent，F10）"| INC["ResolutionEvidence{r, channel, Inconclusive}"]
   INC --> NEXT
   NEXT -->|"否：渠道穷尽"| WAIT["停等：腿仍未终结，留在阻塞头集合<br/>IO 壳永不 heuristic；引用登记钉住保留边界"]
-  WAIT -->|"resolve(r, Found(obs) 或 Absent, note)"| MAN["ResolutionEvidence{r, Manual}"]
+  UD -.->|"任一时刻（不以穷尽为前提）：resolve(r, Found(obs) 或 Absent, note)<br/>授权 ∧ r 仍 Undetermined 未终结"| MAN["ResolutionEvidence{r, Manual, round}"]
   WAIT -->|"ReconciliationReopened{r, cause}（append 前重查 r 仍未终结）<br/>cause = CancelLegTerminal(撤阻塞头腿终结于 VenueAccepted/Found：新取证机会，非目标终态证据) / SessionRestored(集成会话重建) / Manual(retry_reconciliation)"| CH0
   ATTR["被动渠道：推送观察 attribution FromAttempt(r)<br/>或 idempotency_key 经登记解析到 r，且 r 处于 Undetermined 未终结"] -->|"同事务"| ATT["ResolutionEvidence{r, Attributed, Found{observation: 该记录, evidence: 该记录载荷}}"]
   FOUND --> RS[("腿终结")]
@@ -132,7 +132,7 @@ stateDiagram-v2
   [*] --> C : Prepared(Replace, target)
   C --> ATT : 撤单腿终结于 VenueAccepted 或 Found
   C --> R0 : 撤单腿终结于 VenueRejected / Absent / Expired（不解释拒绝原因；目标可能仍在时发新腿 = 加仓，H1）
-  ATT --> ATT : 读到目标存在但非终态 / 未见目标（F10）→ 按 pacing 再读
+  ATT --> ATT : 读到目标存在但非终态 / 状态映射为 unknown 或 Unmapped(raw)（不冒充终态，C13） / 未见目标（F10）→ 按 pacing 再读
   ATT --> ATT : 读返回 Unavailable → Gap{Channel}，再读
   ATT --> N : 目标终态观察到达（撤单腿回执/取证副本已含终态；attribution 指向目标的推送；IO 壳按 target 读：IdemKey→query_by_key，VenueRef→read(orders, id)）且新腿数量 > 0
   ATT --> R0 : 目标终态到达且数量 = 0（口径为剩余量且已全部成交）
@@ -150,7 +150,7 @@ stateDiagram-v2
 
 读法：
 
-- 这是 `>>=`：第二腿读第一腿的终态观察，发生在 IO 壳内，不是单据层两次起单；两腿各过一次发出前门、各一条 `SendBarrier`、各自的幂等键登记。
+- 这是 `>>=`：第二腿读第一腿的终态观察，发生在 IO 壳内，不是单据层两次起单；每条实际发出的腿各过一次发出前门、各至多一条 `SendBarrier`（发出前过期或链已终结的腿没有）、各自的幂等键登记。
 - 撤单腿被拒、缺席或过期 → 链终结、新腿永不发；负责人看观察记录另起单据。
 - 崩在撤单腿终态已持久、新腿未 `SendBarrier`（#8）：先 fold 链是否已 `Resolved`；未完则续 `AwaitingTargetTerminal`，读目标终态算量，过门后发新腿。
 
@@ -210,10 +210,15 @@ sequenceDiagram
   participant OP as 运维 principal
   IO->>EJ: SendBarrier(p,1)（fsync）
   IO->>I: submit(attempt (p,1))
-  Note over IO,I: 核心 kill -9（或集成崩溃 / 超时）
-  Note over IO: 重启第 1 步：instance_id += 1；第 2 步：SendBarrier 无后继
-  IO->>EJ: append Undetermined((p,1), CrashWindow)（同事务回查已到达、归因到 (p,1) 的观察）
-  Note over IO,I: 重启第 3 步：新会话 B（新 session_seq）；第 4 步：启动对账
+  alt 核心存活：集成崩溃 / 超时 / 传输 ACK / 5xx
+    I-->>IO: NoResponse
+    IO->>EJ: append Undetermined((p,1), NoResponse)（同事务回查已到达、归因到 (p,1) 的观察）
+  else 核心 kill -9
+    Note over IO: 重启第 1 步：instance_id += 1；第 2 步：SendBarrier 无后继
+    IO->>EJ: append Undetermined((p,1), CrashWindow)（同事务回查）
+    Note over IO,I: 重启第 3 步：新会话 B（新 session_seq）；第 4 步：启动对账
+  end
+  Note over IO: 渠道集 = 能力证据声明的渠道；无 by-key 能力则跳过该渠道
   IO->>I: query_by_key(key)
   alt Found(state)
     I-->>IO: Found
@@ -226,9 +231,11 @@ sequenceDiagram
   else Unavailable
     I-->>IO: Unavailable
     IO->>EJ: Gap{Channel, ByKey}；同渠道稍后再发
-  else 无 by-key 能力 / 未命中
-    IO->>I: list_open(scope) → list_fills(scope, since) → replay_by_key（若开启）
-    I-->>IO: 未命中 → Inconclusive × 渠道数
+  else ByKey 已用尽或不可用 → 下一渠道
+    IO->>I: list_open(scope)
+    I-->>IO: Listing（核心按归因身份匹配）
+    IO->>EJ: 未命中 → ResolutionEvidence{(p,1), Listing, Inconclusive}
+    IO->>I: list_fills(scope, since) → 同上；replay_by_key（若开启）→ 同上
     IO->>EJ: 渠道穷尽：停等；腿留在阻塞头集合
     OP->>IO: read(scopes, orders, by venue_order_id)（§6.4；核心 → 集成 read）
     IO->>OJ: 观察记录 @obs（provenance OneShot{Session(OP)}）
@@ -239,7 +246,7 @@ sequenceDiagram
   I->>OJ: 观察记录 → (p,1) 处于 Undetermined → 同事务 EJ: ResolutionEvidence{(p,1), Attributed, Found} → 腿终结
 ```
 
-读法：末态可枚举（found → 证据字节 + 观察副本 / absent → 未发生 / 无渠道 → 停等）；停等态只能由带 principal 的 `resolve`、或 `ReconciliationReopened`（撤阻塞头 / 会话重建 / `retry_reconciliation`）推进。
+读法：末态可枚举（found → 证据字节 + 观察副本 / absent → 未发生 / 无渠道 → 停等）；停等态之后仍有多条收敛入口：带 principal 的 `resolve`、任一时刻到达的 `Attributed Found`、或 `ReconciliationReopened`（撤阻塞头 / 会话重建 / `retry_reconciliation`）重开的自动取证。
 
 核出：无。
 
@@ -275,8 +282,9 @@ sequenceDiagram
     I-->>IO: Found → ResolutionEvidence{(p1,1), ByKey, Found} → 腿终结
   else ByKey 明确否定
     I-->>IO: Absent → ResolutionEvidence{(p1,1), ByKey, Absent} → 腿终结
-  else listing 未见
-    I-->>IO: Inconclusive（F10）→ 仍停等
+  else ByKey 无能力 / 本轮未给出结果
+    IO->>I: list_open(scope)
+    I-->>IO: Listing 未见目标 → Inconclusive（F10）→ 继续下一渠道；穷尽仍停等
   end
   Note over S: 集合清空 → lane 解除 → T2 放行，先过期步再过门 → Prepared @p2
   Note over UI,I: 另一 lane（不同账户）的写全程不等待

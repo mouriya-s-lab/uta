@@ -101,7 +101,7 @@ flowchart TB
 
 读法（假想运行时）：
 
-- 链是事件驱动的：`SubmitForDecision` 跑到第一个等待点；`decide`、阻塞头集合清空、超时各自把它往下推一步；每推一步 append 一条记录并更新 `RuleState`（同事务）。
+- 链是事件驱动的：`SubmitForDecision` 跑到第一个等待点；`decide`、阻塞头集合清空、超时各自把它往下推一步；每推一步把该步产生的记录（`Vec<Outcome>` 或 `NonEmpty<Rejection>`）与 `RuleState` 同事务持久化。
 - 等待都发生在 `Prepared` 之前：单据在等，不是已放行的记录在等；所以正常路径下同 lane 至多一条未终结 Attempt。
 - 过期步是第五步：等待结束后先看 `deadline` 再进门；计时器只是让等待中的单据也能到期，不是让过期单据仍能 `Prepared` 的旁路。
 - 门读的是单据 fold 已算好的字段，规则自己不算；世界变了单据先变 `Diverged`，审批人看得到，放行时门自然失败。
@@ -134,7 +134,7 @@ stateDiagram-v2
   end note
   note right of BN
     IO 壳按 Prepared 位置顺序执行集合内每条，各自对账独立收敛
-    撤单腿回执不直接决议阻塞头：撤单腿终结 → ReconciliationReopened{CancelLegTerminal} → 阻塞头重走一轮取证
+    撤单腿回执不直接决议阻塞头：撤单腿终结于 VenueAccepted / Found 且阻塞头仍 Undetermined 未终结 → ReconciliationReopened{CancelLegTerminal} → 阻塞头重走一轮取证
     by-key 读到目标 → Found；by-key 否定 → Absent；listing 未见仍 Inconclusive（F10）
   end note
 ```
@@ -151,6 +151,7 @@ stateDiagram-v2
 flowchart LR
   subgraph TRIG["触发（都不是 TicketAction）"]
     T1["basis 引用的流推进 / 被撤回 / 出现 gap"]
+    T1b["required_inputs 流被撤回 / 出现 gap"]
     T2["required_inputs 流有新观察（推送、回填、一次性读、回执/取证副本）"]
     T3["能力变更推送 / CapabilityObserved"]
     T4["保留边界推进"]
@@ -161,20 +162,26 @@ flowchart LR
     V["basis_valid(basis, world, Lag) →<br/>Fresh / Stale(Lag) / Retracted(pos) / BeyondRetention(pos)<br/>比较切面：各流完备位置（D8.3）"]
   end
   subgraph L2["第二层 alignment（按 Intent 分派的检查集）"]
-    CK["每项 AlignmentCheck.eval(intent, 各流当前流末 fold_state) →<br/>Aligned / Diverged / Undecidable(Gap) / InputMissing(缺哪些流)<br/>记 checked_as_of = 实际消费的位置集"]
+    IM{"该项 required_inputs 各流观察侧都存在？"}
+    CK["每项 AlignmentCheck.eval(intent, 各流当前流末 fold_state) →<br/>CheckResult：Aligned / Diverged(Divergence) / Undecidable(Gap)<br/>记 checked_as_of = 实际消费的位置集"]
+    MISS["IntentAlignment 该项 = InputMissing(缺哪些 StreamKind)"]
     CAP["能力项：(WriteLaneKey, OperationKind) Supported → Aligned，否则 Diverged；恒为必要项"]
   end
   T1 --> V
   T4 --> V
   T5a --> V
-  T2 --> CK
+  T1b --> IM
+  T2 --> IM
+  IM -->|"是"| CK
+  IM -->|"否"| MISS
   T3 --> CK
   T3 --> CAP
   T5b --> GATE
   V --> GATE{"门：Fresh ∧ 必要项 Aligned"}
   CK --> GATE
+  MISS --> GATE
   CAP --> GATE
-  CK -->|"InputMissing 且 venue 有一次性读能力"| RD["策略可选先查后判：read(...) → 观察记录（one_shot，不推进完备进度）→ 该项重算"]
+  MISS -->|"venue 有一次性读能力"| RD["策略可选先查后判：read(...) → 观察记录（one_shot，不推进完备进度）→ 该项重算"]
   RD --> T2
   GATE -->|"否"| DIV["审批人看到 Diverged 单据；放行时 PredicateFailure"]
   GATE -->|"是"| OK["可进 prepare；Outcome 记 checked_as_of"]

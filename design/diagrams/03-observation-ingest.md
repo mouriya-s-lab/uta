@@ -32,7 +32,7 @@ sequenceDiagram
     end
     J->>D: 受影响节点增量重算（cutoff）；派生记录写回观察 J
     J->>T: 引用该流的单据重算 basis_validity / alignment
-    J->>S: 按订阅表投递给 cursor 在其后的订阅者
+    J->>S: 按订阅表投递给已确认 cursor 在该记录之前的订阅者（记录位于 cursor 之后）
   end
 ```
 
@@ -50,16 +50,21 @@ sequenceDiagram
 
 ```mermaid
 stateDiagram-v2
+  state "Live（非 Degraded）" as LN
   [*] --> Starting : 会话建立（新 session_seq）
-  Starting --> Backfilling : 声明 live_from，核心请求 < live_from 的回填
+  Starting --> Backfilling : 集成声明 Backfilling{through: Seq}
   Starting --> Live : 无需回填 / 能力不支持回填
-  Backfilling --> Live : 回填页覆盖到 live_from 之前，边界闭合
-  Backfilling --> Live : 回填穷尽未达 live_from → Gap{Source, backfill_incomplete}，frontier 跳过
+  Backfilling --> Live : 进入 Live 时集成声明 live_from（首条实时记录的 venue seq）
   state Live {
-    [*] --> Normal
-    Normal --> Degraded : 能力收紧 / 配额受限（子态，接受条件不变）
-    Degraded --> Normal : 恢复
+    [*] --> LN
+    LN --> Degraded : 能力收紧 / 配额受限（子态，接受条件不变）
+    Degraded --> LN : 恢复
   }
+  note left of Live
+    进入 Live 后核心只请求 < live_from 的回填范围；
+    回填页覆盖到 live_from 之前 → 边界闭合，frontier 才允许越过；
+    回填穷尽未达 live_from → Gap{Source, backfill_incomplete}，frontier 跳过
+  end note
   Starting --> Disconnected : 断线 / 集成进程退出
   Backfilling --> Disconnected : 断线 / 集成进程退出
   Live --> Disconnected : 断线 / 集成进程退出
@@ -128,7 +133,7 @@ sequenceDiagram
   alt 慢消费者：缓冲耗尽
     DL->>J: append Gap{Delivery, slow_consumer, from..to}
     DL->>C: 停投，投递 gap（需显式确认）
-    C->>SUB: ack(gap)
+    C->>SUB: ack(subscription, cursor = 该 gap 的位置)（显式确认 gap）
     DL->>C: 从已确认 cursor 之后恢复投递
   end
   alt 断连 / 崩溃

@@ -36,7 +36,7 @@ stateDiagram-v2
 
 - 登记方是核心、消费者不手工登记；解除随持有者生命周期自动发生。
 - 解除后的历史引用仍可读作审计；落到边界之下读得 `BeyondRetention`，不阻止压缩。
-- `Undetermined` 停人工时，它的 `basis` 与取证引用钉住保留边界——解冻只能靠 `resolve` 或撤阻塞头（D6.2、D6.7），没有旁路。
+- `Undetermined` 停等时，它的 `basis` 与取证引用钉住保留边界；解除随链 `Resolved` 自动发生——任一收敛入口（`resolve`、`Attributed Found`、`ReconciliationReopened` 后的自动取证，D6.2）都行，没有绕过链的旁路。
 
 核出：无。
 
@@ -48,9 +48,11 @@ stateDiagram-v2
 flowchart TB
   OP["控制面 principal：advance_retention(to)"] --> AUTH{"(principal, 动作种类) 授权？"}
   AUTH -->|"否"| U["Rejected(Unauthorized)"]
-  AUTH -->|"是"| MIN["核心算 min(当前登记引用)"]
+  AUTH -->|"是"| MONO{"to > 当前边界？（边界只前进）"}
+  MONO -->|"否"| RJ0["Rejected(NotForward)"]
+  MONO -->|"是"| MIN["核心算 min(当前登记引用)"]
   MIN --> CMP{"to ≤ min？"}
-  CMP -->|"否"| RJ["Rejected(ReferencedBelow{min})<br/>要越过只能先让持有者终结：关闭单据 / resolve / unload_program"]
+  CMP -->|"否"| RJ["Rejected(ReferencedBelow{min})<br/>要越过只能先让持有者终结：关闭单据 / 链 Resolved / unload_program"]
   CMP -->|"是"| WIN{"to ≤ 配置窗口下界？"}
   WIN -->|"否"| RJ2["Rejected(reason)：边界 = min(配置窗口下界, 最早登记引用)"]
   WIN -->|"是"| APPLY["写新边界；控制记录 Applied(position)"]
@@ -69,7 +71,7 @@ flowchart TB
 ```mermaid
 flowchart TB
   IN["basis: Set<LogPosition>；操作的 Lag（策略声明，缺省 0）"]
-  IN --> EACH["对每个位置"]
+  IN --> EACH["对每个位置（逐位置顺序：边界 → 撤回 → 滞后，后一项以前一项通过为前提，§4）"]
   EACH --> SIDE{"位置在哪侧？"}
   SIDE -->|"执行事实侧（VenueAccepted / SendBarrier / EffectRequest 位置）"| E1{"≥ 保留边界？"}
   E1 -->|"是"| EOK["有效（不因年龄变假）"]
@@ -84,12 +86,12 @@ flowchart TB
   EOK --> AGG
   DOK --> AGG
   AGG{"全部有效？"} -->|"是"| FRESH["Fresh"]
-  AGG -->|"否"| NOT["非 Fresh：门 fail-closed；审批人看到偏离"]
+  AGG -->|"否"| NOT["取最严重一类作 BasisValidity：BeyondRetention > Retracted > Stale（§4）<br/>门 fail-closed；全部失败位置及原因给审批人"]
   BR --> AGG
   RT --> AGG
   ST --> AGG
 ```
 
-读法：`Fresh` 是"决定至少看到了所有之前不再变的记录"；空 `basis` 空真为 `Fresh`，此时能不能放行由第二层必要项决定（D5.5）。
+读法：`Lag = 0`（缺省）时 `Fresh` 是"决定至少看到了所有之前不再变的记录"；策略声明正 `Lag` 时允许落后完备位置至多 `Lag` 个 `Seq`。空 `basis` 空真为 `Fresh`，此时能不能放行由第二层必要项决定（D5.5）。
 
-核出：默认窗口语义上一轮已改为"不早于完备进度"（§4）。
+核出：默认窗口语义已改为"不早于最近一次完备位置"（§4，`Lag = 0` 限定）；逐位置顺序与集合值的严重度取法原文未写——已并入 §4。

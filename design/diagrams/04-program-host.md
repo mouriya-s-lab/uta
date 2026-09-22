@@ -69,8 +69,9 @@ stateDiagram-v2
   [*] --> Loading : load_program(manifest_ref) 或 启动第 5 步
   Loading --> Running : Load(program, checkpoint?, budget) → Loaded{state_version}
   Loading --> Rejected : LoadRejected（Id 越界/环、required_inputs 缺、含 Pooled 而子系统未装）
-  Loading --> ResetThenRunning : state_version 不符 → Reset(StateVersionMismatch)
-  ResetThenRunning --> Running : append ProgramReset；程序流新 epoch Gap{Source, program_upgrade}；按 H9 回填
+  state "Reset 处理中" as RST
+  Loading --> RST : state_version 不符 → Reset(StateVersionMismatch)
+  RST --> Running : append ProgramReset；程序流新 epoch Gap{Source, program_upgrade}；按 H9 回填
   Running --> Running : Advance 循环（D4.1）
   Running --> Failed : 超预算 / trap（宿主异常退出） → 终止宿主，append ProgramFailed
   Running --> Unloaded : unload_program → Unload，清除进程登记，最近 Checkpoint 保留
@@ -90,7 +91,7 @@ stateDiagram-v2
 
 ## D4.3 `EffectRequest` 分派与重启重派
 
-对照：§5.1（读/写处理器、请求与响应的关联是引用）、§6.2 出站请求处理器、§7.2 #21、§6.1 第 4 步。
+对照：§5.1（读/写处理器、`EffectResponse`、请求与响应的关联是引用）、§3.4 读即观察记录、§6.2 出站请求处理器、§7.2 #21、§6.1 第 4 步。
 
 ```mermaid
 flowchart TB

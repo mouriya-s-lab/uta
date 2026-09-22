@@ -11,12 +11,12 @@
 | `01-process-topology.md` | 进程拓扑、信任边界、启动五步、会话 epoch、持久化归属与同事务集合 | §6.1、§6.7、§6.3.6 |
 | `02-record-model.md` | 信封/锚点/处理器、流与位置与三种进度、`DerivationNode` 与五个 fold、两个宇宙与唯一边、记录种类总表 | §2.2、§2.3、§2.4、§2.5、§4、§5.4 |
 | `03-observation-ingest.md` | 推送入库、readiness 与流 epoch、回填与实时边界、订阅/cursor/ack/gap、三种消费方式、gap 来源判定 | §3.1、§3.2、§6.3.6、§6.3.8、§6.3.10、§6.4 订阅 |
-| `04-program-host.md` | `Advance` 循环、程序生命周期、`EffectRequest` 分派与重派 | §3.3、§5.1、§6.5 |
-| `05-ticket-and-sts.md` | 单据状态机、意图来源与开单、STS 顺序固定链、lane 阻塞头、两层对账重算、人工审批时序 | §5.2、§5.3、§4、§6.4 单据 |
-| `06-io-shell-attempt.md` | Attempt 单腿状态机、取证循环、一次交互两条记录、`Replace` 复合链、W1/W2/W5 时序 | §5.4、§5.5、§6.3.5、§7.1 W1/W2/W5/W12 |
-| `07-crash-recovery.md` | 重启时链的恢复判定、崩溃窗口在时序上的位置、脑裂/孤儿、程序侧崩溃、崩溃矩阵对照 | §5.4 恢复、§6.1、§7.2 |
-| `08-retention-and-references.md` | 引用登记生命周期、`advance_retention` 判定、`basis_validity` 判定 | §2.3、§4、§6.4 控制 |
-| `09-alice-session.md` | 会话建立与重连、操作集到元素的落点、人工决议流程、控制动作触发的记录 | §6.4、§7.1 W14/W19 |
+| `04-program-host.md` | `Advance` 循环、程序生命周期、`EffectRequest` 分派与重派 | §3.3、§3.4、§5.1、§6.5、§7.1 W17 |
+| `05-ticket-and-sts.md` | 单据状态机、意图来源与开单、STS 顺序固定链、lane 阻塞头、两层对账重算、人工审批时序 | §5.2、§5.3、§4、§6.4 单据、§7.1 W18 |
+| `06-io-shell-attempt.md` | 腿的状态机、取证循环、一次交互的记录矩阵、`Replace` 复合链、W1/W2/W5 时序 | §5.4、§5.5、§6.3.5、§7.1 W1/W2/W5/W12 |
+| `07-crash-recovery.md` | 重启时链的恢复判定、崩溃窗口在时序上的位置、脑裂/孤儿、程序侧/派生侧/快照崩溃、崩溃矩阵对照 | §5.4 恢复、§6.1、§6.5、§7.2 |
+| `08-retention-and-references.md` | 引用登记生命周期、`advance_retention` 判定、`basis_validity` 判定 | §2.3、§4、§6.4 控制、§7.1 W13 |
+| `09-alice-session.md` | 会话建立与重连、操作集到元素的落点、人工决议流程、控制动作触发的记录 | §6.4、§6.7.3、§7.1 W8/W14/W19 |
 
 ## 正文 → 图 对照
 

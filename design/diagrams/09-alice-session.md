@@ -40,7 +40,7 @@ sequenceDiagram
 
 ## D9.2 操作集到核心元素的落点
 
-对照：§6.4 操作集表；§6.2 模块指南；§6.3.5 `read`。
+对照：§6.4 操作集表；§6.2 模块指南；§3.4 读副作用与读模型；§6.3.5 `read`。
 
 ```mermaid
 flowchart LR
@@ -50,7 +50,8 @@ flowchart LR
     S3["read_model(kind, as_of?)"]
     S4["draft / revise / submit_for_decision / decide / send_back / withdraw / transfer"]
     S5["load_program · unload_program · reload_config · rotate_credential · restart_integration · request_snapshot · advance_retention · rewind_cursor · bypass_lane"]
-    S6["resolve(attempt: AttemptRef, Found(obs) 或 Absent, note) · retry_reconciliation(attempt)"]
+    S6["resolve(attempt: AttemptRef, Found(obs) 或 Absent, note)"]
+    S6b["retry_reconciliation(attempt: AttemptRef)"]
     S7["health()"]
   end
   subgraph EL["核心元素"]
@@ -59,7 +60,8 @@ flowchart LR
     RM["读模型（只读 fold）"]
     TK["单据（TicketAction）→ STS 链"]
     CTL["控制面（控制记录 Applied / Rejected）"]
-    IOR["IO 壳链：ResolutionEvidence Manual"]
+    IOR["控制面 append ResolutionEvidence{Manual} → 腿终结 → 链重算（D9.3）"]
+    RRO["控制面 append ReconciliationReopened{Manual} → IO 壳重开一轮取证（D6.2）"]
     HL["健康读模型"]
   end
   S1 --> SUB
@@ -68,10 +70,13 @@ flowchart LR
   S4 --> TK
   S5 --> CTL
   S6 --> IOR
+  S6b --> RRO
   S7 --> HL
   S2 -.->|"逐 scope：Records{as_of} / Unavailable / Unsupported"| S2
-  S4 -.->|"expected_version ≠ current_version → Conflict"| S4
-  S5 -.->|"越权 → Unauthorized；配置不合法 → Rejected 并保留上一有效版本"| S5
+  S3 -.->|"kind 未定义 → 拒绝；as_of 未达 → NotYetAvailable{frontier}"| S3
+  S4 -.->|"expected_version ≠ current_version → Conflict；同版本已有 Decision → Conflict(AlreadyDecided)"| S4
+  S5 -.->|"越权 → Unauthorized；配置不合法 → Rejected 并保留上一有效版本；advance_retention → NotForward / ReferencedBelow"| S5
+  S6 -.->|"越权 → Unauthorized；腿非 Undetermined → Rejected(NotUndetermined)"| S6
 ```
 
 读法：写类按 `(principal, WriteLaneKey, OperationKind)` 授权，控制与决议按 `(principal, 动作种类)` 授权，同一规则族；三组都留下带 principal 的记录。
@@ -111,7 +116,8 @@ flowchart TB
 ```mermaid
 flowchart LR
   subgraph ACT["控制动作（带 principal，先授权）"]
-    A1["reload_config(rules / runtime)"]
+    A1["reload_config(rules)"]
+    A1r["reload_config(runtime)"]
     A2["rotate_credential(integration)"]
     A3["restart_integration(id)"]
     A4["load_program / unload_program"]
@@ -120,8 +126,9 @@ flowchart LR
     A7["rewind_cursor(subscription, to)"]
     A8["bypass_lane(ticket)"]
   end
-  A1 --> F1["读统一路径文件（Alice 原子替换写入）<br/>合法 → Applied，版本 = 内容 hash，写进此后每条 Outcome / Rejection<br/>不合法 → Rejected，保留上一有效版本"]
-  A1 --> F1b["待决单据放行时按新规则重过五步（不冻结）"]
+  A1 --> F1["读策略/审批规则文件（Alice 原子替换写入）<br/>合法 → Applied，规则版本 = 内容 hash，写进此后每条 Outcome / Rejection<br/>不合法 → Rejected，保留上一有效版本"]
+  A1 --> F1b["待决单据放行时按新规则重过五步（不冻结）；必要项集 / Lag 变化触发 alignment 重算（D5.5）"]
+  A1r --> F1c["读运行期参数文件：快照频率 · 派生侧留存窗口 · deadline 全局缺省 · 投递缓冲上限<br/>合法 → Applied；不合法 → Rejected，保留上一有效版本；不改规则版本"]
   A2 --> F2["凭据链 文件 → 核心 → 集成；该集成新 session_seq<br/>各流强制新 epoch Gap{Source, credential_rotated}"]
   A3 --> F3["终止并重新拉起集成进程；新 session_seq；各流按游标证明决定续接或新 epoch"]
   A4 --> F4["宿主 Load / Unload（D4.2）"]

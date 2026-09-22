@@ -4,20 +4,20 @@
 
 ## D1.1 进程拓扑与信道
 
-对照：§6.1（进程、信任边界、凭据链、传输）、§6.7.1（单写者）。
+对照：§6.1（进程、信任边界、凭据链、传输）、§6.4（principal）、§6.7.1（单写者）、§6.7.3（配置文件与运行期登记）。
 
 ```mermaid
 flowchart TB
   subgraph USER["信任边界 = 一个 OS 用户 H7"]
     subgraph CORE["UTA 核心进程（单实例，H10）"]
-      DB[("SQLite 单文件 WAL<br/>观察 J · 执行 J · RuleState · 订阅表<br/>能力证据 · Checkpoint · 进程表 · 快照")]
-      LOCK["OS 文件锁 + fence<br/>instance_id"]
+      DB[("SQLite 单文件 WAL<br/>观察 J · 执行 J · RuleState · 订阅表<br/>能力证据 · Checkpoint · 进程表 · 快照 · instance_id")]
+      LOCK["OS 文件锁 + fence"]
     end
     INT1["集成进程 A<br/>venue SDK 语言不限<br/>凭据终点"]
     INT2["集成进程 B"]
     HOST1["程序宿主 1<br/>值树解释器<br/>rlimit / job object"]
     HOST2["程序宿主 2"]
-    FILES["OPENALICE_HOME 统一路径<br/>封存信封 · 密钥引用 · 集成登记<br/>策略规则 · 装载清单 · 运行期参数<br/>写者 = Alice；运行期登记写者 = 核心"]
+    FILES["OPENALICE_HOME 统一路径<br/>Alice 写：封存信封 · 密钥引用 · 集成登记 · 策略规则 · 装载清单 · 运行期参数<br/>核心写：运行期登记（instance_id · 格式版本 · 最近快照位置）"]
   end
   ALICE["Alice 进程<br/>消费方 + 控制方<br/>独立生命周期"]
   V1["venue A（外部权威，F1）"]
@@ -29,14 +29,15 @@ flowchart TB
   CORE <-->|"宿主协议"| HOST2
   INT1 <-->|"上游协议（REST / WS / FIX）"| V1
   INT2 <-->|"上游协议"| V2
-  FILES -.->|"核心只读；凭据解封后注入集成"| CORE
+  FILES -.->|"核心读 Alice 写的文件；凭据解封后注入集成"| CORE
+  CORE -.->|"写运行期登记（Alice 只读）"| FILES
   ALICE -.->|"写配置文件（原子替换）"| FILES
   DB -.->|"独占；集成与宿主不接触"| CORE
 ```
 
 读法（假想运行时）：
 
-- 三类子进程都由核心拉起、登记在进程表，各自可以独立崩溃：集成崩了只影响它的流与在途 `submit`（D7.1）；宿主崩了只影响该程序（D4.2）；核心崩了子进程成孤儿，下次启动按进程表回收（D1.2）。
+- 两类子进程（集成、程序宿主）都由核心拉起、登记在进程表，各自可以独立崩溃：集成崩了只影响它的流与在途 `submit`（D7.1）；宿主崩了只影响该程序（D4.2）；核心崩了子进程成孤儿，下次启动按进程表回收（D1.2）。
 - 所有 RPC 语义在一份 IDL；Windows 只换信道（回环 + 令牌或命名管道），不换 IDL。
 - 凭据只走 `文件 → 核心 → 集成` 一条链；Alice、程序、宿主从不见凭据本体。
 
@@ -102,18 +103,22 @@ sequenceDiagram
 
 ```mermaid
 stateDiagram-v2
-  [*] --> Handshaking : 核心拉起集成 / 重连 / rotate_credential / restart_integration
-  Handshaking --> Live : handshake 成功，session_seq += 1，能力证据 append
-  Handshaking --> Rejected : 投影不合法 / 契约版本不兼容（记 P14，不降级）
-  Live --> Handshaking : 传输断开 / 集成进程退出
-  Live --> Live : 推送 epoch == 当前 → 接受并分配 LogPosition
-  Live --> Live : 推送 epoch != 当前 → 边界拒绝，不 append
-  Rejected --> [*]
-  note right of Live
+  state "握手中：session_seq += 1，以 (instance_id, session_seq) 发起 handshake" as HS
+  state "会话已建立（当前 epoch 生效）" as EST
+  state "已拒绝" as REJ
+  [*] --> HS : 核心拉起集成 / 重连 / rotate_credential / restart_integration
+  HS --> EST : handshake 返回合法 Projection，能力证据 append
+  HS --> REJ : 投影不合法 / 契约版本不兼容（记 P14，不降级）
+  HS --> HS : 传输失败 → 重连（再次 += 1）
+  EST --> HS : 传输断开 / 集成进程退出
+  EST --> EST : 推送 epoch == 当前 → 接受并分配 LogPosition
+  EST --> EST : 推送 epoch != 当前 → 边界拒绝，不 append
+  REJ --> [*]
+  note right of EST
     SessionEpoch = (instance_id, session_seq)
     集成把它回填到每条推送与 submit 回执
     旧 epoch 的迟到回执不进核心；
-    venue 已受理的写由新会话观察或对账并入原 Attempt（D6.6 步 4）
+    venue 已受理的写由新会话观察或对账并入原腿（D6.6 步 4）
   end note
 ```
 
@@ -126,7 +131,7 @@ stateDiagram-v2
 
 ## D1.4 持久化归属：谁写哪张表
 
-对照：§6.7.2 持久化归属表；§6.2"执行事实 append 链的唯一写入口"。
+对照：§6.7.2 持久化归属表；§6.7.3 运行期登记文件；§6.2"执行事实 append 链的唯一写入口"。
 
 ```mermaid
 flowchart LR
@@ -137,10 +142,10 @@ flowchart LR
     IOR["IO 壳：回执 / 取证观察"]
     TK["单据（TicketAction）"]
     STS["STS 规则链"]
-    IOE["IO 壳：SendBarrier / VenueAccepted / VenueRejected /<br/>Undetermined / Expired / ResolutionEvidence / CapabilityObserved"]
-    ATTR["效应侧归因处理器"]
-    CTL["控制面：控制记录 · 安全事件 · Manual 决议"]
-    OUT["出站请求处理器：EffectRequest"]
+    IOE["IO 壳：SendBarrier / VenueAccepted / VenueRejected / Undetermined / Expired /<br/>ResolutionEvidence / ReconciliationReopened{CancelLegTerminal|SessionRestored} / CapabilityObserved / 取证 Gap{Channel}"]
+    ATTR["效应侧归因处理器：ResolutionEvidence{Attributed}"]
+    CTL["控制面：控制记录 · 安全事件 · ResolutionEvidence{Manual} · ReconciliationReopened{Manual}"]
+    OUT["出站请求处理器：EffectRequest · EffectResponse"]
     SUBEL["持久订阅元素"]
     HS["握手"]
     HOSTP["宿主协议"]
@@ -157,7 +162,9 @@ flowchart LR
     PT[("进程表 (instance_id, pid, start_time, role)")]
     RB[("保留边界 + 引用登记")]
     SN[("快照")]
-    RUN[("运行期登记：instance_id · 格式版本 · 最近快照位置")]
+  end
+  subgraph F["统一路径文件（核心写、Alice 只读）"]
+    RUN["运行期登记：instance_id · 格式版本 · 最近快照位置"]
   end
   PUSH --> OJ
   DAG --> OJ
@@ -172,9 +179,11 @@ flowchart LR
   OUT --> EJ
   SUBEL --> SUB
   HS --> CAP
+  HS -->|"握手版能力证据"| EJ
   IOE --> CAP
   HOSTP --> CK
   FENCE --> PT
+  FENCE -->|"instance_id（与 fence 同事务）"| EJ
   FENCE --> RUN
   RET --> RB
   IOE -.->|"Prepared / ResolutionEvidence 自动登记引用"| RB
@@ -191,7 +200,7 @@ flowchart LR
 
 ## D1.5 同事务集合
 
-对照：§6.7.1 事务原子性；§5.2 与写边界的接口；§5.4 记录模型；§6.5 `Advance`；§6.1 第 1 步。
+对照：§6.7.1 事务原子性；§5.1 请求完成事实；§5.2 与写边界的接口；§5.4 记录模型；§6.5 `Advance`；§6.1 第 1 步。
 
 | 同一 SQLite 事务内必须一起提交 | 依据 | 崩在中途的后果（§7.2） |
 |---|---|---|
@@ -201,7 +210,7 @@ flowchart LR
 | 读处理器的观察记录 / `Gap{Channel}` + `EffectResponse{Observed / Unavailable}` | §5.1 | #21：无 `EffectResponse` → 重新执行一次 |
 | `submit` 的 `Ack`：`VenueAccepted`（含回执字节）+ 回执观察副本 | §5.4 记录模型 | #5：视为无后继 → `Undetermined` → by-key 取证重得同一状态 |
 | 一次取证命中：`ResolutionEvidence{Found}`（含证据字节）+ `provenance: Reconciliation` 观察副本 | §5.4 | #7：该次取证不存在，下一轮重做（读可重试） |
-| 推送归因命中：观察记录 + `ResolutionEvidence{Attributed}` | §5.4、§6.3.3 | 推送未 append：集成得不到接受回执，断连后按 §6.3.5 `handshake` 决定该流续接或新 epoch + `Gap{Source}`；能续接则重送 |
+| 推送归因命中：观察记录 + `ResolutionEvidence{Attributed}` | §5.4、§6.3.3 | 推送未 append：核心崩溃即集成成孤儿被回收，重启握手后该流续接（集成以 venue 游标证明）或新 epoch + `Gap{Source}`；续接则记录重到，仍处 `Undetermined` 的腿照常归因 |
 | `Undetermined` append + 回查已到达的归因观察 | §5.4 | 二者同事务，不存在"归因已到但未匹配"的持久态 |
 | `Advance` 输出：`EffectRequest` 记录 + 派生记录 + `Checkpoint` + 程序 cursor | §6.5 | #16：整批不存在，重放同一批记录 |
 | fence 取得 + `instance_id += 1` | §6.1 第 1 步 | 未提交则旧 `instance_id` 仍有效，重来 |
