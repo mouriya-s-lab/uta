@@ -13,6 +13,7 @@ UTA（Unified Trading Agent）是 OpenAlice 的独立进程：拥有 broker 连�
 |文件|作用|
 |---|---|
 |`design/uta-design.md`|主设计：问题域与驱动、设计中心、边界契约、走查、评估与未决；各阶段内容都在这一份里。域事实取自 §1|
+|`design/diagrams/*.md`|主设计的图示视图（Mermaid）：静态结构、状态机、假想运行时时序，编号 `Dx.y`，逐节对照在 `design/diagrams/README.md` 与主设计附录 B。图不是设计来源：只画主设计已定内容，正文改了图随之改；改 §2–§7 时同步改对应图|
 |`design/hpc-derivation/design.md`|可选行情派生计算子系统，独立模块，前期补充设计；当前阶段不在考虑范围内（见上）。与核心的接口在主设计 §6.6，其证据在 `design/hpc-derivation/research/fp-07..12-*.md`|
 |`design/research/fp-00..06-*.md`|核心设计的一手案例调查，主设计 [证据] 的出处；索引在主设计附录 A|
 |`design/investigation/*.md`|旧系统与 venue 能力调查，主设计 §1 域事实的证据|
