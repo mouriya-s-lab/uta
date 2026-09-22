@@ -78,7 +78,7 @@ flowchart TB
   D1 -->|"否"| BR
   D1 -->|"是"| D2{"该位置的贡献被撤回？"}
   D2 -->|"是"| RT["Retracted(pos)"]
-  D2 -->|"否"| D3{"位置 ≥ 该流完备进度 − Lag？<br/>Lag = 0：不早于最近一次完备进度"}
+  D2 -->|"否"| D3{"同 epoch 且 Seq ≥ 该流完备位置 − Lag？<br/>完备位置 = 核心最近一次推进该流完备进度时的流末位置；Lag 以 Seq 距离计<br/>Lag = 0：不早于最近一次完备位置；epoch 早于当前 → Stale"}
   D3 -->|"否"| ST["Stale(Lag)"]
   D3 -->|"是"| DOK["有效"]
   EOK --> AGG

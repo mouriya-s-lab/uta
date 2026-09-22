@@ -81,29 +81,33 @@ flowchart TB
   A -->|"是"| B{"输入约束<br/>守卫字段：instrument 属账户、数量为正、子账户已枚举、阈值<br/>（步内可交换集，Validated 累积）"}
   B -->|"否"| RJ2["NonEmpty<Rejection>（组合子 kind 包装）<br/>Close(DecisionRejected)"]
   B -->|"是"| C{"审批<br/>策略要求人工？"}
-  C -->|"是"| WAITC["等待 decide(Approve / Reject)<br/>待决集合对审批人可见（读模型 tickets）"]
+  C -->|"是"| WAITC["等待 decide(Approve / Reject)<br/>待决集合对审批人可见（读模型 tickets）<br/>同 (ticket, current_version) 第二条 decide → Conflict(AlreadyDecided)"]
   WAITC -->|"Reject"| RJ3["Close(DecisionRejected)"]
   WAITC -->|"Approve（绑定版本；决定者按动作种类授权）"| D
   C -->|"否：以 rule_version 为依据通过"| D
-  D{"lane<br/>该 WriteLaneKey 有未终结 Attempt？"}
-  D -->|"有，且本笔不是以阻塞头幂等键为 target 的撤单"| WAITD["停在 lane 步，单据仍 AwaitingDecision<br/>期间 alignment 照常重算"]
-  WAITD -->|"阻塞头 Resolved（fold 变化）"| G
-  D -->|"无 / 是撤阻塞头意图 / bypass_lane Decision"| G
+  D{"lane<br/>该 WriteLaneKey 阻塞头集合非空？"}
+  D -->|"非空，且本笔不是以阻塞头幂等键为 target 的撤单"| WAITD["停在 lane 步，单据仍 AwaitingDecision<br/>期间 alignment 照常重算"]
+  WAITD -->|"集合清空（fold 变化）"| E
+  D -->|"空 / 是撤阻塞头意图 / bypass_lane Decision"| E
+  E{"过期步<br/>deadline（UTC）已过？"}
+  E -->|"是"| RJ5["Close(Expired)：不补偿"]
+  E -->|"否"| G
   G{"依据有效性门<br/>basis_validity == Fresh ∧ 必要项 alignment == Aligned（能力项恒必要）∧ 决定绑定版本 == current_version"}
-  G -->|"否"| RJ4["PredicateFailure（fail-closed）<br/>Close(DecisionRejected)"]
-  G -->|"是"| OUT[("同事务 append Prepared + Close(Prepared(position))<br/>+ Outcome + RuleState")]
-  E["过期步（Input 超时，deadline UTC）"] -.->|"AwaitingDecision 任一等待点到期"| RJ5["Close(Expired)：不补偿"]
+  G -->|"否"| RJ4["PredicateFailure（fail-closed）<br/>Rejection 带 rule_version + checked_as_of<br/>Close(DecisionRejected)"]
+  G -->|"是"| OUT[("同事务 append Prepared + Close(Prepared(position))<br/>+ Outcome（带 rule_version、checked_as_of）+ RuleState")]
+  TMR["计时器（Input 超时）"] -.->|"AwaitingDecision 任一等待点到期"| RJ5
   RL["reload_config(rules)"] -.->|"待决单据放行时按当时规则重过五步"| A
 ```
 
 读法（假想运行时）：
 
-- 链是事件驱动的：`SubmitForDecision` 跑到第一个等待点；`decide`、阻塞头 `Resolved`、超时各自把它往下推一步；每推一步 append 一条记录并更新 `RuleState`（同事务）。
-- 等待都发生在 `Prepared` 之前：单据在等，不是已放行的记录在等；所以同 lane 至多一条未终结 Attempt。
+- 链是事件驱动的：`SubmitForDecision` 跑到第一个等待点；`decide`、阻塞头集合清空、超时各自把它往下推一步；每推一步 append 一条记录并更新 `RuleState`（同事务）。
+- 等待都发生在 `Prepared` 之前：单据在等，不是已放行的记录在等；所以正常路径下同 lane 至多一条未终结 Attempt。
+- 过期步是第五步：等待结束后先看 `deadline` 再进门；计时器只是让等待中的单据也能到期，不是让过期单据仍能 `Prepared` 的旁路。
 - 门读的是单据 fold 已算好的字段，规则自己不算；世界变了单据先变 `Diverged`，审批人看得到，放行时门自然失败。
-- 重启后链从 `RuleState` 续跑：停在审批步的仍等 `decide`；停在 lane 步的等阻塞头；计时器按 `deadline`（UTC）重装（D1.2 第 4 步）。
+- 重启后链从 `RuleState` 续跑：停在审批步的仍等 `decide`；停在 lane 步的等集合清空；计时器按 `deadline`（UTC）重装（D1.2 第 4 步）。
 
-核出：授权步的主体（`responsible`）、不要求人工时审批步的依据（`rule_version`）、门失败的去向（`Close(DecisionRejected)`，与其他步否决同形）原文未写——已并入 §5.3。
+核出：授权步的主体（`responsible`）、不要求人工时审批步的依据（`rule_version`）、门失败的去向（`Close(DecisionRejected)`）、一个版本至多一条 Decision（`Conflict(AlreadyDecided)`）、Decision/`Outcome` 携带 `checked_as_of` 原文未写——已并入 §5.3。
 
 ## D5.4 lane 阻塞头
 
@@ -111,28 +115,33 @@ flowchart TB
 
 ```mermaid
 stateDiagram-v2
-  [*] --> Free : lane 上无未终结 Attempt
-  Free --> Blocked1 : STS 放行一笔 → Prepared（IO 壳紧接执行）
-  Blocked1 --> Free : 该 Attempt 达终态（VenueAccepted / VenueRejected / Expired / Undetermined 后 Found 或 Absent）
-  Blocked1 --> BlockedN : 例外一：以阻塞头幂等键为 target 的撤单意图放行（lane 步不等待）
-  Blocked1 --> BlockedN : 例外二：bypass_lane(ticket) Decision（principal 承担协议违反）
-  BlockedN --> BlockedN : 集合内任一 Attempt Resolved 但集合非空
-  BlockedN --> Free : 集合清空
-  note right of Blocked1
-    阻塞头 = 未终结 Attempt：
-    Prepared 无 SendBarrier / SendBarrier 无后继 / Undetermined 未 Resolved
-    后续意图停在 STS lane 步（AwaitingDecision）
+  state "Free：集合为空" as Free
+  state "Blocked{p}：正常路径，一条未终结 Attempt" as B1
+  state "Blocked{p, q, …}：例外扩大的集合" as BN
+  [*] --> Free
+  Free --> B1 : STS 放行一笔 → Prepared（IO 壳紧接执行）
+  B1 --> Free : 该 Attempt 链 Resolved（各腿终结且无下一腿）
+  B1 --> BN : 例外一：以阻塞头幂等键为 target 的撤单意图放行（lane 步不等待）
+  B1 --> BN : 例外二：bypass_lane(ticket) Decision（principal 承担协议违反）
+  BN --> BN : 集合内任一链 Resolved 但集合非空（只移出自己）
+  BN --> BN : 集合非空时再加入获准的例外（再一笔撤阻塞头 / 再一次绕过）
+  BN --> Free : 集合清空
+  note right of B1
+    未终结 = Prepared 无 SendBarrier / SendBarrier 无后继 /
+    Undetermined 未终结 / 复合链未完（含 AwaitingTargetTerminal）
+    后续普通写停在 STS lane 步（AwaitingDecision）
     其他 lane 不受影响
   end note
-  note right of BlockedN
+  note right of BN
     IO 壳按 Prepared 位置顺序执行集合内每条，各自对账独立收敛
-    撤单腿回执不直接决议阻塞头；阻塞头仍由取证收敛（撤后读到已撤 → Found，读不到 → Absent）
+    撤单腿回执不直接决议阻塞头：撤单腿终结 → ReconciliationReopened{CancelLegTerminal} → 阻塞头重走一轮取证
+    by-key 读到目标 → Found；by-key 否定 → Absent；listing 未见仍 Inconclusive（F10）
   end note
 ```
 
-读法：阻塞不是锁——后续写的语义依赖队首结果（buying power、待撤订单是否存在、venue 侧顺序），所以是与 venue 的通讯协议语义。撤阻塞头的意图不依赖队首结果，它存在的目的就是让队首结果可判定，所以是唯一不等待的写。
+读法：阻塞不是锁——后续写的语义依赖队首结果（buying power、待撤订单是否存在、venue 侧顺序），所以是与 venue 的通讯协议语义。撤阻塞头的意图不依赖队首结果，它存在的目的就是让队首结果可判定，所以是唯一不等待的写。任何终结只移出自己；集合为空才放行普通写。
 
-核出：无（撤阻塞头例外上一轮已并入 §5.3）。
+核出：集合语义在 §5.4/§6.4/§8.5 #3 仍按"单条终结即解除"表述——已统一为集合（§5.3/§5.4/§6.4/§8.5 #3）。
 
 ## D5.5 两层对账状态的重算触发
 
@@ -142,36 +151,38 @@ stateDiagram-v2
 flowchart LR
   subgraph TRIG["触发（都不是 TicketAction）"]
     T1["basis 引用的流推进 / 被撤回 / 出现 gap"]
-    T2["required_inputs 流有新观察（含一次性读结果）"]
+    T2["required_inputs 流有新观察（推送、回填、一次性读、回执/取证副本）"]
     T3["能力变更推送 / CapabilityObserved"]
     T4["保留边界推进"]
-    T5["reload_config(rules)：必要项集 / Lag 变化"]
+    T5a["reload_config(rules)：Lag 变化"]
+    T5b["reload_config(rules)：必要项集变化"]
   end
   subgraph L1["第一层 basis_validity（只依赖位置）"]
-    V["basis_valid(basis, world, Lag) →<br/>Fresh / Stale(Lag) / Retracted(pos) / BeyondRetention(pos)"]
+    V["basis_valid(basis, world, Lag) →<br/>Fresh / Stale(Lag) / Retracted(pos) / BeyondRetention(pos)<br/>比较切面：各流完备位置（D8.3）"]
   end
   subgraph L2["第二层 alignment（按 Intent 分派的检查集）"]
-    CK["每项 AlignmentCheck.eval(intent, 当前 fold_state) →<br/>Aligned / Diverged / Undecidable(Gap) / InputMissing(缺哪些流)"]
+    CK["每项 AlignmentCheck.eval(intent, 各流当前流末 fold_state) →<br/>Aligned / Diverged / Undecidable(Gap) / InputMissing(缺哪些流)<br/>记 checked_as_of = 实际消费的位置集"]
     CAP["能力项：(WriteLaneKey, OperationKind) Supported → Aligned，否则 Diverged；恒为必要项"]
   end
   T1 --> V
   T4 --> V
+  T5a --> V
   T2 --> CK
   T3 --> CK
   T3 --> CAP
-  T5 --> GATE
+  T5b --> GATE
   V --> GATE{"门：Fresh ∧ 必要项 Aligned"}
   CK --> GATE
   CAP --> GATE
-  CK -->|"InputMissing 且 venue 有一次性读能力"| RD["策略可选先查后判：read(...) → 观察记录 → 该项重算"]
+  CK -->|"InputMissing 且 venue 有一次性读能力"| RD["策略可选先查后判：read(...) → 观察记录（one_shot，不推进完备进度）→ 该项重算"]
   RD --> T2
   GATE -->|"否"| DIV["审批人看到 Diverged 单据；放行时 PredicateFailure"]
-  GATE -->|"是"| OK["可进 prepare"]
+  GATE -->|"是"| OK["可进 prepare；Outcome 记 checked_as_of"]
 ```
 
-读法：第一层只看位置（对所有单据可算），第二层看值（依赖意图类型与 venue 给的观察）。第二层读的是各流**当前**的 `fold_state`，不是 `basis` 位置处的旧值——否则世界变了单据不会变。
+读法：第一层只看位置（对所有单据可算），第二层看值（依赖意图类型与 venue 给的观察）。第二层读的是各流**当前流末**的 `fold_state`（含 `one_shot`/`backfilled` 记录，各带质量标记），不是完备位置处的截断值——否则为补齐输入读来的一次性观察永远看不见；也不是 `basis` 位置处的旧值——否则世界变了单据不会变。每次评估消费的位置集记为 `checked_as_of`，进入放行/否决记录。
 
-核出：第二层读当前值这一点原文写作"经 basis 读到的观察值"，与"世界变了单据变 Diverged"不一致——已改为读 `required_inputs` 各流当前 `fold_state`（§5.2）。
+核出：第二层取值位置原文写作"最新完备进度处"，会看不见一次性读——已改为当前流末（§5.2）；`checked_as_of` 进 Decision/`Outcome` 原文未写——已并入 §5.2/§5.3。
 
 ## D5.6 人工审批、过期与版本冲突（W18）
 
@@ -193,14 +204,19 @@ sequenceDiagram
     P->>S: decide(ticket, expected_version = v3, Approve)
     P2->>S: decide(ticket, expected_version = v3, Approve)
   end
-  S->>S: 第一条：Decision 记录（绑定 v3）→ lane ✓ → 门 ✓
-  S->>T: 同事务 Prepared + Close(Prepared(pos))
-  S-->>P2: 第二条：单据已 Closed，版本已前进 → Conflict，不执行
+  S->>S: 第一条：Decision 记录（绑定 v3）
+  S-->>P2: 第二条：(ticket, v3) 已有 Decision → Conflict(AlreadyDecided)，不执行（即使单据仍 AwaitingDecision）
+  alt lane 阻塞头集合非空
+    S->>S: 停在 lane 步，单据仍 AwaitingDecision(v3)，版本不变；此时任何同版本 decide 同样 Conflict(AlreadyDecided)
+    Note over S: 集合清空
+  end
+  S->>S: 过期步 ✓ → 门 ✓（checked_as_of）
+  S->>T: 同事务 Prepared + Close(Prepared(pos)) + Outcome
   T->>IO: Prepared @pos（D6.1）
   Note over R,IO: 另一笔：deadline 到期仍无 Decision
   S->>T: 过期步 Input 超时 → Close(Expired)，无 Prepared / SendBarrier
 ```
 
-读法：冲突不是锁：第二个决定建立在过期的读上（依据版本不匹配），返回冲突记录即可；不需要互斥。
+读法：冲突不是锁：一个 `current_version` 至多一条 Decision，第二个决定返回冲突记录即可；`Closed` 不是挡第二条决定的条件——lane 等待期间单据仍开着、版本未变。
 
-核出：无。
+核出：同版本第二次决定在 lane 等待窗口内无判据——已并入 §5.3 审批步（`Conflict(AlreadyDecided)`）。

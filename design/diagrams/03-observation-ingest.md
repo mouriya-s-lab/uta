@@ -12,6 +12,7 @@ sequenceDiagram
   participant I as 集成进程
   participant B as 信封解析入口
   participant J as 观察 Journal
+  participant EJ as 执行 Journal
   participant H as 处理器注册表
   participant D as 派生 DAG
   participant T as 单据 fold
@@ -26,8 +27,8 @@ sequenceDiagram
     B->>J: 分配 LogPosition（按到达顺序）；venue seq 倒退/重复 → 照常 append 并打 replayed / out_of_order
     J->>H: 字段出现 → 触发
     H->>J: occurred_at → 推进完备进度（无 occurred_at 按 received_at − 滞后界）
-    opt attribution: FromAttempt(p) 或 idempotency_key 解析到 p，且 p 处于 Undetermined
-      H->>J: 同事务 append ResolutionEvidence{p, Attributed, Found(该记录)}（执行 J）
+    opt attribution: FromAttempt(r) 或 idempotency_key 经登记解析到腿 r，且 r 处于 Undetermined 未终结
+      H->>EJ: 同事务 append ResolutionEvidence{r, Attributed, Found{observation: 该记录}}
     end
     J->>D: 受影响节点增量重算（cutoff）；派生记录写回观察 J
     J->>T: 引用该流的单据重算 basis_validity / alignment
@@ -54,10 +55,14 @@ stateDiagram-v2
   Starting --> Live : 无需回填 / 能力不支持回填
   Backfilling --> Live : 回填页覆盖到 live_from 之前，边界闭合
   Backfilling --> Live : 回填穷尽未达 live_from → Gap{Source, backfill_incomplete}，frontier 跳过
-  Live --> Degraded : 能力收紧 / 配额受限（Live 的子态，接受条件不变）
-  Degraded --> Live : 恢复
+  state Live {
+    [*] --> Normal
+    Normal --> Degraded : 能力收紧 / 配额受限（子态，接受条件不变）
+    Degraded --> Normal : 恢复
+  }
+  Starting --> Disconnected : 断线 / 集成进程退出
+  Backfilling --> Disconnected : 断线 / 集成进程退出
   Live --> Disconnected : 断线 / 集成进程退出
-  Degraded --> Disconnected : 断线
   Disconnected --> Starting : 重连（新 session_seq）
   note right of Starting
     握手时每条流决定 epoch：
@@ -111,7 +116,7 @@ sequenceDiagram
   else 超过投影配额
     SUB-->>C: QuotaExceeded{scope, limit}（集成不收到该订阅）
   else 接受
-    SUB->>SUB: 写订阅表，cursor = from 或当前
+    SUB->>SUB: 写订阅表，cursor = from（缺省 = 各选中流当前流末，不补历史）；订阅归属 principal，持久
     SUB-->>C: Subscription
   end
   loop 记录到达
@@ -129,7 +134,7 @@ sequenceDiagram
   alt 断连 / 崩溃
     C--xDL: 连接断
     Note over SUB: 订阅 owner 是核心，订阅与 cursor 保留
-    C->>SUB: 重连：subscribe(selector, mode, from = 已确认 cursor)
+    C->>SUB: 重连：同一 principal 重新 handshake → 自动挂接其持久订阅（不需再 subscribe）
     DL->>C: 从 cursor 之后重投；未确认区间可能重复，按 LogPosition 去重
   end
 ```

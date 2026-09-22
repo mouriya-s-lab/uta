@@ -18,8 +18,8 @@ sequenceDiagram
   A->>C: handshake(contract_version, actor)
   alt 契约版本不兼容
     C-->>A: 拒绝会话，记 P14
-  else 启动第 5 步之前
-    C-->>A: 会话建立，但 health() = Starting，不给部分状态
+  else 启动第 5 步之前（§6.1 最后开放 Alice 会话）
+    C-->>A: 会话可建立；除 handshake / health 外的操作一律返回 Starting，不给部分状态
   else 正常
     C-->>A: Session{principal = (os_user, actor), instance_id, contract_version}
   end
@@ -27,10 +27,10 @@ sequenceDiagram
   Note over A,C: 请求体伪造 principal 不参与授权：只取会话绑定的 principal（W19 步 2）
   A->>RM: read_model(kind, as_of?)
   RM-->>A: Snapshot{value, as_of: Set<LogPosition>, gaps}
-  A->>C: subscribe(selector, mode, from = 已确认 cursor)
+  A->>C: subscribe(selector, mode, from?)（新订阅；from 缺省 = 当前流末）
   C-->>A: cursor 之后记录（未确认区间可能重复，按 LogPosition 去重）
   Note over A: Alice 崩溃 / 重启：核心不变（订阅、程序、lane、日志 owner 是核心）
-  A->>C: 重连：handshake → read_model → subscribe(from = cursor)
+  A->>C: 重连：handshake（同一 principal）→ 持久订阅自动挂接，投递从已确认 cursor 续 → read_model 取 as_of
   C-->>A: 断连期间损失以 Gap{Delivery} 显式标记，不伪造补发
 ```
 
@@ -50,7 +50,7 @@ flowchart LR
     S3["read_model(kind, as_of?)"]
     S4["draft / revise / submit_for_decision / decide / send_back / withdraw / transfer"]
     S5["load_program · unload_program · reload_config · rotate_credential · restart_integration · request_snapshot · advance_retention · rewind_cursor · bypass_lane"]
-    S6["resolve(attempt_position, Found(obs) 或 Absent, note)"]
+    S6["resolve(attempt: AttemptRef, Found(obs) 或 Absent, note) · retry_reconciliation(attempt)"]
     S7["health()"]
   end
   subgraph EL["核心元素"]
@@ -84,17 +84,20 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-  L["读模型 lanes：某 lane 的 Undetermined @p 已渠道穷尽（Inconclusive）"]
+  L["读模型 lanes：某 lane 的 Undetermined 腿 r 已渠道穷尽（Inconclusive），停等"]
   L --> OP["运维 principal 判断"]
   OP --> R1{"能从 venue 读到该订单？"}
   R1 -->|"能"| RD["read(scopes, orders, 按 venue 身份) → 观察记录 @obs"]
-  RD --> RS1["resolve(p, Found(obs), note)"]
-  R1 -->|"确认未发生"| RS2["resolve(p, Absent, note)"]
-  R1 -->|"仍不确定"| KEEP["不决议：lane 保持阻塞；可起撤单意图让 venue 侧到达可读终态（D6.7）"]
-  RS1 --> CHK{"授权 ∧ p 处于 Undetermined 未 Resolved ∧ obs 存在且属该 WriteScope？"}
-  RS2 --> CHK
-  CHK -->|"否"| RJ["Unauthorized / Rejected(NotUndetermined) / Rejected(reason)"]
-  CHK -->|"是"| EV["append ResolutionEvidence{p, Manual, outcome, principal, note}<br/>链 Resolved，lane 解除，引用登记解除"]
+  RD --> RS1["resolve(r, Found(obs), note)"]
+  R1 -->|"确认未发生"| RS2["resolve(r, Absent, note)"]
+  R1 -->|"venue 当时不可达 / 想再自动查一轮"| RT["retry_reconciliation(r) → ReconciliationReopened{r, Manual}（D6.2）"]
+  R1 -->|"仍不确定"| KEEP["不决议：腿留在阻塞头集合；可起撤单意图让 venue 侧到达可读终态并自动重开取证（D6.7）"]
+  RS1 --> CHK1{"授权 ∧ r 处于 Undetermined 未终结 ∧ obs 存在且属该 WriteScope？"}
+  RS2 --> CHK2{"授权 ∧ r 处于 Undetermined 未终结？"}
+  CHK1 -->|"否"| RJ["Unauthorized / Rejected(NotUndetermined) / Rejected(reason)"]
+  CHK2 -->|"否"| RJ
+  CHK1 -->|"是"| EV["append ResolutionEvidence{r, Manual, outcome, principal, note}<br/>腿终结 → 移出阻塞头集合（集合空才解除 lane）；引用登记解除"]
+  CHK2 -->|"是"| EV
 ```
 
 读法：人工决议不要求渠道已穷尽（可在任一时刻），但永远带 principal；核心自己永不 heuristic。

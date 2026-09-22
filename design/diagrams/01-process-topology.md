@@ -68,17 +68,18 @@ sequenceDiagram
   Note over N,DB: 第 2 步 从记录重建（不接触任何集成）
   N->>DB: 校验格式版本（C14，失败即拒绝启动）
   N->>DB: 快照 + 记录 fold_state：lane 链、单据、RuleState、订阅表
-  N->>DB: 每条 SendBarrier 无后继 → append Undetermined(CrashWindow)
+  N->>DB: 每条链先 fold 是否已 Resolved；未完链的当前腿 SendBarrier 无后继 → append Undetermined(CrashWindow)
   Note over N,I: 第 3 步 握手
   N->>I: 按集成登记拉起进程，写进程表 (instance_id, pid, start_time, role)
   N->>I: handshake(session_epoch = (instance_id, session_seq))
   I-->>N: Projection（scopes / streams / capabilities）
   N->>DB: append 一版能力证据；required_inputs 比对；各流决定续 epoch 或新 epoch + Gap{Source}
   Note over N,I: 第 4 步 恢复效应侧
-  N->>I: 每条 Undetermined 启动对账驱动（读，D6.2）
-  N->>N: Prepared 无 SendBarrier 者过发出前门（D7.1）
+  N->>DB: 停等的 Undetermined → append ReconciliationReopened{SessionRestored}
+  N->>I: 每条未终结的 Undetermined 启动对账驱动（读，D6.2）；AwaitingTargetTerminal 的链继续读目标
+  N->>N: 当前腿无 SendBarrier 者过发出前门（D7.1）
   N->>I: 未过期者 SendBarrier → submit
-  N->>N: fold 出无响应引用的 EffectRequest 重派（D4.3）
+  N->>N: fold 出无 EffectResponse 的 EffectRequest 重派（D4.3）
   N->>N: STS 链按 RuleState 续跑待决单据；按 deadline 重装过期计时器
   Note over N,H: 第 5 步 恢复观察侧与消费面
   N->>I: 按订阅表重建路由，按需 backfill
@@ -196,10 +197,11 @@ flowchart LR
 |---|---|---|
 | `Close(Prepared(position))` + `Prepared` | §5.2、§6.7.1 | #1：二者皆无，单据仍 `AwaitingDecision` |
 | Decision / `Outcome` / `Rejection` 记录 + `RuleState` 更新 | §6.7.1 | 链步未发生，重启按 `RuleState` 重跑该步 |
-| 程序写处理器的 `Draft` + `SubmitForDecision` | §5.1 | #21：无 `Draft` 引用 → 重派开单 |
-| `submit` 的 `Ack`：回执观察记录 + `VenueAccepted(venue_order_id, receipt)` | §5.4 记录模型 | #5：视为无后继 → `Undetermined` → by-key 取证重得同一回执 |
-| 一次取证：`provenance: Reconciliation` 观察记录 + `ResolutionEvidence` | §5.4 | #7：该次取证不存在，下一轮重做（读可重试） |
-| 推送归因命中：观察记录 + `ResolutionEvidence{Attributed}` | §5.4、§6.3.3 | 推送未 append，集成按 cursor 语义重推 |
+| 程序写处理器的 `Draft` + `SubmitForDecision` + `EffectResponse{Drafted}` | §5.1 | #21：无 `EffectResponse` → 重派开单 |
+| 读处理器的观察记录 / `Gap{Channel}` + `EffectResponse{Observed / Unavailable}` | §5.1 | #21：无 `EffectResponse` → 重新执行一次 |
+| `submit` 的 `Ack`：`VenueAccepted`（含回执字节）+ 回执观察副本 | §5.4 记录模型 | #5：视为无后继 → `Undetermined` → by-key 取证重得同一状态 |
+| 一次取证命中：`ResolutionEvidence{Found}`（含证据字节）+ `provenance: Reconciliation` 观察副本 | §5.4 | #7：该次取证不存在，下一轮重做（读可重试） |
+| 推送归因命中：观察记录 + `ResolutionEvidence{Attributed}` | §5.4、§6.3.3 | 推送未 append：集成得不到接受回执，断连后按 §6.3.5 `handshake` 决定该流续接或新 epoch + `Gap{Source}`；能续接则重送 |
 | `Undetermined` append + 回查已到达的归因观察 | §5.4 | 二者同事务，不存在"归因已到但未匹配"的持久态 |
 | `Advance` 输出：`EffectRequest` 记录 + 派生记录 + `Checkpoint` + 程序 cursor | §6.5 | #16：整批不存在，重放同一批记录 |
 | fence 取得 + `instance_id += 1` | §6.1 第 1 步 | 未提交则旧 `instance_id` 仍有效，重来 |

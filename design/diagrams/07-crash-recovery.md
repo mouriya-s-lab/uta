@@ -4,34 +4,30 @@
 
 ## D7.1 重启时每条 Attempt 链的恢复判定
 
-对照：§5.4"恢复"、发出前门、转移表；§6.1 第 2/4 步；§7.2 #1–#5、#7、#8。
+对照：§5.4"恢复"（判定顺序固定：先 fold `Resolved`，再看当前腿）、发出前门、转移表；§6.1 第 2/4 步；§7.2 #1–#5、#7、#8。
 
 ```mermaid
 flowchart TB
-  START["第 2 步：对执行 J 每条 Prepared 做 fold（不接触集成）"]
-  START --> Q1{"有 SendBarrier？"}
-  Q1 -->|"无"| SAFE["确未发出（不变量 §2.5-8）<br/>仍是可安全发送的 Prepared"]
-  SAFE --> G{"第 4 步：发出前门<br/>deadline 未过？"}
-  G -->|"是"| SEND["durable append SendBarrier → submit（需第 3 步会话）"]
-  G -->|"否"| EXP["append Expired(deadline)：终，不误升 Undetermined，不补偿（#2）"]
-  Q1 -->|"有"| Q2{"SendBarrier 有后继？"}
-  Q2 -->|"无"| UD["第 2 步即 append Undetermined(CrashWindow)（#3/#4/#5）<br/>同事务回查已到达的归因观察"]
-  UD --> DRV["第 4 步：启动对账驱动（D6.2），下一渠道由已 append 的 ResolutionEvidence 决定（#7）"]
-  Q2 -->|"VenueAccepted / VenueRejected / Expired"| DONE["已终结：无动作"]
-  Q2 -->|"Undetermined 且无 Found/Absent"| DRV
-  Q2 -->|"Undetermined 且已 Found/Absent"| DONE
-  subgraph REPL["复合链腿间（#8）"]
-    C1{"撤单腿终态？"}
-    C1 -->|"VenueAccepted / Found，无新腿 SendBarrier"| C2["读目标终态观察 → 算量 → 新腿过发出前门（同 SAFE 语义）"]
-    C1 -->|"VenueRejected / Absent / Expired"| C3["链已 Resolved：无新腿"]
-    C1 -->|"Undetermined"| C4["同 UD"]
-  end
-  Q1 -.->|"Prepared 是 Replace"| C1
+  START["第 2 步：对执行 J 每条 Prepared 做链 fold（不接触集成）"]
+  START --> Q0{"链已 Resolved？<br/>任一腿 Expired / VenueRejected；或末腿 VenueAccepted / Found / Absent 且无下一腿"}
+  Q0 -->|"是"| DONE["无动作（已 Expired 的链不再过发出前门）"]
+  Q0 -->|"否"| LEG["取当前腿 r（复合链：撤单腿未终结则 r = 撤单腿；已终结则链处于 AwaitingTargetTerminal 或 r = 新单腿）"]
+  LEG --> Q1{"r 有 SendBarrier？"}
+  Q1 -->|"无"| SAFE["本腿确未发出（不变量 §2.5-8）"]
+  SAFE --> Q3{"复合链处于 AwaitingTargetTerminal？"}
+  Q3 -->|"是"| ATT["第 4 步：继续按目标身份读（D6.4）；目标终态 → 算量 → 过门；deadline 到 → Expired(leg 2)"]
+  Q3 -->|"否"| G{"第 4 步：发出前门 deadline 未过？"}
+  G -->|"是"| SEND["durable append SendBarrier(r) → submit（需第 3 步会话）"]
+  G -->|"否"| EXP["append Expired(r, deadline)：终，不误升 Undetermined，不补偿（#2）"]
+  Q1 -->|"有"| Q2{"SendBarrier(r) 有后继？"}
+  Q2 -->|"无"| UD["第 2 步即 append Undetermined(r, CrashWindow)（#3/#4/#5）<br/>同事务回查已到达、归因到 r 的观察"]
+  UD --> DRV["第 4 步：启动对账驱动（D6.2）；下一渠道由最近 ReconciliationReopened 之后的 ResolutionEvidence 决定（#7）<br/>停等者因会话重建自动 append ReconciliationReopened{SessionRestored}"]
+  Q2 -->|"Undetermined 未终结"| DRV
 ```
 
-读法：判定只用记录，两个二分点（有无 `SendBarrier`、有无后继）把每条链归入"重发 / 过期 / 对账 / 已完"四个桶，没有第五个桶。
+读法：判定只用记录；两个二分点之前先问"链是否已完"，把已终结的链（含只有 `Expired` 的链）挡在驱动之外；其余归入"重发 / 过期 / 对账 / 等目标终态"四个桶。
 
-核出：无。
+核出："已 `Expired` 且从未有 `SendBarrier`"的链在原恢复规则下会被再过一次发出前门——已并入 §5.4（先 fold `Resolved`）。
 
 ## D7.2 崩溃窗口在 W1 时序上的位置
 
@@ -47,9 +43,9 @@ sequenceDiagram
   H-->>C: Advance Output
   Note over C,DB: ✕16 输出持久化前：整批不存在，重放同一批
   C->>DB: COMMIT EffectRequest + 派生 + Checkpoint + cursor
-  Note over C,DB: ✕21 EffectRequest 已提交、Draft 未提交：重启重派开单
-  C->>DB: Draft + SubmitForDecision
-  C->>DB: STS 各步 Outcome + RuleState
+  Note over C,DB: ✕21 EffectRequest 已提交、EffectResponse 未提交：重启重派（写：重新开单；读：重新执行一次）
+  C->>DB: COMMIT Draft + SubmitForDecision + EffectResponse{Drafted}
+  C->>DB: STS 各步 Outcome（带 checked_as_of）+ RuleState
   Note over C,DB: ✕1 Prepared + Close(Prepared) 同事务中途：皆无，单据仍 AwaitingDecision
   C->>DB: COMMIT Prepared + Close(Prepared)
   Note over C,DB: ✕2 Prepared 有、SendBarrier 无：确未发出 → 过门后重发或 Expired
@@ -58,8 +54,8 @@ sequenceDiagram
   C->>I: submit
   Note over C,I: ✕4 submit 已发、回执未到：同 ✕3；✕14 集成在此崩溃：NoResponse → Undetermined
   I-->>C: Ack
-  Note over C,DB: ✕5 回执已到、未 append：同 ✕3，by-key 取证重得同一回执
-  C->>DB: COMMIT 回执观察记录 + VenueAccepted
+  Note over C,DB: ✕5 回执已到、未 append：同 ✕3，by-key 取证重得同一状态（证据字节落执行 J）
+  C->>DB: COMMIT VenueAccepted（含回执字节）+ 回执观察副本
   Note over C,A: ✕6 记录已提交、cursor 未推进：从已确认 cursor 重投，按 LogPosition 去重
   C->>A: 投递
 ```
@@ -74,51 +70,51 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-  participant OLD as 旧核心
-  participant IA as 集成进程 A（旧 epoch）
+  participant OLD as 旧核心（instance_id = n）
+  participant IA as 集成进程 A（epoch (n, k)）
   participant V as venue
-  participant NEW as 新核心
-  participant IB as 集成进程 B（新 epoch）
+  participant NEW as 新核心（instance_id = n+1）
+  participant IB as 集成进程 B（epoch (n+1, 1)）
   participant J as 执行 J / 观察 J
-  OLD->>J: SendBarrier @p
-  OLD->>IA: submit(attempt @p)
+  OLD->>J: SendBarrier(p,1)
+  OLD->>IA: submit(attempt (p,1))
   Note over OLD: 旧核心死亡（锁随进程释放）
   IA->>V: 上游下单仍可能送达
-  NEW->>J: 取 fence；instance_id += 1（旧会话 epoch 作废）
+  NEW->>J: 取 fence；instance_id = n+1（旧会话 epoch 全部作废）
   NEW->>IA: 按进程表回收：请求退出 → 超时强制终止
-  NEW->>J: SendBarrier @p 无后继 → Undetermined(CrashWindow)
-  NEW->>IB: 拉起并 handshake(新 epoch)
+  NEW->>J: SendBarrier(p,1) 无后继 → Undetermined((p,1), CrashWindow)
+  NEW->>IB: 拉起并 handshake(epoch (n+1, 1))
   V-->>IA: 迟到回执（若 A 尚存）
   IA--xNEW: 旧 epoch 回执在边界丢弃
   par 两条并入路径
-    NEW->>IB: query_by_key(key) → Found → ResolutionEvidence ByKey Found
+    NEW->>IB: query_by_key(key) → Found → ResolutionEvidence{(p,1), ByKey, Found}
   and
-    V-->>IB: 订单状态推送（attribution FromAttempt(p) 或 idempotency_key）
-    IB->>J: 观察记录 → 同事务 ResolutionEvidence Attributed Found
+    V-->>IB: 订单状态推送（attribution FromAttempt((p,1)) 或 idempotency_key）
+    IB->>J: 观察记录 → 同事务 ResolutionEvidence{(p,1), Attributed, Found}
   end
   Note over NEW,J: 该意图恰一条 SendBarrier；fixture venue 调用 ≤ 1；不产生双写
 ```
 
-读法：安全不依赖 A 的回执到达；三条不变量（`SendBarrier` 可能已发出、同 lane 无新 Attempt、对账经 B 独立取证）共同保证。
+读法：安全不依赖 A 的回执到达；三条不变量（`SendBarrier` 可能已发出、阻塞头集合非空时同 lane 无新普通写、对账经 B 独立取证）共同保证。核心重启必然换 `instance_id`；同核心内重连只换 `session_seq`。
 
 核出：无。
 
 ## D7.4 程序侧崩溃（#16、#21、宿主 trap）
 
-对照：§6.5 崩溃恢复、预算语义；§5.1 请求与响应的关联；§7.2 #16/#21。
+对照：§6.5 崩溃恢复、预算语义；§5.1 `EffectResponse`、请求与响应的关联；§7.2 #16/#21。
 
 ```mermaid
 flowchart TB
   Q{"崩在哪？"}
   Q -->|"宿主进程异常退出（trap）"| T1["核心终止宿主，append ProgramFailed{Trap}<br/>程序 Failed，等 load_program"]
   Q -->|"核心在 Advance 输出 COMMIT 前"| T2["整批不存在；重启从最近 Checkpoint Load<br/>重放 cursor 之后同一批记录，不重复 Emit（#16）"]
-  Q -->|"核心在 COMMIT 后、处理器响应持久化前"| T3["fold 出无响应引用的 EffectRequest（D4.3）<br/>读：重发 read；写：无 Draft 引用则开单（#21）"]
+  Q -->|"核心在 COMMIT 后、EffectResponse 持久化前"| T3["fold 出无 EffectResponse 的已注册请求（D4.3）<br/>读：重新执行一次；写：重新开单（Draft 与 EffectResponse{Drafted} 同事务，不存在有 Draft 无响应）（#21）"]
   Q -->|"Load 时 state_version 不符"| T4["Reset(StateVersionMismatch)：ProgramReset 记录<br/>程序流新 epoch Gap{Source, program_upgrade}，按 H9 回填"]
 ```
 
-读法：程序状态只有一条持久边界（`Checkpoint` 与 cursor 同事务）；一切恢复都从它开始重放。
+读法：程序状态只有一条持久边界（`Checkpoint` 与 cursor 同事务）；一切恢复都从它开始重放。请求的完成事实在执行 J（`EffectResponse`），观察副本被压缩不影响重派判定。
 
-核出：无。
+核出：以可压缩观察记录判断"请求已响应"会在压缩后误重派——已并入 §5.1（`EffectResponse`）。
 
 ## D7.5 崩溃矩阵 → 图元素对照
 
@@ -128,10 +124,10 @@ flowchart TB
 | #2 | D7.1 SAFE→G、D7.2 ✕2 | 发出前门 |
 | #3 | D7.1 UD、D7.2 ✕3 | `Undetermined(CrashWindow)` |
 | #4 | D7.2 ✕4、D6.2 | 取证循环 |
-| #5 | D7.2 ✕5、D6.3 | 回执即观察记录 |
+| #5 | D7.2 ✕5、D6.3 | 证据字节在执行 J |
 | #6 | D7.2 ✕6、D3.4 | cursor 语义 |
 | #7 | D7.1 DRV、D6.2 | 下一渠道由 fold 重建 |
-| #8 | D7.1 REPL、D6.4 | 复合链续跑 |
+| #8 | D7.1 Q0/Q3、D6.4 | 先判链是否已完，再续 `AwaitingTargetTerminal` |
 | #9 | D1.5 末行 | 半写不可见 |
 | #10 | D2.4 OBS | 派生侧可重算 |
 | #11 | D1.4 快照 | 快照仅加速 |
@@ -142,4 +138,4 @@ flowchart TB
 | #16 | D7.4 T2、D4.1 | `Checkpoint` + cursor |
 | #17–#19 | — | hpc 子系统，当前阶段不画 |
 | #20 | D9.1 | Alice 重连 |
-| #21 | D7.4 T3、D4.3 | `EffectRequest` 重派 |
+| #21 | D7.4 T3、D4.3 | `EffectResponse` 重派判定 |
