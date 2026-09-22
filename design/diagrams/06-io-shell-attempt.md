@@ -54,7 +54,7 @@ stateDiagram-v2
 ```mermaid
 flowchart TB
   UD[("Undetermined(r)")]
-  UD --> CH0["渠道集 = 该 (venue, op) 当前能力证据声明的渠道<br/>固定顺序：ByKey → Listing → Fills → Replay（默认关闭，按 venue 开启，仅保留期内）<br/>已取证渠道 = 最近一次 ReconciliationReopened 之后已 append 的 ResolutionEvidence（fold）"]
+  UD --> CH0["渠道集 = 该 (venue, op) 当前能力证据声明的渠道<br/>固定顺序：ByKey → Listing → Fills → Replay（默认关闭，按 venue 开启，仅保留期内）<br/>本轮已取证渠道 = round == 当前轮 的 ResolutionEvidence（fold）；round 在发起读时取定，迟到的旧轮响应不计入新轮"]
   CH0 --> NEXT{"还有未取证渠道？"}
   NEXT -->|"是"| CALL["调用该渠道读操作<br/>query_by_key / list_open / list_fills / replay_by_key"]
   CALL --> RES{"返回？"}
@@ -66,8 +66,8 @@ flowchart TB
   INC --> NEXT
   NEXT -->|"否：渠道穷尽"| WAIT["停等：腿仍未终结，留在阻塞头集合<br/>IO 壳永不 heuristic；引用登记钉住保留边界"]
   WAIT -->|"resolve(r, Found(obs) 或 Absent, note)"| MAN["ResolutionEvidence{r, Manual}"]
-  WAIT -->|"ReconciliationReopened{r, cause}<br/>cause = CancelLegTerminal(撤阻塞头腿) / SessionRestored(集成会话重建) / Manual(retry_reconciliation)"| CH0
-  ATTR["被动渠道：推送观察 attribution FromAttempt(r)<br/>或 idempotency_key 经登记解析到 r，且 r 处于 Undetermined 未终结"] -->|"同事务"| ATT["ResolutionEvidence{r, Attributed, Found{observation: 该记录}}"]
+  WAIT -->|"ReconciliationReopened{r, cause}（append 前重查 r 仍未终结）<br/>cause = CancelLegTerminal(撤阻塞头腿终结于 VenueAccepted/Found：新取证机会，非目标终态证据) / SessionRestored(集成会话重建) / Manual(retry_reconciliation)"| CH0
+  ATTR["被动渠道：推送观察 attribution FromAttempt(r)<br/>或 idempotency_key 经登记解析到 r，且 r 处于 Undetermined 未终结"] -->|"同事务"| ATT["ResolutionEvidence{r, Attributed, Found{observation: 该记录, evidence: 该记录载荷}}"]
   FOUND --> RS[("腿终结")]
   ABS --> RS
   MAN --> RS
@@ -95,8 +95,8 @@ flowchart TB
 | ByKey 否定 | `ResolutionEvidence{r, ByKey, Absent}` | 无 | — |
 | 未命中 | `ResolutionEvidence{r, channel, Inconclusive}` | 无 | — |
 | 渠道不可用 | `Gap{origin: Channel, channel}`（属 r） | 无 | — |
-| 推送归因命中 | `ResolutionEvidence{r, Attributed, Found{observation}}`（无 `evidence`） | 该推送记录本身 | 是 |
-| 人工决议 | `ResolutionEvidence{r, Manual, outcome, principal, note}` | `Found` 引用已存在的观察记录（通常先经 `read` 造出） | — |
+| 推送归因命中 | `ResolutionEvidence{r, Attributed, round, Found{observation, evidence: 该推送载荷}}` | 该推送记录本身 | 是 |
+| 人工决议 | `ResolutionEvidence{r, Manual, round, outcome, principal, note}`；`Found.evidence` = 被引用观察记录在 `resolve` 时的载荷 | `Found` 引用已存在的观察记录（通常先经 `read` 造出，可压缩） | — |
 
 ```mermaid
 flowchart LR
