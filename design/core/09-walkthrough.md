@@ -60,7 +60,7 @@
 1. 承 W1 步 5：IO 壳 durable append `SendBarrier`（fsync，执行 J）后、取得业务回执前，核心 `kill -9`。
    - 持久状态：`Prepared` 有、`SendBarrier` 有、无后继。
 2. 重启：IO 壳从执行 J 重建各 lane 链状态（§6.7）。`SendBarrier` 无后继 → append `Undetermined(CrashWindow)`（执行 J），进入对账驱动。
-   - 行动者 / 恢复者：IO 壳（唯一效应处），身份 = `attempt_position` + `WriteLaneKey`。
+   - 行动者 / 恢复者：IO 壳（核心内唯一效应处），身份 = `attempt_position` + `WriteLaneKey`。
    - 对外可见：该尝试 = `Undetermined`；lane 队首阻塞（§6.4）；无第二次 `SendBarrier`（不变量 §6.9-8）。
 3. 收敛按 `CapabilityProof` 声明的渠道**自动**依次取证（§6.6、§8.2；读副作用可重试）：
    - **按键回读** `query_by_key`：`Found(state)` → 同事务 观察记录 + `ResolutionEvidence{ByKey, Found}` → 腿终结、移出阻塞头集合；`Absent` → `ResolutionEvidence{ByKey, Absent}`，腿终结（本次未发生）。
@@ -70,7 +70,7 @@
 4. 迟到回执收敛：
    - 旧会话的回执不经旧会话进入核心：旧 epoch 的推送在边界被拒（§8.3）。
    - 集成在新会话上以**观察记录**重新送达带可关联身份的回执（`venue_order_id`/`idempotency_key` 经 `attribution`，§5.3、§8.3）。
-   - 效应侧归因处理器见目标腿处于 `Undetermined`，同一事务 append `ResolutionEvidence{Attributed, Found{observation: 该记录}}`（§6.6、§8.1），腿终结，不产生第二次下单。
+   - 效应侧归因处理器见目标腿处于 `Undetermined`，同一事务 append `ResolutionEvidence{Attributed, Found{observation: 该记录, evidence}}`（§6.6、§8.1），腿终结，不产生第二次下单。
    - 集成进程本身已死则无此路径，收敛全靠对账（步 3）。
 
 **脑裂变体（Q2③）。** 旧核心退出前已把 `submit` 交给其集成进程 A；核心重启（新 `instance_id`）并建立新集成会话 B 后，A 作为孤儿仍可能把那次 `submit` 送达 venue。
@@ -276,7 +276,7 @@
    - 目标终态若已在撤单腿的回执 / 取证观察里（含 `cumulative_filled_quantity`）即用它；否则 IO 壳按 `target` 身份读（`IdemKey` → `query_by_key`，`VenueRef` → `read(orders, …)`），直到目标终态或 `deadline`。
    - 新单数量按意图口径算出（§6.2、§8.1）。
    - 对外可见：读模型显示原操作与后续操作的关联及未决状态。
-3. 取证记录模型（§6.5）：撤单腿的每次命中取证，同一事务落一条观察记录（`provenance: Reconciliation{AttemptRef}`）与一条 `ResolutionEvidence{Found}`（含证据字节）；`Absent`/`Inconclusive` 只有 `ResolutionEvidence`。
+3. 取证记录模型（§6.5）：撤单腿的每次命中取证，同一事务落一条观察记录（`provenance: Reconciliation{AttemptRef}`）与一条 `ResolutionEvidence{Found}`（含 `Evidence`）；`Absent`/`Inconclusive` 只有 `ResolutionEvidence`。
 4. 链的时限即该意图的 `deadline`（H6；`deadline` 处理器，§8.1），由 IO 壳在每条腿的发出前门与 `AwaitingTargetTerminal` 等待期间读取（§6.5）：
    - `AwaitingTargetTerminal` 期间到期 → append `Expired(deadline)`（`leg = 2`），链 `Resolved`，新单腿永不发出、不补偿，链移出阻塞头集合。
    - 撤单腿仍 `Undetermined` 时到期**不终结链**：未知的写只能以证据终结（转移表，§6.5；未终结 Attempt 阻塞，§6.4），链留在阻塞头集合。
@@ -431,7 +431,7 @@
 | 2 | `Prepared` 已持久、`SendBarrier` 未持久 | `Prepared` 有、无 `SendBarrier` | IO 壳：确未发出 → 过发出前门：`deadline` 未过则 durable append `SendBarrier` 后 `submit`；已过则 append `Expired(deadline)` 终结该链 | venue 调用 0；不误升 `Undetermined`；末态为“已发”或 `Expired` | §6.7；不变量 §6.9-8 | §10.5 #8(a)/#14 |
 | 3 | `SendBarrier` 已 fsync、`submit` 未发 | `SendBarrier` 有、无后继 | IO 壳：可能已发出 → append `Undetermined(CrashWindow)` 进对账 | 尝试 = `Undetermined`；lane 阻塞；无第二 `SendBarrier` | §6.7；不变量 §6.9-1/8 | §10.5 #8(b)(c) |
 | 4 | `submit` 已发、回执未到 | `SendBarrier` 有、无回执 | IO 壳：同 #3，对账驱动按渠道取证收敛 | `Undetermined` → found/absent/人工 | §6.6；C1/C2 | §10.5 #3/#17 |
-| 5 | 回执已到、未 append | `SendBarrier` 有、回执丢在内存 | IO 壳：视为无后继 → `Undetermined` → 对账（按键回读会重得同一状态） | `Undetermined` 经 `ResolutionEvidence{ByKey, Found}` 收敛；证据字节在执行 J，观察副本在观察 J | §6.6；§3.4（读可重试） | §10.5 #3/#17 |
+| 5 | 回执已到、未 append | `SendBarrier` 有、回执丢在内存 | IO 壳：视为无后继 → `Undetermined` → 对账（按键回读会重得同一状态） | `Undetermined` 经 `ResolutionEvidence{ByKey, Found}` 收敛；`Evidence` 在执行 J，观察副本在观察 J | §6.6；§3.4（读可重试） | §10.5 #3/#17 |
 | 6 | 记录已 append 提交，投递/cursor 推进前崩溃 | 记录已提交、cursor 未推进 | 核心：`fold_state` 重建；订阅者从已确认 cursor 之后重收，未确认的记录可重复可见，按 `LogPosition` 去重 | 记录不丢；重复只出现在未确认区间 | §4.2；§7.4 | — |
 | 7 | 对账取证中途 | 部分 `ResolutionEvidence` 已 append | IO 壳：取证是读副作用、可重放；未收敛者继续按渠道取证（下一渠道由 fold 重建） | 收敛进度不丢；渠道穷尽仍 `inconclusive` 停人工 | §6.5；§6.6 | §10.5 #17 |
 | 8 | `Replace`：cancel 腿（`leg = 1`）终态已持久、new 腿（`leg = 2`）未过 `SendBarrier` 时崩溃 | cancel 腿终态有、无 `leg = 2` 的 `SendBarrier` | IO 壳：见表下 | 复合操作按链续；new 腿未重复；已完的链不被再驱动 | §6.5；§6.7；不变量 §6.9-8 | §10.5 #8(c)/#14 |

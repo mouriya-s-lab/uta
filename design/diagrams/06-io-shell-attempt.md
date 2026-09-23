@@ -43,7 +43,7 @@ stateDiagram-v2
 
 - 正常路径 `P → SB → VA`：`SendBarrier` 单独 fsync，`VenueAccepted` 与回执观察副本同一事务。
 - 只有 `SB → UD` 这一条边把系统带进对账；进去以后写已经"可能发生"，永不重发，只能用读收敛。
-- `Found` 之后没有 `VenueAccepted`：证据字节在 `ResolutionEvidence` 里，观察副本供读模型/钩子 fold。
+- `Found` 之后没有 `VenueAccepted`：`Evidence` 在 `ResolutionEvidence` 里，观察副本供读模型/钩子 fold。
 
 核出：无。
 
@@ -60,7 +60,7 @@ flowchart TB
   CALL --> RES{"返回？"}
   RES -->|"Unavailable"| GAP["只 append Gap{Channel}<br/>不算取证、不换渠道；同渠道按 pacing 再发"]
   GAP --> CALL
-  RES -->|"命中带归因身份的订单 / 成交 / 原响应"| FOUND["同事务：观察副本(provenance Reconciliation{r, channel})<br/>+ ResolutionEvidence{r, channel, Found{observation, evidence 字节}}"]
+  RES -->|"命中带归因身份的订单 / 成交 / 原响应"| FOUND["同事务：观察副本(provenance Reconciliation{r, channel})<br/>+ ResolutionEvidence{r, channel, Found{observation, evidence: Evidence}}"]
   RES -->|"ByKey 明确否定"| ABS["ResolutionEvidence{r, ByKey, Absent}（唯一有否定语义的渠道）"]
   RES -->|"未命中（listing / fills 空 ≠ absent，F10）"| INC["ResolutionEvidence{r, channel, Inconclusive}"]
   INC --> NEXT
@@ -115,7 +115,7 @@ flowchart LR
 
 读法：Attempt 只回答"我的提交到达了吗"；订单是什么状态、成交了多少，在观察副本里给观察宇宙的消费者看，在执行记录的 `Evidence` 里给审计看（契约载荷是结论，原始负载是出处）。
 
-核出：回执字节的永存归属（C13）原文只写了观察侧记录——已并入 §6.5（执行侧持有原始字节）。
+核出：回执证据的永存归属（C13）原文只写了观察侧记录——已并入 §6.5（执行侧持有 `Evidence`）。
 
 ## D6.4 `Replace` 复合链（无原子 cancel/replace 能力）
 
@@ -183,7 +183,7 @@ sequenceDiagram
   I->>V: 上游下单
   V-->>I: 业务回执（受理，venue_order_id）
   I-->>IO: Ack(venue_id, receipt)
-  IO->>EJ: 同事务：VenueAccepted{venue_order_id, receipt 字节, observation}
+  IO->>EJ: 同事务：VenueAccepted{venue_order_id, receipt: Evidence, observation}
   IO->>OJ: 同事务：回执观察副本（Receipt{(p,1)}, FromAttempt((p,1))）
   Note over IO: 腿终结 → 链 Resolved → 移出阻塞头集合（集合空 → lane 解除）；basis 引用登记解除
   V-->>I: 部分成交 / 成交推送
@@ -248,7 +248,7 @@ sequenceDiagram
   I->>OJ: 观察记录 → (p,1) 处于 Undetermined → 同事务 EJ: ResolutionEvidence{(p,1), Attributed, Found} → 腿终结
 ```
 
-读法：末态可枚举（found → 证据字节 + 观察副本 / absent → 未发生 / 无渠道 → 停等）；停等态之后仍有多条收敛入口：带 principal 的 `resolve`、任一时刻到达的 `Attributed Found`、或 `ReconciliationReopened`（撤阻塞头 / 会话重建 / `retry_reconciliation`）重开的自动取证。
+读法：末态可枚举（found → `Evidence` + 观察副本 / absent → 未发生 / 无渠道 → 停等）；停等态之后仍有多条收敛入口：带 principal 的 `resolve`、任一时刻到达的 `Attributed Found`、或 `ReconciliationReopened`（撤阻塞头 / 会话重建 / `retry_reconciliation`）重开的自动取证。
 
 核出：无。
 

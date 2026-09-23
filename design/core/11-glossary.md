@@ -41,10 +41,10 @@
 | STS / lane | 决策代数：顺序固定规则链（授权 → 输入约束 → 审批 → lane → 过期）/ 每 `WriteLaneKey` 的写通道全序 | §6.3、§6.4 |
 | `WriteScope` / `WriteLaneKey` | 可写作用域（多账户在核心里的存在形式）/ 其不透明键 | §2.2、§6.4 |
 | `Capability` / `Verdict` | (scope, operation) → `Supported`/`Unsupported`/`Unknown` 的能力证据 | §2.2 |
-| IO 壳 | 效应侧的解释器：核心中唯一把记录变成 venue 动作、把响应变成记录的地方 | §6.5 |
+| IO 壳 | 效应侧的解释器：核心中唯一向集成发出写调用、把集成的返回值变成记录的地方 | §6.5 |
 | `Attempt` / `AttemptRef` | 一条 `Prepared` 记录及其后继阶段链，身份 = `attempt_position`；腿身份 `AttemptRef = (attempt_position, leg)`，所有腿级记录与归因以它关联；正常路径下同 lane 至多一条未终结 | §6.5 |
 | `Prepared` / `SendBarrier` / `Undetermined` / `Expired` | 阶段链的记录：已放行待执行 / 发送屏障（已 fsync，之后才可 `submit`）/ 已发出但结果未知 / 未发出即到期 | §6.5 |
-| `ResolutionEvidence` / `ReconciliationReopened` | 一次取证的执行事实记录（`channel × outcome`，`Found` 含证据字节并引用观察副本）/ 重开一轮取证的标记（`CancelLegTerminal` / `SessionRestored` / `Manual`） | §6.5、§6.6 |
+| `ResolutionEvidence` / `ReconciliationReopened` | 一次取证的执行事实记录（`channel × outcome`，`Found` 含 `Evidence` 并引用观察副本）/ 重开一轮取证的标记（`CancelLegTerminal` / `SessionRestored` / `Manual`） | §6.5、§6.6 |
 | `Resolved` / `AwaitingTargetTerminal` | 阶段链的 fold 状态而非记录：链已达终态（各腿终结且无下一腿）/ 复合链撤单腿已终结、等待目标订单终态以决定第二腿（出口：目标终态或 `deadline`） | §6.5 |
 | `Gap{origin}` | 显式标记的缺口记录，`origin ∈ {Source, Delivery, Channel}` | §4.2 |
 | `Pooled` | 值树里的读侧组合子，核心暴露给可选子系统的唯一接口 | §4.5、§8.7 |

@@ -54,8 +54,8 @@ sequenceDiagram
   C->>I: submit
   Note over C,I: ✕4 submit 已发、回执未到：同 ✕3；✕14 集成在此崩溃：NoResponse → Undetermined
   I-->>C: Ack
-  Note over C,DB: ✕5 回执已到、未 append：同 ✕3，by-key 取证重得同一状态（证据字节落执行 J）
-  C->>DB: COMMIT VenueAccepted（含回执字节）+ 回执观察副本
+  Note over C,DB: ✕5 回执已到、未 append：同 ✕3，by-key 取证重得同一状态（Evidence 落执行 J）
+  C->>DB: COMMIT VenueAccepted（含 Evidence）+ 回执观察副本
   Note over C,A: ✕6 记录已提交、cursor 未推进：从已确认 cursor 重投，按 LogPosition 去重
   C->>A: 投递
 ```
@@ -109,7 +109,7 @@ flowchart TB
   Q -->|"宿主进程异常退出（trap）"| T1["核心终止宿主，append ProgramFailed{Trap}<br/>程序 Failed，等 load_program"]
   Q -->|"核心在 Advance 输出 COMMIT 前"| T2["整批不存在；重启从最近 Checkpoint Load<br/>重放 cursor 之后同一批记录，不重复 Emit（#16）"]
   Q -->|"核心在 COMMIT 后、EffectResponse 持久化前"| T3["fold 出无 EffectResponse 的已注册请求（D4.3）<br/>读：重新执行一次；写：重新开单（Draft 与 EffectResponse{Drafted} 同事务，不存在有 Draft 无响应）（#21）"]
-  Q -->|"Load 时 state_version 不符"| T4["Reset(StateVersionMismatch)：ProgramReset 记录<br/>程序流新 epoch Gap{Source, program_upgrade}，按 H9 回填"]
+  Q -->|"Load 前比对：checkpoint 的 state_version 不被程序接受"| T4["不携带 checkpoint 装载，Reset(StateVersionMismatch)：ProgramReset 记录<br/>程序流新 epoch Gap{Source, program_upgrade}，按 H9 回填"]
   Q -->|"派生 DAG 重算中途（#10）"| T5["持久：派生记录部分 append（RetractableDelta）<br/>恢复：派生侧可重算，未提交贡献重建；无自反馈环 → 最终一致"]
   Q -->|"快照写入中途（#11）"| T6["持久：快照部分写、原记录完整<br/>恢复：半写快照丢弃，从保留边界 fold_state 重建；只增加重启延迟"]
 ```
@@ -126,7 +126,7 @@ flowchart TB
 | #2 | D7.1 SAFE→G、D7.2 ✕2 | 发出前门 |
 | #3 | D7.1 UD、D7.2 ✕3 | `Undetermined(CrashWindow)` |
 | #4 | D7.2 ✕4、D6.2 | 取证循环 |
-| #5 | D7.2 ✕5、D6.3 | 证据字节在执行 J |
+| #5 | D7.2 ✕5、D6.3 | `Evidence` 在执行 J |
 | #6 | D7.2 ✕6、D3.4 | cursor 语义 |
 | #7 | D7.1 DRV、D6.2 | 下一渠道由 fold 重建 |
 | #8 | D7.1 Q0/Q3、D6.4 | 先判链是否已完，再续 `AwaitingTargetTerminal` |

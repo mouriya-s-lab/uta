@@ -1,6 +1,6 @@
 # 01 进程拓扑、启动、会话 epoch、持久化归属
 
-对照：§7.1、§7.2、§7.4、§7.5、§8.3。索引见 `README.md`。
+对照：§0.1、§7.1、§7.2、§7.4、§7.5、§8.3。索引见 `README.md`。
 
 ## D1.1 进程拓扑与信道
 
@@ -212,8 +212,8 @@ flowchart LR
 | Decision / `Outcome` / `Rejection` 记录 + `RuleState` 更新 | §7.4 | 链步未发生，重启按 `RuleState` 重跑该步 |
 | 程序写处理器的 `Draft` + `SubmitForDecision` + `EffectResponse{Drafted}` | §6.1 | #21：无 `EffectResponse` → 重派开单 |
 | 读处理器的观察记录 / `Gap{Channel}` + `EffectResponse{Observed / Unavailable}` | §6.1 | #21：无 `EffectResponse` → 重新执行一次 |
-| `submit` 的 `Ack`：`VenueAccepted`（含回执字节）+ 回执观察副本 | §6.5 记录模型 | #5：视为无后继 → `Undetermined` → by-key 取证重得同一状态 |
-| 一次取证命中：`ResolutionEvidence{Found}`（含证据字节）+ `provenance: Reconciliation` 观察副本 | §6.5 | #7：该次取证不存在；fold 显示本轮该渠道未取证，重做（读可重试） |
+| `submit` 的 `Ack`：`VenueAccepted`（含 `Evidence`）+ 回执观察副本 | §6.5 记录模型 | #5：视为无后继 → `Undetermined` → by-key 取证重得同一状态 |
+| 一次取证命中：`ResolutionEvidence{Found}`（含 `Evidence`）+ `provenance: Reconciliation` 观察副本 | §6.5 | #7：该次取证不存在；fold 显示本轮该渠道未取证，重做（读可重试） |
 | 推送归因命中：观察记录 + `ResolutionEvidence{Attributed}` | §6.6、§8.1 | 推送未 append：核心崩溃即集成成孤儿被回收，重启握手后该流续接（集成以 venue 游标证明）或新 epoch + `Gap{Source}`；续接则记录重到，仍处 `Undetermined` 的腿照常归因 |
 | `Undetermined` append + 回查已到达的归因观察 | §6.6 | 二者同事务，不存在"归因已到但未匹配"的持久态 |
 | `Advance` 输出：`EffectRequest` 记录 + 派生记录 + `Checkpoint` + 程序 cursor | §8.6 | #16：整批不存在，重放同一批记录 |

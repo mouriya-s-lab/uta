@@ -84,7 +84,7 @@ UTA 的类型分成两个宇宙：可撤回的观察，只追加的效应。本�
 表中各格的补充：
 
 - 规则禁止引用读模型，因为读模型非权威。
-- IO 壳产生的执行事实记录包括 `SendBarrier`/`VenueAccepted`/`Expired`/…，原始回执与取证证据字节在其中（C13）。
+- IO 壳产生的执行事实记录包括 `SendBarrier`/`VenueAccepted`/`Expired`/…，回执与取证的 `Evidence`（契约载荷与原始负载，C13）在其中（§6.5）。
 - IO 壳产生的回执与取证观察记录落观察 `Journal`，与一次性读同形（§3.4）。
 - IO 壳读复合链所需的目标终态观察，经 `basis` 边。
 - 单据读 IO 壳 append 的记录，用作 `basis` 或检查项依据。

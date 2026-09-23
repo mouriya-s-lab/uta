@@ -169,7 +169,7 @@ flowchart TB
 | 单据 | 意图形成期锁（`responsible`）、线性版本链、`basis`、两层对账状态、编辑 diff | 意图类型解释、`Revision<Intent>` | 单据不驱动 IO 壳，只单向读其记录 | §6.2 |
 | STS 规则链 | 顺序固定链（授权→输入约束→审批→lane→过期）、`RuleState`、`Rejection`、放行判定 | 规则内部守卫（组合子 kind enum） | 规则不引用读模型 | §6.3 |
 | lane 驱动 | 每 `WriteLaneKey` 的阻塞头集合（lane 规则的 `RuleState`）与按 `Prepared` 位置的执行顺序 | 上游账户结构对齐 | 有序与阻塞来自通讯协议，不是 UTA 的锁；等待发生在 `Prepared` 之前 | §6.4 |
-| IO 壳 | 唯一 venue 写接口、`Prepared` 链驱动、两阶段、`SendBarrier`、对账驱动、崩溃恢复 | 转移表、渠道顺序 | 系统唯一效应处；不知道单据存在 | §6.5–§6.7 |
+| IO 壳 | 核心内唯一的写调用出口（集成写接口）、`Prepared` 链驱动、两阶段、`SendBarrier`、对账驱动、崩溃恢复 | 转移表、渠道顺序 | 核心内唯一效应处，写在上游的落实由集成完成；不知道单据存在 | §6.5–§6.7 |
 | 读模型 | 对执行事实 `Journal` 的可重建只读 fold，非权威，经同一 JSON-RPC 暴露 | fold 的具体数据结构 | 不被规则引用；消费方也可自行 fold 原始记录 | §4.4 |
 | 控制面 | 认证 principal 传入的运维动作通道（P14） | 传输 | 只经认证 principal，不经进程信号或 flag 文件 | §6.3、§8.5 |
 
@@ -285,11 +285,11 @@ flowchart TB
   - 一次性读的结果：读处理器、钩子取证、消费方 `read`（§3.4、§8.2）；
   - IO 壳：回执与取证观察的副本（记录模型，§6.5）。
 - **读**：订阅者、程序、单据 `basis`/检查项、读模型、IO 壳（复合链读目标终态观察）。
-- **传播**：按 `LogPosition` 推进；`RetractableDelta` 可撤回可压缩；回执 / 取证副本可压缩，原始字节在执行 J。
+- **传播**：按 `LogPosition` 推进；`RetractableDelta` 可撤回可压缩；回执 / 取证副本可压缩，`Evidence` 在执行 J。
 
 ### 执行事实 `Journal`
 
-- **写**：见唯一写入口表（§7.3）。补充：STS 规则链的 Decision/`Outcome`/`Rejection` 记录带 `checked_as_of`；IO 壳的 `VenueAccepted` 含原始回执字节，取证 `ResolutionEvidence` 含证据字节；控制记录为 `Applied | Rejected`。
+- **写**：见唯一写入口表（§7.3）。补充：STS 规则链的 Decision/`Outcome`/`Rejection` 记录带 `checked_as_of`；IO 壳的 `VenueAccepted` 与取证 `ResolutionEvidence{Found}` 含 `Evidence`（契约载荷与原始负载，§6.5）；控制记录为 `Applied | Rejected`。
 - **读**：读模型、单据 `basis`、lane 规则（阻塞头集合）、IO 壳（重启重建链）、对账驱动、出站处理器（重启重派判定）。
 - **传播**：纯 append；位置即顺序。lane 链状态与 `Resolved` 是它的 fold，不另存。
 
@@ -388,7 +388,7 @@ flowchart TB
 
 ## 7.7 Rust 映射
 
-所需机制均不依赖 HKT，也不需要 ZIO 式 API。ZIO 解决效应多态与依赖注入；UTA 把效应收敛到“IO 壳是唯一效应处”，依赖注入就是 `Context` 参数，两个问题在设计层已消掉。
+所需机制均不依赖 HKT，也不需要 ZIO 式 API。ZIO 解决效应多态与依赖注入；UTA 把效应收敛到“IO 壳是核心内唯一效应处”，依赖注入就是 `Context` 参数，两个问题在设计层已消掉。
 
 三档：
 
