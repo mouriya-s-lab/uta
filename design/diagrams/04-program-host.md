@@ -36,7 +36,7 @@ sequenceDiagram
         O->>I: read(stream, selector, range)
         alt Records（含空）
           I-->>O: Records
-          O->>DB: 同事务：观察记录 provenance OneShot{Request(pos)}, one_shot（观察 J）+ EffectResponse{Observed(obs)}（执行 J）
+          O->>DB: 同事务：观察记录 provenance OneShot{origin: Request(pos)}, one_shot（观察 J）+ EffectResponse{Observed(obs)}（执行 J）
           J->>C: 程序按 cursor 看到它 → 下一轮 Advance（闭环走观察侧）
         else Unavailable
           I-->>O: Unavailable
@@ -99,7 +99,7 @@ flowchart TB
   REG{"effect_kind 注册为？"}
   ER --> REG
   REG -->|"读处理器"| RD["一次执行：read(...)"]
-  RD -->|"Records（含空）"| R1["同事务：观察记录 OneShot{Request(pos)}（观察 J，可压缩）<br/>+ EffectResponse{pos, Observed(obs)}（执行 J）"]
+  RD -->|"Records（含空）"| R1["同事务：观察记录 OneShot{origin: Request(pos)}（观察 J，可压缩）<br/>+ EffectResponse{pos, Observed(obs)}（执行 J）"]
   RD -->|"Unavailable"| R2["同事务：Gap{Channel}（观察 J）<br/>+ EffectResponse{pos, Unavailable(gap)}"]
   RD -->|"流未声明 / 能力不支持"| R3["EffectResponse{pos, Unsupported}（不调用集成）"]
   REG -->|"写处理器"| WR["同事务 Draft{responsible = 装载 principal, basis ∋ pos}<br/>+ SubmitForDecision + EffectResponse{pos, Drafted(ticket)}"]

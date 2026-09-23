@@ -96,7 +96,7 @@ flowchart TB
   G -->|"否"| RJ4["PredicateFailure（fail-closed）<br/>Rejection 带 rule_version + checked_as_of<br/>Close(DecisionRejected)"]
   G -->|"是"| OUT[("同事务 append Prepared + Close(Prepared(position))<br/>+ Outcome（带 rule_version、checked_as_of）+ RuleState")]
   TMR["计时器（Input 超时）"] -.->|"AwaitingDecision 任一等待点到期"| RJ5
-  RL["reload_config(rules)"] -.->|"待决单据放行时按当时规则重过五步"| A
+  RL["reload_config(rules)"] -.->|"待决单据放行时按当时规则从授权步重过五步：已有 Decision 仍绑定版本，决定者授权与是否需人工按新规则重判"| A
 ```
 
 读法（假想运行时）：

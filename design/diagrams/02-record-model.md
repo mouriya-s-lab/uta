@@ -152,7 +152,7 @@ flowchart LR
 | 观察 | 推送观察记录 | 集成推送入口 | `StreamId`、`Seq`、`received_at`、`occurred_at?`、`attribution?`、`idempotency_key?`、载荷 + `payload_schema`、质量标记 | — |
 | 观察 | `Gap{origin: Source, reason}` | 集成推送入口 / 核心（新 epoch 首条） | 前一 `StreamId` 与最后 `Seq`、`reason` | 前一 epoch |
 | 观察 | `Gap{origin: Delivery, reason}` | 投递调度 | 订阅、from/to `Seq`、`reason` | — |
-| 观察 | 一次性读结果 | 读处理器 / 钩子取证 / 消费方 `read` | `provenance: OneShot{Request(pos) 或 Session(principal)}`、`one_shot` | → `EffectRequest` 位置 |
+| 观察 | 一次性读结果 | 读处理器 / 钩子取证 / 消费方 `read` | `provenance: OneShot{origin: Request(pos) / Ticket(id) / Session(principal)}`（依次对应三种发起者）、`one_shot` | 出处值（不解析）；`Request` → `EffectRequest` 位置 |
 | 观察 | 回执观察副本 | IO 壳 | `provenance: Receipt{AttemptRef}`、`attribution: FromAttempt(AttemptRef)`；内容同执行侧字节；可压缩 | 出处值（不解析）|
 | 观察 | 取证观察副本 | IO 壳 | `provenance: Reconciliation{AttemptRef, channel}`、`attribution: FromAttempt(AttemptRef)`；可压缩 | 出处值（不解析）|
 | 观察 | 派生记录（含 alert） | 派生 DAG | 程序流 `StreamId`、`RetractableDelta` | — |

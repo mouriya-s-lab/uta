@@ -56,7 +56,7 @@ flowchart LR
   end
   subgraph EL["核心元素"]
     SUB["持久订阅 / 投递调度"]
-    RDP["读路径 → 集成 read → 观察记录 OneShot{Session}"]
+    RDP["读路径 → 集成 read → 观察记录 OneShot{origin: Session}"]
     RM["读模型（只读 fold）"]
     TK["单据（TicketAction）→ STS 链"]
     CTL["控制面（控制记录 Applied / Rejected）"]
@@ -75,7 +75,7 @@ flowchart LR
   S2 -.->|"逐 scope：Records{as_of} / Unavailable / Unsupported"| S2
   S3 -.->|"kind 未定义 → 拒绝；as_of 未达 → NotYetAvailable{frontier}"| S3
   S4 -.->|"expected_version ≠ current_version → Conflict；同版本已有 Decision → Conflict(AlreadyDecided)"| S4
-  S5 -.->|"越权 → Unauthorized；配置不合法 → Rejected 并保留上一有效版本；advance_retention → NotForward / ReferencedBelow"| S5
+  S5 -.->|"越权 → Unauthorized；配置不合法 → Rejected 并保留上一有效版本；advance_retention 逐流判定 → NotForward / ReferencedBelow / InsideWindow"| S5
   S6 -.->|"越权 → Unauthorized；腿非 Undetermined → Rejected(NotUndetermined)"| S6
 ```
 

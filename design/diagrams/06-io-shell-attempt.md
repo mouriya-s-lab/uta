@@ -238,7 +238,7 @@ sequenceDiagram
     IO->>I: list_fills(scope, since) → 同上；replay_by_key（若开启）→ 同上
     IO->>EJ: 渠道穷尽：停等；腿留在阻塞头集合
     OP->>IO: read(scopes, orders, by venue_order_id)（§6.4；核心 → 集成 read）
-    IO->>OJ: 观察记录 @obs（provenance OneShot{Session(OP)}）
+    IO->>OJ: 观察记录 @obs（provenance OneShot{origin: Session(OP)}）
     OP->>IO: resolve((p,1), Found(obs), note)
     IO->>EJ: 授权 ✓ 腿处于 Undetermined ✓ obs 属该 WriteScope ✓ → ResolutionEvidence{(p,1), Manual, Found{obs}} → 腿终结
   end

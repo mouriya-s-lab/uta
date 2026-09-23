@@ -42,42 +42,41 @@ stateDiagram-v2
 
 ## D8.2 `advance_retention` 与压缩
 
-对照：§2.3 保留语义、§6.4 控制组、§6.7.1 `compact_below_retention`、§3.1、W13。
+对照：§2.3 保留语义、§6.4 控制组、§6.7.1 `compact_below_retention`、§6.7.2 保留边界行、§3.1、W13。
 
 ```mermaid
 flowchart TB
-  OP["控制面 principal：advance_retention(to)"] --> AUTH{"(principal, 动作种类) 授权？"}
+  OP["控制面 principal：advance_retention(to: Set&lt;LogPosition&gt;)<br/>每条要推进的观察流一个新边界"] --> AUTH{"(principal, 动作种类) 授权？"}
   AUTH -->|"否"| U["Rejected(Unauthorized)"]
-  AUTH -->|"是"| MONO{"to > 当前边界？（边界只前进）"}
+  AUTH -->|"是"| EACH["逐流判定 to(s)；任一流不通过即整体拒绝，无流被推进"]
+  EACH --> MONO{"to(s) > 该流当前边界？（边界只前进）"}
   MONO -->|"否"| RJ0["Rejected(NotForward)"]
-  MONO -->|"是"| MIN["核心算 min(当前登记引用)"]
-  MIN --> CMP{"to ≤ min？"}
-  CMP -->|"否"| RJ["Rejected(ReferencedBelow{min})<br/>要越过只能先让持有者终结：关闭单据 / 链 Resolved / unload_program"]
-  CMP -->|"是"| WIN{"to ≤ 配置窗口下界？"}
-  WIN -->|"否"| RJ2["Rejected(reason)：边界 = min(配置窗口下界, 最早登记引用)"]
-  WIN -->|"是"| APPLY["写新边界；控制记录 Applied(position)"]
-  APPLY --> COMPACT["compact_below_retention：仅 RetractableDelta 表<br/>执行 J 不压缩、不删除（只可能落到边界下不再精确重建）"]
-  COMPACT --> INV["不变量 §2.5-3：所有已登记引用 ≥ 边界"]
+  MONO -->|"是"| MIN["核心算该流已登记引用的最早位置 min(s)"]
+  MIN --> CMP{"to(s) ≤ min(s)？"}
+  CMP -->|"否"| RJ["Rejected(ReferencedBelow{min})<br/>要越过只能先让持有者解除：Attempt 链 Resolved / 程序推进 checkpoint 或 unload_program"]
+  CMP -->|"是"| WIN{"to(s) ≤ 该流配置窗口下界？"}
+  WIN -->|"否"| RJ2["Rejected(InsideWindow{bound})"]
+  WIN -->|"是，且各流都通过"| APPLY["写各流新边界；控制记录 Applied(position)"]
+  APPLY --> COMPACT["compact_below_retention：仅观察侧 RetractableDelta 表，逐流 DELETE 边界之下<br/>执行 J 没有保留边界：不压缩、不删除"]
+  COMPACT --> INV["不变量 §2.5-3：所有已登记引用 ≥ 其所在观察流的边界"]
 ```
 
-读法：边界只前进；执行事实永不删除；派生历史的 `DELETE` 只在边界之下。
+读法：边界按观察流分别维持、只前进（`LogPosition` 只在同一 `StreamId` 内有序）；执行事实永不删除；派生历史的 `DELETE` 只在各流边界之下。
 
-核出：无。
+核出：边界是逐流的位置集、越过留存窗口的拒绝名 `InsideWindow{bound}`、执行事实侧没有边界，原文未写——已并入 §2.3、§6.4、§6.7.2。
 
 ## D8.3 `basis_validity` 判定
 
-对照：§4 `basis_valid`、默认窗口 `Lag = 0`、执行事实侧引用不因年龄变假；§5.2 门。
+对照：§4 `basis_valid`（`BeyondRetention` 只对观察侧位置）、默认窗口 `Lag = 0`、执行事实侧引用不因年龄变假；§5.2 门。
 
 ```mermaid
 flowchart TB
   IN["basis: Set<LogPosition>；操作的 Lag（策略声明，缺省 0）"]
   IN --> EACH["对每个位置（逐位置顺序：边界 → 撤回 → 滞后，后一项以前一项通过为前提，§4）"]
   EACH --> SIDE{"位置在哪侧？"}
-  SIDE -->|"执行事实侧（VenueAccepted / SendBarrier / EffectRequest 位置）"| E1{"≥ 保留边界？"}
-  E1 -->|"是"| EOK["有效（不因年龄变假）"]
-  E1 -->|"否"| BR["BeyondRetention(pos)"]
-  SIDE -->|"派生侧（观察）"| D1{"≥ 保留边界？"}
-  D1 -->|"否"| BR
+  SIDE -->|"执行事实侧（VenueAccepted / SendBarrier / EffectRequest 位置）"| EOK["有效（执行事实侧没有保留边界，不因年龄变假）"]
+  SIDE -->|"派生侧（观察）"| D1{"≥ 该流保留边界？"}
+  D1 -->|"否"| BR["BeyondRetention(pos)"]
   D1 -->|"是"| D2{"该位置的贡献被撤回？"}
   D2 -->|"是"| RT["Retracted(pos)"]
   D2 -->|"否"| D3{"同 epoch 且 Seq ≥ 该流完备位置 − Lag？<br/>完备位置 = 核心最近一次推进该流完备进度时的流末位置；Lag 以 Seq 距离计<br/>Lag = 0：不早于最近一次完备位置；epoch 早于当前 → Stale"}
