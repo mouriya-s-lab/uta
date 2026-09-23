@@ -53,7 +53,7 @@ stateDiagram-v2
 ```mermaid
 flowchart LR
   subgraph SRC["三种读的副作用消费为写"]
-    AI["Alice 会话（AI 或人）<br/>principal = (os_user, actor)"]
+    AI["下游会话（经解释层；AI 或人）<br/>principal = (os_user, actor)"]
     PROG["程序解释② Emit(EffectRequest)"]
     APPR["审批人 decide(Approve)"]
   end

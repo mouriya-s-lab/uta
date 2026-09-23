@@ -78,7 +78,7 @@ stateDiagram-v2
   end note
 ```
 
-读法：readiness 变化是派生健康观察（不需确认），经 `health` 读模型对 Alice 可见；它不改变记录接受条件——接受只看 `session_epoch`。
+读法：readiness 变化是派生健康观察（不需确认），经 `health` 读模型对解释层可见，再由它翻成下游的连接状态；它不改变记录接受条件——接受只看 `session_epoch`。
 
 核出：无。
 
@@ -109,7 +109,7 @@ flowchart LR
 
 ```mermaid
 sequenceDiagram
-  participant C as 消费方（Alice 或程序）
+  participant C as 消费方（解释层代下游，或程序）
   participant SUB as 持久订阅元素
   participant DL as 投递调度
   participant J as 观察 Journal

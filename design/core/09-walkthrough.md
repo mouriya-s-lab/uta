@@ -306,19 +306,19 @@
 
 **走通。**
 
-### W14（Q29）Alice 断连重连
+### W14（Q29）下游（Alice）断连重连
 
 **失败路径。**
 
-1. Alice 崩溃 / 重启，UTA 独立存活；订阅与程序 owner 是核心（H5/C5、§7.1）。行动者：核心（生命周期独立）。
-2. 重连后，Alice 会话（P13）经**读模型**（§4.4、§8.5）取当前状态，并取 cursor 之后记录。断连期间损失以 `Gap{origin: Delivery}` 显式标记，不伪造逐条补发（§8.5）。
-   - 对外可见：当前状态、cursor 后记录、gap 原因可读。
+1. Alice 或解释层崩溃 / 重启，UTA 独立存活；订阅与程序 owner 是核心（H5/C5、§7.1）。解释层不持有状态，没有要恢复的东西（`design/downstream/design.md` 3.3）。行动者：核心（生命周期独立）。
+2. Alice 凭续传令牌重连；解释层代它开核心会话（P13），经**读模型**（§4.4、§8.5）取当前状态，并取 cursor 之后记录。断连期间损失以 `Gap{origin: Delivery}` 显式标记，不伪造逐条补发（§8.5）。
+   - 对外可见：当前状态、断连后的推送、缺失通知（由解释层翻译）。
 3. 重连协议（§8.5）：
    - `handshake(contract_version, actor)` 取 `principal = (os_user, actor)`；
    - 同一 principal 的持久订阅自动重新挂接，投递从已确认 cursor 续（不需再 `subscribe`；新需求才 `subscribe`）；
    - `read_model(kind)` 得带 `as_of` 与 `gaps` 的 `Snapshot`；
-   - 未确认区间可能重复可见，按 `LogPosition` 去重（§4.2）。
-   - 对外可见：`as_of` 与 cursor 可比对，重复只出现在未确认区间。
+   - 未确认区间可能重复可见，解释层按 `LogPosition` 去重或原样标出（§4.2）。
+   - 对外可见：重复只出现在未确认区间；`as_of` 与 cursor 只在解释层与核心之间比对。
 
 **走通。**
 
@@ -446,7 +446,7 @@
 | 17 | 可选子系统 op 崩溃 | 段借用未释放 | 子系统回收借用 + H10 fence；核心记失败观察 | op 失败观察；核心与其他消费者不受影响 | §8.7；hpc-derivation/design.md §5.3/§6.5 | hpc §10 #3/#4 |
 | 18 | 可选子系统 op 已产生结果、核心在结果持久化前崩溃/断连 | 输出段在段池、未接入派生流持久点 | 核心：段池不持久，重启由 `Pooled` 重洗重算；未发布结果不半接入下游 | 结果重算；下游只见成功发布的派生流 | §8.7；hpc-derivation/design.md §1.5/§5.3 | hpc §10 #7/#13 |
 | 19 | 核心崩溃时可选子系统 op 孤儿 | op 进程存活、核心死 | 新核心 + fence：op 为孤儿由 H10 fence 回收；重连后重新握手 | 无双写；孤儿被回收 | §7.2；hpc-derivation/design.md §6.5 | hpc §10 #3 |
-| 20 | Alice 崩溃 | 核心订阅/程序/lane 完整 | 核心：独立存活；Alice 重连后握手取 principal，读模型取 `as_of`，从已确认 cursor 之后订阅原始记录（§8.5） | 断连损失显式标 gap，不伪造补发 | §7.1；§8.5；H5/C5 | — |
+| 20 | Alice（或其他下游）或解释层崩溃 | 核心订阅/程序/lane 完整；解释层无持久状态 | 核心：独立存活；下游凭续传令牌重连，解释层代它握手取 principal，读模型取 `as_of`，从已确认 cursor 之后订阅原始记录（§8.5） | 断连损失以缺失通知给出，不伪造补发 | §7.1；§8.5；H5/C5；`design/downstream/design.md` 3.3 | §10.5 #23 |
 | 21 | `EffectRequest` 记录已随 `Advance` 输出提交，处理器未执行或其 `EffectResponse` 未持久化 | `EffectRequest` 有、无 `EffectResponse` | 核心：见表下 | 每条请求最终恰一条 `EffectResponse`；写至多一张单据；`Unhandled` 不重派；观察副本被压缩不影响判定 | §6.1；§8.6；§3.4 | §10.5 #16 |
 
 **#8 的恢复动作（IO 壳）：**

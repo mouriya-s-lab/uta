@@ -139,5 +139,5 @@ flowchart TB
 | #15 | D7.3 | 脑裂 / 孤儿 |
 | #16 | D7.4 T2、D4.1 | `Checkpoint` + cursor |
 | #17–#19 | — | hpc 子系统，当前阶段不画 |
-| #20 | D9.1 | Alice 重连 |
+| #20 | D9.1 | 下游重连（经解释层） |
 | #21 | D7.4 T3、D4.3 | `EffectResponse` 重派判定 |

@@ -171,7 +171,7 @@ sequenceDiagram
   participant V as venue
   participant EJ as 执行 J
   participant OJ as 观察 J
-  participant A as Alice 订阅者
+  participant A as 下游订阅者（经解释层）
   H->>O: Emit(EffectRequest{trade.place, basis, key})（已随 Advance 提交）
   O->>EJ: 同事务 Draft{responsible = 装载 principal, basis ∋ 请求位置} + SubmitForDecision + EffectResponse{Drafted}
   T->>S: AwaitingDecision(v1)

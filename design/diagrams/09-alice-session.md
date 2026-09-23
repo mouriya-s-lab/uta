@@ -1,50 +1,56 @@
-# 09 Alice 会话、操作集落点、人工决议、控制动作
+# 09 下游会话（经解释层）、操作集落点、人工决议、控制动作
 
-对照：§8.5、§7.1 信任边界、§7.6、W14、W19、W8。索引见 `README.md`。
+对照：§8.5、§7.1 信任边界、§7.6、W14、W19、W8；`design/downstream/design.md`。索引见 `README.md`。
 
 ## D9.1 会话建立、身份与重连（W14、W19）
 
-对照：§8.5 会话与 principal、已定事实；§7.1 H7；W14 步 3；W19 步 1–2；§9.2 #20。
+对照：§8.5 会话与 principal、已定事实；§7.1 H7；W14 步 3；W19 步 1–2；§9.2 #20；`design/downstream/design.md` 第 3、6、7 节。
 
 ```mermaid
 sequenceDiagram
-  participant A as Alice 进程
+  participant D as 下游（Alice / CLI / 外部客户程序）
+  participant L as 解释层
   participant TR as 传输（UDS / 命名管道）
   participant C as 核心
   participant RM as 读模型
   participant J as 观察 J
-  A->>TR: 连接
+  D->>L: 连接（一次性命令或长连接）；对端凭据 os_user，非本用户拒绝；自报 actor
+  L->>TR: 为该下游连接开一个核心会话
   TR->>C: 对端凭据 os_user（H7 信任边界）
-  A->>C: handshake(contract_version, actor)
+  L->>C: handshake(contract_version, actor)
   alt 契约版本不兼容
-    C-->>A: 拒绝会话，记 P14
-  else 启动第 5 步之前（§7.2 最后开放 Alice 会话）
-    C-->>A: 会话可建立；除 handshake / health 外的操作一律返回 Starting，不给部分状态
+    C-->>L: 拒绝会话，记 P14
+  else 启动第 5 步之前（§7.2 最后开放下游会话）
+    C-->>L: 会话可建立；除 handshake / health 外的操作一律返回 Starting，不给部分状态
   else 正常
-    C-->>A: Session{principal = (os_user, actor), instance_id, contract_version}
+    C-->>L: Session{principal = (os_user, actor), instance_id, contract_version}
   end
-  Note over A,C: 未握手的连接发写 / 控制 → 会话层拒绝 + 安全事件（W19 步 1）
-  Note over A,C: 请求体伪造 principal 不参与授权：只取会话绑定的 principal（W19 步 2）
-  A->>RM: read_model(kind, as_of?)
-  RM-->>A: Snapshot{value, as_of: Set<LogPosition>, gaps}
-  A->>C: subscribe(selector, mode, from?)（新订阅；from 缺省 = 当前流末）
-  C-->>A: cursor 之后记录（未确认区间可能重复，按 LogPosition 去重）
-  Note over A: Alice 崩溃 / 重启：核心不变（订阅、程序、lane、日志 owner 是核心）
-  A->>C: 重连：handshake（同一 principal）→ 持久订阅自动挂接，投递从已确认 cursor 续 → read_model 取 as_of
-  C-->>A: 断连期间损失以 Gap{Delivery} 显式标记，不伪造补发
+  Note over L,C: 未握手的连接发写 / 控制 → 会话层拒绝 + 安全事件（W19 步 1）
+  Note over L,C: 请求体伪造 principal 不参与授权：只取会话绑定的 principal（W19 步 2）
+  L->>RM: read_model(kind, as_of?)
+  RM-->>L: Snapshot{value, as_of: Set<LogPosition>, gaps}
+  L-->>D: 翻成对外概念（账户、订单、持仓、审批…）
+  L->>C: subscribe(selector, mode, from?)（新订阅；from 缺省 = 当前流末）
+  C-->>L: cursor 之后记录（未确认区间可能重复，按 LogPosition 去重）
+  L-->>D: 推送；附续传令牌；Gap 翻成缺失通知
+  Note over D,L: 下游或解释层崩溃 / 重启：核心不变（订阅、程序、lane、日志 owner 是核心）；解释层无状态可丢
+  D->>L: 重连，交回续传令牌
+  L->>C: 重连：handshake（同一 principal）→ 持久订阅自动挂接，投递从已确认 cursor 续 → read_model 取 as_of
+  C-->>L: 断连期间损失以 Gap{Delivery} 显式标记，不伪造补发
+  L-->>D: 缺失通知
 ```
 
-读法：`actor` 是审计与 scope 的键，不是信任来源；信任来自 OS 对端凭据。`as_of` 与 cursor 可比对，消费者据此知道快照含哪些记录。
+读法：`actor` 是审计与 scope 的键，不是信任来源；信任来自 OS 对端凭据。`as_of` 与 cursor 在解释层与核心之间比对，下游只见续传令牌与缺失通知。
 
 核出：无。
 
 ## D9.2 操作集到核心元素的落点
 
-对照：§8.5 操作集；§7.3 模块指南；§3.4 读副作用、§4.4 读模型；§8.2 `read`。
+对照：§8.5 操作集；§7.3 模块指南；§3.4 读副作用、§4.4 读模型；§8.2 `read`。这些是解释层代下游发出的核心操作，下游看到的对外概念见 `design/downstream/design.md` 第 2 节。
 
 ```mermaid
 flowchart LR
-  subgraph OPS["Alice 操作（同一 JSON-RPC）"]
+  subgraph OPS["核心↔解释层操作（同一 JSON-RPC，§8.5）"]
     S1["subscribe / ack / unsubscribe"]
     S2["read(scopes, selector, range?, deadline)"]
     S3["read_model(kind, as_of?)"]

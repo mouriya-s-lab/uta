@@ -4,7 +4,7 @@
 
 ## D1.1 进程拓扑与信道
 
-对照：§0.1（权威在上游，上游只在集成内被消费）、§7.1（进程、信任边界、凭据链、传输）、§8.5（principal）、§7.4（单写者）、§7.6（配置文件与运行期登记）。
+对照：§0.1（权威在上游，上游只在集成内被消费；三段：清洗、抽象、清洗）、§7.1（进程、信任边界、凭据链、传输）、§8.5（principal、核心↔解释层）、§7.4（单写者）、§7.6（配置文件与运行期登记）。
 
 ```mermaid
 flowchart TB
@@ -19,10 +19,12 @@ flowchart TB
     HOST2["程序宿主 2"]
     FILES["OPENALICE_HOME 统一路径<br/>Alice 写：封存信封 · 密钥引用 · 集成登记 · 策略规则 · 装载清单 · 运行期参数<br/>核心写：运行期登记（instance_id · 格式版本 · 最近快照位置）"]
   end
-  ALICE["Alice 进程<br/>消费方 + 控制方<br/>独立生命周期"]
+  ALICE["下游：Alice · CLI 使用者 · 外部客户程序<br/>独立生命周期"]
+  IL["解释层（落点由实现定：CLI 自身或核心内部）<br/>对外概念 · 状态翻译 · 不持有状态"]
   V1["venue A（外部权威，F1）"]
   V2["venue B"]
-  ALICE <-->|"JSON-RPC over UDS / 命名管道<br/>对端凭据 → principal = (os_user, actor)"| CORE
+  ALICE <-->|"一次性命令 / 双向长连接（对外面，跨仓库契约）<br/>对端凭据 → 非本用户拒绝；下游自报 actor"| IL
+  IL <-->|"核心↔解释层 IDL（本仓库内部）<br/>每个下游连接一个会话；principal = (os_user, actor)"| CORE
   CORE <-->|"JSON-RPC 双向：核心→请求（IDL 9 操作）<br/>集成→推送（观察 · Gap · 能力变更 · readiness）"| INT1
   CORE <-->|"同一 IDL"| INT2
   CORE <-->|"宿主协议 Load / Advance / Reset / Unload"| HOST1
@@ -31,15 +33,16 @@ flowchart TB
   INT2 <-->|"上游协议"| V2
   FILES -.->|"核心读 Alice 写的文件；凭据解封后注入集成"| CORE
   CORE -.->|"写运行期登记（Alice 只读）"| FILES
-  ALICE -.->|"写配置文件（原子替换）"| FILES
+  ALICE -.->|"Alice 写配置文件（原子替换）"| FILES
   DB -.->|"独占；集成与宿主不接触"| CORE
 ```
 
 读法（假想运行时）：
 
 - 两类子进程（集成、程序宿主）都由核心拉起、登记在进程表，各自可以独立崩溃：集成崩了只影响它的流与在途 `submit`（D7.1）；宿主崩了只影响该程序（D4.2）；核心崩了子进程成孤儿，下次启动按进程表回收（D1.2）。
-- 所有 RPC 语义在一份 IDL；Windows 只换信道（回环 + 令牌或命名管道），不换 IDL。
-- 凭据只走 `文件 → 核心 → 集成` 一条链；Alice、程序、宿主从不见凭据本体。
+- 核心↔集成、核心↔解释层的语义在一份 IDL；Windows 只换信道（回环 + 令牌或命名管道），不换 IDL。下游只见解释层的对外面，不见这份 IDL。
+- 凭据只走 `文件 → 核心 → 集成` 一条链；下游、解释层、程序、宿主从不见凭据本体。
+- 解释层不持有状态：它或下游崩溃，对核心只是会话断开，订阅与确认进度仍在核心。
 
 核出：无。
 
@@ -54,7 +57,7 @@ sequenceDiagram
   participant O as 旧实例孤儿进程
   participant I as 集成进程
   participant H as 程序宿主
-  participant A as Alice
+  participant A as 解释层（代下游）
   Note over N,DB: 第 1 步 取 fence
   N->>DB: OS 文件锁 + SQLite 独占
   alt 取不到
@@ -86,7 +89,7 @@ sequenceDiagram
   N->>I: 按订阅表重建路由，按需 backfill
   N->>H: 拉起宿主并登记；比对 checkpoint 的 state_version → Load(program, checkpoint?, budget)
   H-->>N: Loaded 或 LoadRejected（版本不被接受不是 LoadRejected：不携带 checkpoint 装载并 Reset，D4.2）
-  N->>A: 开放会话；此前 health() 返回 Starting
+  N->>A: 开放下游会话；此前 health() 返回 Starting
 ```
 
 读法：
