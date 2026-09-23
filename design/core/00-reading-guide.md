@@ -51,7 +51,7 @@ UTA 经手的每一个值——订单、持仓、余额、行情——权威来�
 
 ```mermaid
 flowchart LR
-  INT["集成进程 × N<br/>消费上游协议 → 信封 + 契约载荷 + 原始负载（证据）"]
+  INT["集成进程 × N<br/>消费上游协议 → 信封 + 契约载荷（+ 按保留规则的原始负载，证据）"]
   TD["Journal&lt;Record, RetractableDelta&gt;<br/>派生内容：quote/bar/指标/alert<br/>可撤回、可压缩"]
   TE["Journal&lt;Record, Delta&gt;<br/>执行事实：intent/decision/attempt/receipt/reconcile<br/>接口只暴露 append"]
   STS["决策代数 STS<br/>(Context, RuleState, Input) → Result&lt;(RuleState, Outcomes), NonEmpty&lt;Rejection&gt;&gt;"]

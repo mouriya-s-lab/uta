@@ -96,7 +96,7 @@ flowchart TB
 | 未命中 | `ResolutionEvidence{r, channel, Inconclusive}` | 无 | — |
 | 渠道不可用 | `Gap{origin: Channel, channel}`（属 r） | 无 | — |
 | 推送归因命中 | `ResolutionEvidence{r, Attributed, round, Found{observation, evidence: 该推送的载荷 + 原始负载}}` | 该推送记录本身 | 是 |
-| 人工决议 | `ResolutionEvidence{r, Manual, round, outcome, principal, note}`；`Found.evidence` = 被引用观察记录在 `resolve` 时的载荷 + 原始负载 | `Found` 引用已存在的观察记录（通常先经 `read` 造出，可压缩） | — |
+| 人工决议 | `ResolutionEvidence{r, Manual, round, outcome, principal, note}`；`Found.evidence` = 被引用观察记录在 `resolve` 时的载荷 + 该记录保留的原始负载（所在流不保留原文时为空） | `Found` 引用已存在的观察记录（通常先经 `read` 造出，可压缩） | — |
 
 ```mermaid
 flowchart LR

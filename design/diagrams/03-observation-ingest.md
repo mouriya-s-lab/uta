@@ -18,7 +18,7 @@ sequenceDiagram
   participant T as 单据 fold
   participant S as 投递调度
   V-->>I: 上游事件（成交 / 报价 / 余额）；集成在此消费上游
-  I->>B: 推送观察记录{session_epoch, StreamId, received_at, venue seq, attribution?, 契约载荷 + payload_schema, 原始负载}
+  I->>B: 推送观察记录{session_epoch, StreamId, received_at, venue seq, attribution?, 契约载荷 + payload_schema, 原始负载（订单状态 / 成交必带，其余按映射声明）}
   alt 缺锚点
     B-->>I: 畸形记录，拒绝
   else session_epoch != 当前

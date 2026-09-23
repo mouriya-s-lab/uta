@@ -8,8 +8,8 @@
 
 ```mermaid
 flowchart LR
-  UP["上游协议消息"] --> INT["集成进程（上游的唯一消费点）<br/>消费上游 + 对齐到锚点契约 + 状态映射到契约词表"]
-  INT --> ENV["信封 = 锚点 + 已注册字段<br/>载荷 = 消费结论（契约 schema）+ payload_schema<br/>原始负载 = 上游原文（证据）"]
+  UP["上游协议消息"] --> INT["集成进程（上游的唯一消费点）<br/>适配器代码取得上游记录 → 记录映射落到对齐点<br/>（字段对齐 · 换算 · 进扩展 · 丢弃 · 枚举映射）"]
+  INT --> ENV["信封 = 锚点 + 已注册字段<br/>载荷 = 记录映射产出（契约 schema）+ payload_schema<br/>原始负载 = 上游原文（证据；写路径与带归因的流必带）"]
   ENV --> PARSE["信封解析入口（核心）<br/>parse-don't-validate，隐藏构造器"]
   PARSE --> ANCH{"锚点齐全？<br/>观察链路：session_epoch · StreamId · received_at"}
   ANCH -->|"缺"| MAL["畸形记录：边界拒绝<br/>不是规则否决"]
@@ -65,7 +65,7 @@ flowchart LR
 
 ## D2.3 `DerivationNode` 值树与五个 fold
 
-对照：§2.5（组合子值树、五个 fold、同一 enum 的四处使用）、§4.3、§6.1、§8.6 装载期校验。
+对照：§2.5（组合子值树、五个 fold、同一 enum 的五处使用）、§4.3、§6.1、§8.1 记录映射、§8.6 装载期校验。
 
 ```mermaid
 flowchart TB
@@ -81,13 +81,14 @@ flowchart TB
   F1 --> CMP{"与握手声明比对"}
   CMP -->|"缺字段"| FC["fail-closed：拒绝装载 / 启动"]
   CMP -->|"齐"| OK["可运行"]
-  subgraph USES["四处使用（同一 enum，不同构造者与校验期）"]
+  subgraph USES["五处使用（同一 enum，不同构造者与校验期）"]
     U1["处理器触发 · 订阅过滤<br/>Pred&lt;Envelope&gt;<br/>集成注册 / 启动期"]
     U2["STS 规则守卫<br/>Pred&lt;(Context, RuleState, Input)&gt;<br/>实现者 / 启动期"]
     U3["单据检查项 AlignmentCheck.eval<br/>Comb&lt;Observed, CheckResult&gt;<br/>(意图类型 × venue 能力) 解析 / 评估期"]
     U4["程序节点 · 读模型 fold<br/>Comb / Scan / Fold<br/>程序作者 / 装载期"]
+    U5["记录映射的换算<br/>Comb&lt;上游值, 契约值&gt;<br/>集成作者 / 握手期校验；集成侧求值"]
   end
-  ENUM --> U1 & U2 & U3 & U4
+  ENUM --> U1 & U2 & U3 & U4 & U5
   F4 -.->|"规则层包装成具名 Rejection，两层各自封闭"| U2
 ```
 
@@ -149,7 +150,7 @@ flowchart LR
 
 | Journal | 记录 | 写者 | 关键字段 | 位置引用（→ 谁） |
 |---|---|---|---|---|
-| 观察 | 推送观察记录 | 集成推送入口 | `StreamId`、`Seq`、`received_at`、`occurred_at?`、`attribution?`、`idempotency_key?`、契约载荷 + `payload_schema`、原始负载、质量标记 | — |
+| 观察 | 推送观察记录 | 集成推送入口 | `StreamId`、`Seq`、`received_at`、`occurred_at?`、`attribution?`、`idempotency_key?`、契约载荷 + `payload_schema`、原始负载（写路径与可带 `attribution` 的流必带，其余按记录映射声明，§8.1）、质量标记 | — |
 | 观察 | `Gap{origin: Source, reason}` | 集成推送入口 / 核心（新 epoch 首条） | 前一 `StreamId` 与最后 `Seq`、`reason` | 前一 epoch |
 | 观察 | `Gap{origin: Delivery, reason}` | 投递调度 | 订阅、from/to `Seq`、`reason` | — |
 | 观察 | 一次性读结果 | 读处理器 / 钩子取证 / 消费方 `read` | `provenance: OneShot{origin: Request(pos) / Ticket(id) / Session(principal)}`（依次对应三种发起者）、`one_shot` | 出处值（不解析）；`Request` → `EffectRequest` 位置 |
