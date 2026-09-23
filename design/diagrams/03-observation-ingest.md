@@ -17,8 +17,8 @@ sequenceDiagram
   participant D as 派生 DAG
   participant T as 单据 fold
   participant S as 投递调度
-  V-->>I: 上游事件（成交 / 报价 / 余额）
-  I->>B: 推送观察记录{session_epoch, StreamId, received_at, venue seq, attribution?, 载荷 + payload_schema}
+  V-->>I: 上游事件（成交 / 报价 / 余额）；集成在此消费上游
+  I->>B: 推送观察记录{session_epoch, StreamId, received_at, venue seq, attribution?, 契约载荷 + payload_schema, 原始负载}
   alt 缺锚点
     B-->>I: 畸形记录，拒绝
   else session_epoch != 当前
@@ -28,7 +28,7 @@ sequenceDiagram
     J->>H: 字段出现 → 触发
     H->>J: occurred_at → 推进完备进度（无 occurred_at 按 received_at − 滞后界）
     opt attribution: FromAttempt(r) 或 idempotency_key 经登记解析到腿 r，且 r 处于 Undetermined 未终结
-      H->>EJ: 同事务 append ResolutionEvidence{r, Attributed, Found{observation: 该记录}}
+      H->>EJ: 同事务 append ResolutionEvidence{r, Attributed, Found{observation: 该记录, evidence: 载荷 + 原始负载}}
     end
     J->>D: 受影响节点增量重算（cutoff）；派生记录写回观察 J
     J->>T: 引用该流的单据重算 basis_validity / alignment

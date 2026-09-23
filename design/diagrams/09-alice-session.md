@@ -101,7 +101,7 @@ flowchart TB
   RS2 --> CHK2{"授权 ∧ r 处于 Undetermined 未终结？"}
   CHK1 -->|"否"| RJ["Unauthorized / Rejected(NotUndetermined) / Rejected(reason)"]
   CHK2 -->|"否"| RJ
-  CHK1 -->|"是"| EV["append ResolutionEvidence{r, Manual, round, outcome, principal, note}（Found.evidence = obs 当时载荷）<br/>腿终结 → 重算链：链 Resolved 才移出阻塞头集合（撤单腿 Found → 链进 AwaitingTargetTerminal，仍占阻塞头）；集合空才解除 lane；引用登记随链解除"]
+  CHK1 -->|"是"| EV["append ResolutionEvidence{r, Manual, round, outcome, principal, note}（Found.evidence = obs 当时的载荷 + 原始负载）<br/>腿终结 → 重算链：链 Resolved 才移出阻塞头集合（撤单腿 Found → 链进 AwaitingTargetTerminal，仍占阻塞头）；集合空才解除 lane；引用登记随链解除"]
   CHK2 -->|"是"| EV
 ```
 

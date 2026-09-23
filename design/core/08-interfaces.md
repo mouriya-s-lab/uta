@@ -4,11 +4,21 @@
 
 ## 8.1 核心↔集成：握手、锚点、字段注册表、`payload_schema`
 
-集成是独立 OS 进程，语言不限：venue SDK 是什么语言就用什么语言。因此核心↔集成的契约必须跨语言。
+集成是独立 OS 进程，语言不限：venue SDK 是什么语言就用什么语言。它是上游被消费的唯一地方（§0.1）：调用编排、协议清洗、上游状态映射、对上游回应的判定都在集成内完成，对核心只以契约值出现。因此核心↔集成的契约必须跨语言。
 
 - 契约的语义在本章定义。
 - 一份 IDL 是**实现阶段制品**：由本仓库拥有、随 release 发布，这是计划不是现状。任何语言按 IDL 实现即可接入。
 - 传输按 OS 选择（§7.1），不改契约语义。
+- 集成本身（适配器的职责、声明的书写形式、一致性测试）的设计在 `design/integration/design.md`；本章只拥有契约。
+
+### 契约的两部分 [设计]
+
+| 部分 | 内容 | 核心何时读 | 由谁保证 |
+|---|---|---|---|
+| **声明** | `Projection`（§2.2）、锚点对齐（下表）、已注册字段、扩展载荷 schema | 握手时、任何操作之前；核心在其上做 fold（路由、门、`required_inputs` 比对、取证渠道顺序） | 它是值，不含调用、时序、时间或状态；核心按 schema 校验 |
+| **行为** | §8.2 操作集与 §8.3 推送：每个操作做什么、返回哪个封闭领域值 | 每次调用与推送 | 集成的实现；以一致性测试验证（§8.3 集成义务） |
+
+凡涉及调用、先后顺序、时间或上游状态的判断，都属行为部分，只以封闭返回值对核心可见；声明部分不承载它们。
 
 ### 握手：`Projection`
 
@@ -64,16 +74,22 @@
 
 ### `payload_schema`
 
-- 集成把载荷字节原封直通，并打 `payload_schema` 标签。核心不解释载荷，只路由字节、存输出（§2.1）。
-- 程序（§6）与单据钩子按 `payload_schema` 选择解释器。
+- 集成把对上游的消费结论写成契约载荷，并打 `payload_schema` 标签；同时附上所消费的上游原文作原始负载（§2.1）。核心不解释两者，只路由字节、存输出。
+- 程序（§6）与单据钩子按 `payload_schema` 选择解释器，解释契约载荷。原始负载不交给任何解释器，只作证据（C13）。
 - 核心计算的精确类型（守卫字段、`cumulative_filled_quantity`、程序 / 钩子解释器用的 money/quantity）只在核心计算处出现，信封不含价格（§2.6）。
+
+**schema 属于契约** [设计]：
+
+- **公共 schema**：P2 所列跨 venue 共有的种类（quote、book、bar、余额、持仓、订单状态、成交等）各有一份，随 IDL 由本仓库发布。某种类有公共 schema 时，集成必须以它输出该种类的流。
+- **扩展 schema**：venue 特有、公共 schema 容纳不下的内容，由集成在声明中给出 schema 文本，以单独的流输出；需要与公共流关联时，程序按记录上的身份字段 `Join`（§2.5）。扩展 schema 同样属于契约，不是上游消息格式。
+- 核心不解释 schema 内容，只在 `Projection` 中转发；程序与钩子的解释器按 schema 注册。
+- 理由：载荷若是上游形状，程序就成了 UTA 内第二个消费上游的地方，只能按 venue 分别写，B2/B4 要求的跨渠道组合做不成（§0.1）。
 
 **身份与版本** [设计]：`payload_schema = (schema_id, schema_version)`，随 `StreamDecl` 在握手声明，同一 `StreamId` 内不变（§2.2）。
 
 - 集成要换载荷版本，就为该流开新 epoch。P3：新 epoch 首条记录带 `Gap{origin: Source, reason: schema_change}`。
 - 旧 epoch 的记录保留旧标签。
 - 核心按 `(schema_id, schema_version)` 精确匹配解释器。未注册的组合不触发解释器，载荷留作字节（字段不存在 → 不触发）。
-- schema 内容的登记发生在消费方（程序 / 钩子的解释器注册），核心不持有 schema 文本。
 
 ## 8.2 核心→集成操作集
 
@@ -108,9 +124,9 @@
 
 - **语义**：投放一次写（按腿）。
 - **动作轴**：**写**。
-- **返回**：`Ack(venue_id, receipt)`（业务回执，`receipt` 是订单状态载荷）/ `Reject(reason)` / `NoResponse`。
+- **返回**：`Ack(venue_id, receipt)`（业务回执，`receipt` 是订单状态的契约载荷及其原始负载）/ `Reject(reason)` / `NoResponse`。
 - **核心内部结果**（记录模型，§6.5）：
-  - `Ack` → 同一事务 append `VenueAccepted{venue_order_id, receipt: RawPayload, observation}`（执行 J，字节永存）+ 回执观察记录（`provenance: Receipt{AttemptRef}`，`attribution: FromAttempt(AttemptRef)`）；
+  - `Ack` → 同一事务 append `VenueAccepted{venue_order_id, receipt: Evidence, observation}`（执行 J，永存，§6.5）+ 回执观察记录（`provenance: Receipt{AttemptRef}`，`attribution: FromAttempt(AttemptRef)`）；
   - `Reject` → `VenueRejected`；
   - `NoResponse` → `Undetermined`。
 - **错误**：超时 / 集成崩溃 / 传输 ACK / HTTP 5xx 全部 `NoResponse` → `Undetermined`。venue 单方面决定，无 commit ack。
@@ -208,7 +224,7 @@
 
 | 推送 | 语义 | 核心内部结果 |
 |---|---|---|
-| 观察记录 | 集成推送观察记录（含 `session_epoch`、venue seq/cursor 证据、`attribution`、载荷 + `payload_schema`）；`LogPosition` 由核心按到达顺序分配 | append 观察 `Journal`、推进 cursor/frontier、触发处理器与 DAG |
+| 观察记录 | 集成推送观察记录（含 `session_epoch`、venue seq/cursor 证据、`attribution`、契约载荷 + `payload_schema`、原始负载）；`LogPosition` 由核心按到达顺序分配 | append 观察 `Journal`、推进 cursor/frontier、触发处理器与 DAG |
 | `Gap{origin: Source}` | 集成负责的观察流断代 | 记来源 gap（新 epoch 首条记录，含前一范围与最后 `Seq`、原因） |
 | 能力变更 | 握手后能力/配额变化 | IO 壳 append `CapabilityObserved`（执行 J，§7.5）、重算受影响单据的 `alignment` |
 | readiness / 健康（P16） | 按集成/账户：reach、tier、连续失败数、最后成功时间；回填 readiness（backfilling/live） | 派生健康观察；订阅状态派生（非损失，不需确认） |
@@ -234,21 +250,33 @@
 | `Gap{origin: Source}` | 集成上报观察流断代 | 流内记录，可续/可标 gap |
 | `Gap{origin: Delivery}` | 慢消费者/conflated（§4.2） | 投递侧损失，需显式确认 |
 | `VenueRejected(reason)` | `submit` 返回 `Reject` | 写已发出、venue 拒了——终态 |
-| `Unmapped(raw)` | venue 状态映射无对应枚举 | 保留原始，不伪造穷尽映射（C13） |
+| `Unmapped(raw)` | 集成的上游状态映射无对应词表值 | 保留原始，不伪造穷尽映射（C13） |
 
 ### 集成义务清单
 
-集成由 IDL 固定的职责：
+集成由 IDL 固定的职责，按契约的两部分（§8.1）分列。
 
-- 握手声明投影（作用域、流、能力）。
+**声明义务**（握手时交给核心的值）：
+
+- 声明投影：作用域、流及其 `payload_schema`、能力与取证渠道、扩展载荷 schema（§2.2）。
 - 交互契约的对齐：把上游账户结构、市场地址、身份体系对齐到锚点契约（`WriteLaneKey`、`basis` 可引用的流、`target` 用的身份）。这是判断性设计动作，每个集成自己负责，做错只影响它自己的流。
+
+**行为义务**（每次调用与推送）：
+
+- 消费上游：调用编排、协议清洗、上游状态映射（§2.2）都在集成内完成；有公共 schema 的种类以公共 schema 输出（§8.1）。
 - 按流位置推进观察记录。
-- 填锚点与已注册字段（含 `attribution`，见下）+ 载荷直通并打 `payload_schema`。
+- 填锚点与已注册字段（含 `attribution`，见下）+ 契约载荷并打 `payload_schema` + 原始负载。
 - 把当前 `session_epoch` 回填到每条推送与回执（§7.2 第 3 步）。
-- 响应投放、对账查询、一次性读与回填（仅限核心调用）。
+- 响应投放、对账查询、一次性读与回填（仅限核心调用），返回值只取 §8.2 的封闭集合，且每个值的含义严格成立：
+  - `Ack` 只在上游给出业务回执时返回；`Reject` 只在上游明确拒绝时返回；其余一律 `NoResponse`（§8.2）。
+  - `Absent` 只在上游对该键给出明确否定、且这个否定足以证明该键对应的写未发生时返回。上游的“查不到”不足以证明时（例如键已超出上游保证唯一或可查的期限，§1.6.1），返回 `Unavailable`，不返回 `Absent`。
+  - 一次 `submit` / `cancel` 在上游至多产生一次写调用：集成内部不重发写，上游 SDK 自带的写重试必须关闭。写的重试由核心决定，而核心永不重试写（§8.2）。
+- **不以拷贝回答读**：`query_by_key`、`list_open`、`list_fills`、`replay_by_key`、`backfill`、`read` 的回答必须来自本次对上游的询问，不来自集成自己保存的状态；问不到上游即 `Unavailable`。集成为消费推送流而维持的状态（如由增量重建的盘口）只用于产出推送记录，不用于回答读。理由：读的回答被核心当作证据（`Absent` 终结一条腿，§6.6），而集成保存的状态是上游原值在过去某刻的拷贝（§0.1）。
 - 上报 `Gap{origin: Source}` 与 readiness（§8.4）。
 
 集成**不持有**规则状态、不做决策、不接触 SQLite。
+
+行为义务无法由声明的构造保证，以一致性测试验证：以 fixture 上游驱动集成，逐条义务观测其返回值与推送（验收 §10.5 #22；测试构成见 `design/integration/design.md`）。
 
 **时间权威。** `LogPosition` 与完备进度只由核心裁定；集成只提供证据（venue seq/cursor/事件时间）（§2.3）。
 
@@ -373,7 +401,7 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 - 动作轴：写（append `ResolutionEvidence::Manual` / `ReconciliationReopened{Manual}`）。
 - `resolve` 的核心内部结果：
   - append `ResolutionEvidence{attempt, Manual, round, outcome}`，带 principal 与 `note`。
-  - `Found` 的 `evidence` 取被引用观察记录当时的载荷。被引用记录通常先经 `read` 造出；观察副本可压缩，`evidence` 永存。
+  - `Found` 的 `evidence` 取被引用观察记录当时的载荷与原始负载（`Evidence`，§6.5）。被引用记录通常先经 `read` 造出；观察副本可压缩，`evidence` 永存。
   - 该腿终结后重算整条链：链 `Resolved` 才从 lane 阻塞头集合移出，集合为空才解除（§6.4、§6.5）。撤单腿的 `Manual Found` 使链进入 `AwaitingTargetTerminal`，仍占阻塞头。
 - `retry_reconciliation` 的核心内部结果：重开一轮自动取证（新 `round`，旧轮在途响应不计入，§6.6）。
 - 错误：
@@ -411,6 +439,7 @@ Alice 是独立生命周期的消费方与控制方，经同一 JSON-RPC 与核�
 - **独立生命周期**：Alice 退出 / 崩溃 / 重启不改变核心的订阅、程序、lane、日志（H5/C5）。
 - **重连语义**：Alice 重连后握手，按 `as_of` 读模型取当前状态，从已确认 cursor 之后订阅记录。断连期间的投递损失按 `Gap{origin: Delivery}` 显式标记，不伪造连续性。
 - **读模型**：对执行事实 `Journal` 的可重建只读 fold，非权威、不被规则引用；消费方也可直接订阅原始记录自行 fold（S10）。
+- **没有“同步”操作**：核心不提供把自己持有的状态对齐到上游的操作，因为它不持有上游原值（§0.1）。旧入口 A08 `sync`（及 A37 快照捕获前的 best-effort `sync`）在新边界上是一次性 `read`：产生新的观察记录，读模型随之 fold；返回的是这些记录的 `as_of`，不是“更新了几条”。
 - **控制面**是同一 RPC 的一组操作，由认证 principal 传入，不经进程信号或 flag 文件。
 - 消息 schema 的文本形式随 IDL 文件发布；本节定义的是操作、返回值与错误语义。
 

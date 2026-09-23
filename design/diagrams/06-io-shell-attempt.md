@@ -20,7 +20,7 @@ stateDiagram-v2
   [*] --> P
   P --> SB : 发出前门 deadline 未过 → durable append（fsync）
   P --> EX : 发出前门 deadline 已过（可达窗口：崩溃恢复、复合链等待目标终态期间）
-  SB --> VA : submit 返回 Ack → 同事务 VenueAccepted（含原始字节）+ 回执观察副本
+  SB --> VA : submit 返回 Ack → 同事务 VenueAccepted（含 Evidence：契约载荷 + 原始负载）+ 回执观察副本
   SB --> VR : submit 返回 Reject（业务级；无观察记录）
   SB --> UD : submit 返回 NoResponse（超时 / 集成崩溃 / 传输 ACK / 5xx）
   SB --> UD : 重启时无后继 → Undetermined(CrashWindow)
@@ -67,7 +67,7 @@ flowchart TB
   NEXT -->|"否：渠道穷尽"| WAIT["停等：腿仍未终结，留在阻塞头集合<br/>IO 壳永不 heuristic；引用登记钉住保留边界"]
   UD -.->|"任一时刻（不以穷尽为前提）：resolve(r, Found(obs) 或 Absent, note)<br/>授权 ∧ r 仍 Undetermined 未终结"| MAN["ResolutionEvidence{r, Manual, round}"]
   WAIT -->|"ReconciliationReopened{r, cause}（append 前重查 r 仍未终结）<br/>cause = CancelLegTerminal(撤阻塞头腿终结于 VenueAccepted/Found：新取证机会，非目标终态证据) / SessionRestored(集成会话重建) / Manual(retry_reconciliation)"| CH0
-  ATTR["被动渠道：推送观察 attribution FromAttempt(r)<br/>或 idempotency_key 经登记解析到 r，且 r 处于 Undetermined 未终结"] -->|"同事务"| ATT["ResolutionEvidence{r, Attributed, Found{observation: 该记录, evidence: 该记录载荷}}"]
+  ATTR["被动渠道：推送观察 attribution FromAttempt(r)<br/>或 idempotency_key 经登记解析到 r，且 r 处于 Undetermined 未终结"] -->|"同事务"| ATT["ResolutionEvidence{r, Attributed, Found{observation: 该记录, evidence: 该记录的载荷 + 原始负载}}"]
   FOUND --> RS[("腿终结")]
   ABS --> RS
   MAN --> RS
@@ -86,34 +86,34 @@ flowchart TB
 
 对照：§6.5 回执与取证的记录模型；§10.5 #17；§5.3 归因由谁填；§8.3。
 
-| 交互 | 执行事实侧（永存，含原始字节） | 观察侧（可压缩副本） | 同事务 |
+| 交互 | 执行事实侧（永存，含 `Evidence` = 契约载荷 + 原始负载） | 观察侧（可压缩副本） | 同事务 |
 |---|---|---|---|
-| `submit` → `Ack` | `VenueAccepted{venue_order_id, receipt: RawPayload, observation}` | `provenance: Receipt{r}`、`attribution: FromAttempt(r)` | 是 |
+| `submit` → `Ack` | `VenueAccepted{venue_order_id, receipt: Evidence, observation}` | `provenance: Receipt{r}`、`attribution: FromAttempt(r)` | 是 |
 | `submit` → `Reject` | `VenueRejected(reason)`（`Unmapped(raw)` 保留） | 无（venue 侧无订单） | — |
 | `submit` → `NoResponse` | `Undetermined(r, NoResponse)` | 无 | — |
-| 取证命中 | `ResolutionEvidence{r, channel, Found{observation, evidence: RawPayload}}` | `provenance: Reconciliation{r, channel}`、`attribution: FromAttempt(r)` | 是 |
+| 取证命中 | `ResolutionEvidence{r, channel, Found{observation, evidence: Evidence}}` | `provenance: Reconciliation{r, channel}`、`attribution: FromAttempt(r)` | 是 |
 | ByKey 否定 | `ResolutionEvidence{r, ByKey, Absent}` | 无 | — |
 | 未命中 | `ResolutionEvidence{r, channel, Inconclusive}` | 无 | — |
 | 渠道不可用 | `Gap{origin: Channel, channel}`（属 r） | 无 | — |
-| 推送归因命中 | `ResolutionEvidence{r, Attributed, round, Found{observation, evidence: 该推送载荷}}` | 该推送记录本身 | 是 |
-| 人工决议 | `ResolutionEvidence{r, Manual, round, outcome, principal, note}`；`Found.evidence` = 被引用观察记录在 `resolve` 时的载荷 | `Found` 引用已存在的观察记录（通常先经 `read` 造出，可压缩） | — |
+| 推送归因命中 | `ResolutionEvidence{r, Attributed, round, Found{observation, evidence: 该推送的载荷 + 原始负载}}` | 该推送记录本身 | 是 |
+| 人工决议 | `ResolutionEvidence{r, Manual, round, outcome, principal, note}`；`Found.evidence` = 被引用观察记录在 `resolve` 时的载荷 + 原始负载 | `Found` 引用已存在的观察记录（通常先经 `read` 造出，可压缩） | — |
 
 ```mermaid
 flowchart LR
-  V["venue 响应（经集成 submit / query_by_key / list_open / list_fills / replay_by_key）"] --> TX
+  V["venue 响应，经集成消费（submit / query_by_key / list_open / list_fills / replay_by_key）<br/>= 契约载荷 + 原始负载"] --> TX
   subgraph TX["同一 SQLite 事务（Ack / 取证命中）"]
-    E[("执行 J：VenueAccepted{…, receipt 字节, observation}<br/>或 ResolutionEvidence{r, channel, Found{observation, evidence 字节}}")]
+    E[("执行 J：VenueAccepted{…, receipt: Evidence, observation}<br/>或 ResolutionEvidence{r, channel, Found{observation, evidence: Evidence}}")]
     O[("观察 J：同内容的观察副本<br/>provenance: Receipt{r} 或 Reconciliation{r, channel}<br/>attribution: FromAttempt(r)（IO 壳填）")]
     E -->|"observation 位置引用（效应 → 观察）"| O
     O -.->|"provenance：不透明出处值，观察侧不解析（§3.2）"| E
   end
-  E --> AUD["审计 / 恢复：读执行 J 的字节，不依赖副本是否被压缩"]
+  E --> AUD["审计 / 恢复：读执行 J 的 Evidence，不依赖副本是否被压缩"]
   O --> RM["读模型 orders：fold 执行事实 + 归因观察"]
   O --> HOOK["单据钩子 / 复合链读目标终态（cumulative_filled_quantity）"]
   O --> SUBS["订阅者：与推送观察同形"]
 ```
 
-读法：Attempt 只回答"我的提交到达了吗"；订单是什么状态、成交了多少，在观察副本里给观察宇宙的消费者看，在执行记录的字节里给审计看。
+读法：Attempt 只回答"我的提交到达了吗"；订单是什么状态、成交了多少，在观察副本里给观察宇宙的消费者看，在执行记录的 `Evidence` 里给审计看（契约载荷是结论，原始负载是出处）。
 
 核出：回执字节的永存归属（C13）原文只写了观察侧记录——已并入 §6.5（执行侧持有原始字节）。
 

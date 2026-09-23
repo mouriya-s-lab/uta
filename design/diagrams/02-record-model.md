@@ -4,12 +4,12 @@
 
 ## D2.1 一条记录进核心：信封 / 锚点 / 处理器 / 载荷
 
-对照：§2.1（信封与反向代理）、§2.2（协议 = 注册单元）、§8.1 锚点表、处理器字段注册表、`payload_schema`。
+对照：§0.1（上游只在集成内被消费）、§2.1（信封与反向代理）、§2.2（协议 = 注册单元）、§8.1 锚点表、处理器字段注册表、`payload_schema`。
 
 ```mermaid
 flowchart LR
-  UP["上游协议消息"] --> INT["集成进程<br/>清洗 + 对齐到锚点契约"]
-  INT --> ENV["信封 = 锚点 + 已注册字段<br/>载荷 = 原封字节 + payload_schema"]
+  UP["上游协议消息"] --> INT["集成进程（上游的唯一消费点）<br/>消费上游 + 对齐到锚点契约 + 状态映射到契约词表"]
+  INT --> ENV["信封 = 锚点 + 已注册字段<br/>载荷 = 消费结论（契约 schema）+ payload_schema<br/>原始负载 = 上游原文（证据）"]
   ENV --> PARSE["信封解析入口（核心）<br/>parse-don't-validate，隐藏构造器"]
   PARSE --> ANCH{"锚点齐全？<br/>观察链路：session_epoch · StreamId · received_at"}
   ANCH -->|"缺"| MAL["畸形记录：边界拒绝<br/>不是规则否决"]
@@ -24,14 +24,14 @@ flowchart LR
   APPEND --> DELIV["投递调度 → 订阅者"]
   APPEND --> TKT["单据 alignment 重算（世界变了）"]
   APPEND --> RM["读模型 fold"]
-  ENV -.->|"载荷字节直通，核心不解释"| APPEND
+  ENV -.->|"载荷与原始负载直通，核心不解释"| APPEND
 ```
 
 读法：
 
 - "核心看哪些字段" = `锚点 ∪ ⋃ handler.required_inputs`，其余自动是载荷；加一个 venue 字段只是注册一个处理器。
 - 两种失败面互不混淆：缺锚点是畸形（拒绝）；缺处理器字段是不触发（不是错误）。
-- 载荷的解释权在下游（程序、钩子、消费方），记录权在核心。
+- 载荷是集成的消费结论，解释权在下游（程序、钩子、消费方），记录权在核心；原始负载只作证据，不进任何解释器。
 
 核出：无。
 
@@ -149,11 +149,11 @@ flowchart LR
 
 | Journal | 记录 | 写者 | 关键字段 | 位置引用（→ 谁） |
 |---|---|---|---|---|
-| 观察 | 推送观察记录 | 集成推送入口 | `StreamId`、`Seq`、`received_at`、`occurred_at?`、`attribution?`、`idempotency_key?`、载荷 + `payload_schema`、质量标记 | — |
+| 观察 | 推送观察记录 | 集成推送入口 | `StreamId`、`Seq`、`received_at`、`occurred_at?`、`attribution?`、`idempotency_key?`、契约载荷 + `payload_schema`、原始负载、质量标记 | — |
 | 观察 | `Gap{origin: Source, reason}` | 集成推送入口 / 核心（新 epoch 首条） | 前一 `StreamId` 与最后 `Seq`、`reason` | 前一 epoch |
 | 观察 | `Gap{origin: Delivery, reason}` | 投递调度 | 订阅、from/to `Seq`、`reason` | — |
 | 观察 | 一次性读结果 | 读处理器 / 钩子取证 / 消费方 `read` | `provenance: OneShot{origin: Request(pos) / Ticket(id) / Session(principal)}`（依次对应三种发起者）、`one_shot` | 出处值（不解析）；`Request` → `EffectRequest` 位置 |
-| 观察 | 回执观察副本 | IO 壳 | `provenance: Receipt{AttemptRef}`、`attribution: FromAttempt(AttemptRef)`；内容同执行侧字节；可压缩 | 出处值（不解析）|
+| 观察 | 回执观察副本 | IO 壳 | `provenance: Receipt{AttemptRef}`、`attribution: FromAttempt(AttemptRef)`；内容同执行侧 `Evidence`；可压缩 | 出处值（不解析）|
 | 观察 | 取证观察副本 | IO 壳 | `provenance: Reconciliation{AttemptRef, channel}`、`attribution: FromAttempt(AttemptRef)`；可压缩 | 出处值（不解析）|
 | 观察 | 派生记录（含 alert） | 派生 DAG | 程序流 `StreamId`、`RetractableDelta` | — |
 | 观察 | `ProgramReset{reason}` / `ProgramFailed{reason}` | 宿主协议 | 程序 id、`reason` | — |
@@ -162,11 +162,11 @@ flowchart LR
 | 执行 | Decision / `Outcome` / `Rejection` | STS 规则链 | `ticket_id`、绑定 `current_version`、`principal`、`rule_version`、`checked_as_of` | → 单据记录；`checked_as_of` → 观察位置 |
 | 执行 | `Prepared` | 单据（放行事务） | `attempt_position` 即自身位置、`WriteLaneKey`、`OperationKind`、`deadline`、`target?`、意图载荷 | → `Close(Prepared)` 同事务 |
 | 执行 | `SendBarrier` | IO 壳（fsync） | `AttemptRef = (attempt_position, leg)`、该腿的 `idempotency_key` | → `Prepared` |
-| 执行 | `VenueAccepted{venue_order_id, receipt, observation}` | IO 壳 | `AttemptRef`、`venue_order_id`、`receipt: RawPayload`（永存） | `observation` → 回执观察副本 |
+| 执行 | `VenueAccepted{venue_order_id, receipt, observation}` | IO 壳 | `AttemptRef`、`venue_order_id`、`receipt: Evidence`（契约载荷 + 原始负载，永存） | `observation` → 回执观察副本 |
 | 执行 | `VenueRejected(reason)` | IO 壳 | `AttemptRef`、`reason`（含 `Unmapped(raw)`） | → `Prepared` |
 | 执行 | `Undetermined(reason)` | IO 壳 | `AttemptRef`、`NoResponse` 或 `CrashWindow` | → `Prepared` |
 | 执行 | `Expired(deadline)` | IO 壳（发出前门 / `AwaitingTargetTerminal` 到期） | `AttemptRef` | → `Prepared` |
-| 执行 | `ResolutionEvidence{AttemptRef, channel, round, outcome}` | IO 壳 / 归因处理器 / 控制面 | `channel ∈ {ByKey, Listing, Fills, Replay, Attributed, Manual}`、`round`（发起时所属轮次）、`outcome ∈ {Found{observation, evidence: RawPayload}, Absent, Inconclusive}`；每条 `Found` 都带 `evidence`（六渠道一视同仁）；`Manual` 带 principal 与 note | `Found` → 观察副本；`round` → `ReconciliationReopened` |
+| 执行 | `ResolutionEvidence{AttemptRef, channel, round, outcome}` | IO 壳 / 归因处理器 / 控制面 | `channel ∈ {ByKey, Listing, Fills, Replay, Attributed, Manual}`、`round`（发起时所属轮次）、`outcome ∈ {Found{observation, evidence: Evidence}, Absent, Inconclusive}`；每条 `Found` 都带 `evidence`（六渠道一视同仁）；`Manual` 带 principal 与 note | `Found` → 观察副本；`round` → `ReconciliationReopened` |
 | 执行 | `ReconciliationReopened{AttemptRef, cause}` | IO 壳 / 控制面 | `cause ∈ {CancelLegTerminal(AttemptRef), SessionRestored, Manual(principal)}` | → `Undetermined` |
 | 执行 | `CapabilityObserved` | IO 壳 | `(WriteLaneKey, OperationKind)`、新 `Verdict` | — |
 | 执行 | 能力证据（握手版） | 握手 | `Projection.capabilities`、`session_epoch` | — |

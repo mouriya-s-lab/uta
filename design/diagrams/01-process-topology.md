@@ -4,7 +4,7 @@
 
 ## D1.1 进程拓扑与信道
 
-对照：§7.1（进程、信任边界、凭据链、传输）、§8.5（principal）、§7.4（单写者）、§7.6（配置文件与运行期登记）。
+对照：§0.1（权威在上游，上游只在集成内被消费）、§7.1（进程、信任边界、凭据链、传输）、§8.5（principal）、§7.4（单写者）、§7.6（配置文件与运行期登记）。
 
 ```mermaid
 flowchart TB
@@ -13,7 +13,7 @@ flowchart TB
       DB[("SQLite 单文件 WAL<br/>观察 J · 执行 J · RuleState · 订阅表<br/>能力证据 · Checkpoint · 进程表 · 快照 · instance_id")]
       LOCK["OS 文件锁 + fence"]
     end
-    INT1["集成进程 A<br/>venue SDK 语言不限<br/>凭据终点"]
+    INT1["集成进程 A<br/>上游的唯一消费点；venue SDK 语言不限<br/>凭据终点"]
     INT2["集成进程 B"]
     HOST1["程序宿主 1<br/>值树解释器<br/>rlimit / job object"]
     HOST2["程序宿主 2"]

@@ -584,17 +584,19 @@ IO 壳**不修改**任何记录，不持有权威状态；重启后其全部状�
 
 venue 对我方写的响应是执行事实：C13 原始负载完整保留，执行事实永不删除（§3.1）。同一响应里的订单 / 成交状态又是观察（§3.4）。
 
+响应经集成消费后到达核心，由两部分组成（§2.1）：集成的结论（契约载荷 + `payload_schema`）与所消费的上游原文（原始负载）。执行事实侧永存的证据值 `Evidence = {payload, payload_schema, raw}` 同时保存两者：前者是 UTA 据以行动的结论，后者是结论的出处。[设计]
+
 因此一次 venue 交互在**同一 SQLite 事务**内落两条记录：
 
-- **执行事实侧**一条，**持有原始响应字节**（`payload + payload_schema`，永存）。
+- **执行事实侧**一条，**持有 `Evidence`**（永存）。
 - **观察 `Journal`** 上一条同内容的观察记录，可压缩。它带 `provenance` 与归因 `attribution: FromAttempt(AttemptRef)`，由 IO 壳填（§8.3）。它供复合链读终态、供单据钩子与读模型消费、供订阅者与推送观察同形地看到。
 
 具体：
 
 | 交互 | 执行事实侧 | 观察侧 |
 |---|---|---|
-| `submit` 返回 `Ack` | `VenueAccepted{venue_order_id, receipt: RawPayload, observation: LogPosition}` | `provenance: Receipt{attempt}` 的观察记录 |
-| 取证命中 | `ResolutionEvidence{attempt, channel, round, outcome: Found{observation: LogPosition, evidence: RawPayload}}` | `provenance: Reconciliation{attempt, channel}` 的观察记录 |
+| `submit` 返回 `Ack` | `VenueAccepted{venue_order_id, receipt: Evidence, observation: LogPosition}` | `provenance: Receipt{attempt}` 的观察记录 |
+| 取证命中 | `ResolutionEvidence{attempt, channel, round, outcome: Found{observation: LogPosition, evidence: Evidence}}` | `provenance: Reconciliation{attempt, channel}` 的观察记录 |
 | 取证 `Absent` / `Inconclusive` | `ResolutionEvidence` | 无（没有订单状态可记） |
 | `Unavailable` | 只落 `Gap{origin: Channel}`，不是取证结果（§6.6） | 无 |
 | `submit` 返回 `Reject` | `VenueRejected`，`reason` 保留 `Unmapped(raw)`（§2.6） | 无（venue 侧不存在订单） |
@@ -607,15 +609,15 @@ venue 对我方写的响应是执行事实：C13 原始负载完整保留，执�
 
 **`outcome ∈ {Found{observation, evidence}, Absent, Inconclusive}`。**
 
-**每条 `Found` 都带 `evidence` 字节**，C13 对六种渠道一视同仁：
+**每条 `Found` 都带 `evidence`**，C13 对六种渠道一视同仁：
 
-- 主动取证取 venue 响应；
-- `Attributed` 取该推送记录的载荷；
-- `Manual` 取被引用观察记录在 `resolve` 时的载荷。被引用的观察记录可压缩，执行侧的 `evidence` 不可。
+- 主动取证取集成返回的该次响应；
+- `Attributed` 取该推送记录的载荷与原始负载；
+- `Manual` 取被引用观察记录在 `resolve` 时的载荷与原始负载。被引用的观察记录可压缩，执行侧的 `evidence` 不可。
 
 **`round`** 是该次取证**发起时**所属的轮次：最近一条 `ReconciliationReopened` 的位置，首轮为空。`Attributed`/`Manual` 取 append 时的当前轮。
 
-观察侧那条记录落到保留边界下后，执行侧的字节仍在。审计读执行事实，不依赖观察副本。
+观察侧那条记录落到保留边界下后，执行侧的 `Evidence` 仍在。审计读执行事实，不依赖观察副本。
 
 ### 代数：Attempt、腿、`AttemptRef`
 
@@ -776,7 +778,7 @@ IO 壳**永不 heuristic**。取证是读副作用，可以重试；`submit` 是
 
 顺序之外还有一条被动渠道。
 
-- 集成推送的带 `attribution: FromAttempt(r)` 的观察记录到达时（或只带 `idempotency_key`、经登记解析到 r，§8.1），若腿 r 处于 `Undetermined` 且未终结，效应侧归因处理器在同一事务 append `ResolutionEvidence{r, Attributed, Found{observation: 该记录, evidence: 该记录载荷}}`。
+- 集成推送的带 `attribution: FromAttempt(r)` 的观察记录到达时（或只带 `idempotency_key`、经登记解析到 r，§8.1），若腿 r 处于 `Undetermined` 且未终结，效应侧归因处理器在同一事务 append `ResolutionEvidence{r, Attributed, Found{observation: 该记录, evidence: 该记录的载荷与原始负载}}`。
 - append `Undetermined(r)` 的事务内，同样检查已到达的、归因到 **r** 的观察。腿身份精确匹配：同链另一腿的观察不算。
 - r 仍在 `SendBarrier` 等回执时不产生该记录：链保持线性，回执由 `submit` 返回值落 `VenueAccepted`/`VenueRejected`。
 - 迟到回执（W2 步 4）由此并入同一腿，与取证 `Found` 同效。

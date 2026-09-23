@@ -40,14 +40,14 @@
 5. IO 壳按 lane 顺序取 `Prepared`（§6.5），durable append `SendBarrier`（fsync，执行 J），再调用集成 `submit(attempt)`（§8.2）。
    - 行动者：IO 壳，身份 = `attempt_position`（`Prepared` 的 `LogPosition`，锚点，§8.1）+ `WriteLaneKey`。
 6. venue 受理并给出身份 → 集成 `submit` 返回 `Ack(venue_id, receipt)`。同一事务 append：
-   - `VenueAccepted{venue_order_id, receipt: 原始字节, observation}`（执行 J）；
+   - `VenueAccepted{venue_order_id, receipt: Evidence, observation}`（执行 J；`Evidence` = 契约载荷 + 原始负载，§6.5）；
    - 回执观察记录（观察 J，`provenance: Receipt{AttemptRef}`，`attribution: FromAttempt(AttemptRef)` 由 IO 壳填；记录模型，§6.5）。
 7. 部分成交、成交依次到达 → 集成推送带 `attribution` 的订单状态 / 成交观察记录（观察 J，§8.3、P2、P9）；读模型 fold 出最终成交状态（§4.4、§8.5）。
    - 对外可见：订阅者依次收到受理、部分成交、成交，字段与原生身份保真（C13）；读模型最终 = 成交。
 
 **扩展路径（venue 专有 / 未列举状态，Q5 保真）。**
 
-- 集成保留原始负载与原生身份，状态映射保留 `Unmapped(raw)`（§2.2、§2.6、§8.3）。
+- 集成消费上游状态：映射到契约词表，映射不了的输出 `Unmapped(raw)`；随记录附原始负载与原生身份（§2.2、§2.6、§8.3）。
 - 未列举状态标 `unknown` 并告警，不压成 `rejected`。
 - 对外可见：累计成交量 = 回执累计字段；映射表无“其他→rejected”。
 
