@@ -1,0 +1,135 @@
+# 11 术语与索引
+
+本章给出规范词表、五种关系与其承载、同名异义对照，以及研究与调查报告索引。
+
+## 11.1 规范词表
+
+按名字给出一句话定义与定义所在节；同名异义（一个词两种意思）见 §11.3。
+
+| 名字 | 一句话定义 | 定义所在节 |
+|---|---|---|
+| 域事实 | 外部世界中不能由 UTA 设计改变的事实，附一手证据。 | §1.1 |
+| 既有机器事实 | 旧 UTA 实现的可观察行为，用于说明新设计不能预设旧实现能力。 | §1.1 |
+| 共享现象 | 机器与问题域之间交换的带名记录类别及其语义字段。 | §1.2 |
+| 既有行为 | 当前 Alice/旧 UTA 真实入口可观察到的调用和结果形状。 | §1.3.1 |
+| 质量场景 | 由刺激源、刺激、构件、环境、响应、响应度量六项组成的可证伪场景。 | §1.4 |
+| `Record` | 某条流的记录词表，由集成在边界处解析给出的具体类型 | §2.3、§4.1 |
+| `Delta` / `RetractableDelta` | 幺半群增量；后者额外要求逆元（`neg`），只派生侧要求 | §4.1 |
+| `StreamId` | `(source, stream, epoch)`：独立维持单调位置的有序范围 | §2.3 |
+| `Seq` | 某 `StreamId` 内每 epoch 独立单调递增的持久序号 | §2.3 |
+| cursor（消费位置） | 某消费者已读到的位置 | §2.3、§4.2 |
+| frontier（完备进度） | 哪些逻辑时间之前不再产生新更新 | §2.3、§4.2 |
+| retention（保留边界） | 每条观察流上存储仍能精确重建的最早位置；执行事实侧没有 | §2.3、§2.4 |
+| 信封 | UTA 坚持解析的少数字段（锚点 + 已注册处理器读的字段），入口验证 | §2.1 |
+| 载荷 | 信封之外原封不动直通的字节，永远保留 | §2.1 |
+| `Projection` | 集成握手声明的值：作用域、流、能力（`Projection{scopes, streams, capabilities}`） | §2.2 |
+| 组合子值树 / `DerivationNode` | 一个 `enum`（deep embedding），判断的共同底层表示 | §2.5 |
+| fold | 对值树的一次解释；共五个（`required_inputs`、输出类型、求值、失败、说明） | §2.5 |
+| `Pred<X>` / `Comb<X,Y>` / `Scan` | 输出 `bool` 的树 / 输入 X 输出 Y 的树 / 状态累加节点 | §2.5 |
+| `DecisionStep` | 程序决策侧节点（`On`/`Emit`/`Require`/`Expire`） | §6.1 |
+| `EffectRequest` | 程序的唯一出口：一个副作用请求值，由处理器决定响应 | §6.1 |
+| `EffectResponse` | 每条被处理的 `EffectRequest` 的完成事实（执行事实侧）：`Observed`/`Unavailable`/`Unsupported`/`Drafted` | §6.1 |
+| 观察宇宙 / 效应宇宙 | 不可写 / 可写两套独立类型宇宙，不共享类型 | §3.2 |
+| `Ticket` / `TicketAction` | 意图形成期的锁 = 责任持有；`responsible` 字段的存在即锁 | §6.2 |
+| `IntentAlignment` / `Revision` | 意图专属逐项对账 / 意图版本间的结构差 | §6.2 |
+| `checked_as_of` | 一次 `alignment` 评估实际消费的位置集，随 Decision/`Outcome`/`Rejection` 记录；与 `basis`（拟单时看到的）互补 | §6.2、§6.3 |
+| `basis` / `basis_validity` | 效应侧引用观察侧的唯一边：位置集 `Set<LogPosition>`；其有效性 `Fresh`/`Stale`/`Retracted`/`BeyondRetention` | §5.1、§5.2 |
+| `Journal` | 记录载体；观察侧 `Journal<RetractableDelta>` 可撤回可压缩，执行事实侧只 append | §4.1、§3.1 |
+| STS / lane | 决策代数：顺序固定规则链（授权 → 输入约束 → 审批 → lane → 过期）/ 每 `WriteLaneKey` 的写通道全序 | §6.3、§6.4 |
+| `WriteScope` / `WriteLaneKey` | 可写作用域（多账户在核心里的存在形式）/ 其不透明键 | §2.2、§6.4 |
+| `Capability` / `Verdict` | (scope, operation) → `Supported`/`Unsupported`/`Unknown` 的能力证据 | §2.2 |
+| IO 壳 | 效应侧的解释器：核心中唯一把记录变成 venue 动作、把响应变成记录的地方 | §6.5 |
+| `Attempt` / `AttemptRef` | 一条 `Prepared` 记录及其后继阶段链，身份 = `attempt_position`；腿身份 `AttemptRef = (attempt_position, leg)`，所有腿级记录与归因以它关联；正常路径下同 lane 至多一条未终结 | §6.5 |
+| `Prepared` / `SendBarrier` / `Undetermined` / `Expired` | 阶段链的记录：已放行待执行 / 发送屏障（已 fsync，之后才可 `submit`）/ 已发出但结果未知 / 未发出即到期 | §6.5 |
+| `ResolutionEvidence` / `ReconciliationReopened` | 一次取证的执行事实记录（`channel × outcome`，`Found` 含证据字节并引用观察副本）/ 重开一轮取证的标记（`CancelLegTerminal` / `SessionRestored` / `Manual`） | §6.5、§6.6 |
+| `Resolved` / `AwaitingTargetTerminal` | 阶段链的 fold 状态而非记录：链已达终态（各腿终结且无下一腿）/ 复合链撤单腿已终结、等待目标订单终态以决定第二腿（出口：目标终态或 `deadline`） | §6.5 |
+| `Gap{origin}` | 显式标记的缺口记录，`origin ∈ {Source, Delivery, Channel}` | §4.2 |
+| `Pooled` | 值树里的读侧组合子，核心暴露给可选子系统的唯一接口 | §4.5、§8.7 |
+| 段视图 | `Pooled` 物化完整窗口后交给原生 op 的可借用视图（非逐条值） | §4.5、§8.7 |
+| money / quantity / 身份 / 时间 | 交易协议处理器计算处用的基础值类型；不进信封 | §2.6 |
+| 集成进程（integration） | 一个独立 OS 进程，把某上游协议清洗为信封 + 载荷，握手声明投影，是凭据终点与独立故障域 | §7.1、§8.1 |
+| 程序宿主（program host） | 解释值树程序的受监督子进程，只提供隔离与预算，不进设计中心；协议 = `Load`/`Advance`/`Reset`/`Unload` | §7.1、§8.6 |
+| `Checkpoint` / `state_version` | 程序状态的显式序列化字节及其版本号；与程序 cursor 同事务持久化 | §8.6、§7.5 |
+| `SessionEpoch` / `instance_id` | 会话 epoch `(instance_id, session_seq)`：`instance_id` 随 fence 单调递增，`session_seq` 每次握手加一；推送与回执只在 epoch 相等时接受 | §7.2 |
+| principal | 会话绑定的身份 `(os_user, actor)`：OS 对端凭据给出 `os_user`，Alice 自报 `actor`；授权与审计的键 | §8.5 |
+| `Snapshot` / `as_of` | 读模型的一次读取结果，及其吃到的位置集 `Set<LogPosition>` 与范围内生效的 `gaps` | §8.5 |
+| 信任边界 = OS 用户 | 写权限来自认证得到的 principal × 策略 scope，不来自连接；同用户进程视为用户本人（H7） | §7.1 |
+| 凭据链 | `统一路径封存文件 → UTA 核心 → 该集成进程`；程序与消费方只见账户身份 | §7.1、§7.6 |
+| 单实例（single instance） | 同一用户状态根（`OPENALICE_HOME`）只允许一个核心实例，由 OS 文件锁 + fence 保证 | §7.1、§7.4 |
+| 传输（transport） | IDL 之下的编码/信道，按 OS 选择（本地回环 + 令牌或命名管道），不改变 IDL | §7.1、§8.1 |
+| 模块指南（module guide） | 每个元素的 拥有 / 隐藏 / 假设 三列，及其对应的 §2–§6 抽象 | §7.3 |
+| uses 图 | 模块间的依赖方向；唯一跨宇宙依赖是效应侧 → 观察侧（经 `basis`），反向不成立 | §7.3 |
+| 操作集（operation set） | 核心 IO 壳对集成的调用与集成对核心的推送，构成跨协议 IDL 契约 | §8.2、§8.3 |
+| 持久化归属表 | 每份状态谁写、谁读、怎么传播 | §7.5 |
+| 配置/凭据归属 | 统一路径下的文件契约：每文件唯一写者、格式版本只前进 | §7.6 |
+
+## 11.2 五种关系，五种承载
+
+| 关系 | 承载 | 验证阶段 |
+|---|---|---|
+| operation ↔ capability | 能力证据值（§2.2） | 运行期握手 |
+| request/resource ↔ provider 身份 | `StreamId`、外部订单 id、幂等键 | 构造期 / 运行期 |
+| 多 effect ↔ 同一作用域 | 单条 STS 事务 | 构造期 |
+| program ↔ 解释器 | 解释选择（①派生 / ②决策） | 构造期 |
+| intent ↔ 结果 / 审计 / 重放 | 执行事实日志的位置 + causation id | 运行期，持久 |
+
+把这五种关系塞进一个对象的字段互指是反模式。[证据：fp-03 命题 2]
+
+## 11.3 同名异义表
+
+| 词 / 概念对 | 甲 | 乙 | 区分依据 | 节 |
+|---|---|---|---|---|
+| 意图的三个阶段 | `EffectRequest`：程序发出的请求，未定型、无负责人 | `Ticket` 的 `Version<Intent>`：定型的意图，有负责人与 `basis` | 第三阶段是 STS 的 `Input`：规则输入，含意图、回执、超时、证据 | §6.1、§6.2、§6.3 |
+| `Prepared` | `Ticket.Close(Prepared(position))` 的结果：单据关闭 | IO 壳链的起点：`Prepared → SendBarrier → …` | 同一条记录，单据 → IO 壳的唯一交出点，两者同属效应宇宙；单据认“我已交出”，IO 壳认“我该做的” | §5.3、§6.2、§6.5 |
+| 对账 / 决议 | 对账（alignment）：我的意图还对不对世界（`IntentAlignment`） | 决议（resolution）：我的动作发生了没有（`ResolutionEvidence`） | 前者在 `Prepared` 之前、只看观察侧；后者在之后、由 IO 壳驱动 | §6.2、§6.6 |
+| 修订 / 偏离 | 修订（`Revision<Intent>`）：意图改了，世界没变 | 偏离（`Diverged`）：世界变了，意图没变 | 来源不同（`Revise` vs 观察推进） | §6.2 |
+| 修订 / 撤回 | `Revision<Intent>`：意图版本间结构差，无逆元需求 | `RetractableDelta`：观察侧撤回代数，有逆元 | 前者属效应宇宙，后者属观察宇宙 | §6.2、§4.1 |
+| 三种“无法判断” | `InputMissing`：检查项需要的观察流根本没有 | `Undecidable`：流存在但有 gap | 第三种 `inconclusive`：读渠道穷尽而写结果仍未知，属决议、停人工 | §6.2、§6.6 |
+| 能力未知 / 结果未知 | `Verdict::Unknown`：venue 是否支持该操作不知道 | `Undetermined`：发出的写是否生效不知道 | 前者约束启动、是握手结果；后者约束恢复、是链状态 | §2.2、§6.5 |
+| `SendBarrier` / `AwaitingDecision` | IO 壳发送屏障：`Prepared` 之后，外部动作即将发生 | 单据送审：`Prepared` 之前，无外部动作 | 二者相隔整条 STS 链 | §6.5、§6.2 |
+| `basis` / `required_inputs` | 值：这张单据实际引用了哪些 `LogPosition` | 类型：这个检查/处理器要读哪些 `StreamKind` | `required_inputs` 从组合树派生；`basis` 从实际评估记录 | §6.2、§2.5 |
+| `LogPosition` / `Hash` | 日志位置：顺序身份 | 内容寻址：版本身份 | `current_version` 是 `Hash`，`Prepared(position)` 是 `LogPosition` | §4.1、§6.2 |
+| 四种“过期” | `Ticket.Close(Expired)`：负责人失联或审批超时，或 lane 等待期间到期（H6，STS 过期步，在 `Prepared` 之前） | `DecisionStep::Expire(Deadline)`：程序规则时限 | 见表下 | §6.2、§6.1、§6.5 |
+| 两种“拒绝” | `VenueRejected`：写已发出，venue 拒了；执行事实、终态之一 | `DecisionRejected`：审批拒了；单据关闭，从未进入 `Prepared` | 前者在链上，后者在单据上 | §6.5、§6.2 |
+| 两种“证据” | `CapabilityProof`：venue 有这个能力（握手结果） | `ResolutionEvidence`：我的尝试发生了没（对账结果） | 前者进 `Projection.capabilities`，后者进链 | §2.2、§6.5 |
+| 形状 / 投影 | 形状：上游对象长什么样，藏在集成里，核心从不持有 | 投影：有几个作用域、几条流、各支持什么；UTA 定 schema、集成填、UTA 转发 | 账户只是特例；订单、持仓、流、渠道、程序都如此 | §2.2 |
+| 读模型 / 归因后的订单观察 | 读模型：消费侧对执行事实的 fold，非权威，规则不引用 | 集成产出的带出处记录，钩子可读 | 都描述“订单现在什么状态”；一个是解释、一个是记录 | §4.4、§6.2 |
+| 归因字段的归属 | 记录归观察侧：`attribution` 落在订单/成交观察记录上 | 响应归效应侧：读它的处理器（lane 决议匹配、读模型归因）注册在效应侧 | 由谁填：集成填；IO 壳在回执与取证观察上补 `FromAttempt(AttemptRef)`；填不出记 `Unattributed` | §5.3、§2.1 |
+| 锚点 / 处理器字段 | 锚点：缺失 = 畸形记录，链路不成立 | 处理器字段：缺失 = 处理器不触发，不是错误 | 前者闭合、入口即验；后者开放、按注册表 | §2.1 |
+| 入站处理器 / 出站处理器 | 集成进来的字段出现 → 做什么（§2.1） | 程序出去的请求出现 → 做什么（§6.1） | 同一形状，方向相反；后者必须声明读/写 | §2.1、§6.1 |
+| `Pooled` 组合子 / 原生 op | `Pooled`：值树里的读侧组合子，核心暴露给可选子系统的唯一接口 | 原生 op：子系统提供的注册表黑盒，要求输入是 `Pooled` 的 | 前者属核心代数，后者属可选子系统 | §4.5、§8.7 |
+| 窗口 / delta | 触发时可见的完整 `LogPosition` 区间，在段池里物化为若干段的有序引用集；不向保留边界登记，越界得 `BeyondRetention` | 本次推进的增量记录 | 记录渐进不要求算法渐进；增量在节点粒度 | §4.3、§4.5、§8.7 |
+| `Journal` / 段池 | 记录的载体，持久于 SQLite，由保留语义管理 | 为高性能计算设计的运行期快照，由 `Pooled` 洗入，永不持久 | 两套存储，互不派生；只共用 `LogPosition` 标定 | §4.1、§4.5、§7.4 |
+| 读副作用 / 写副作用 | 读：不改变世界，可重试、可批、可丢，结果总可判定 | 写：改变世界，一次，可能 `Undetermined` | 与对象轴（§3.2）正交；对账取证是读 | §3.4 |
+| `Program` 值 / 程序运行时 | JSON 值树，核心解释它 | 受监督子进程（宿主协议；Wasm 是走同一协议的替代宿主），解释器的宿主 | 运行时选择不改变值；预算靠宿主不靠类型 | §4.3、§6.1、§8.6 |
+| `Transfer` / 协作 | 换负责人：单据始终只有一个负责人 | 协作：核心之外（另起单据、给负责人建议） | 单据不支持共同编辑 | §6.2 |
+| lane 队首阻塞 / 锁 | 通讯协议语义：后续写的含义依赖队首结果 | 锁：消费者自己持有的互斥 | UTA 不是消费者；队列有序才重要 | §6.4、§6.8 |
+| `Gap{origin}` 三种来源 | `Source`：集成断线，流有缺口 | `Delivery`：慢消费者或 conflated，投递有缺口；程序作为订阅消费者滞后被跳过的区间也是这一种 | 第三种 `Channel`：对账取证渠道不可用 | §4.2、§8.3、§6.6 |
+
+**四种“过期”的后两种：**
+
+- 第三种：链记录 `Expired(deadline)`。已放行，但某腿发出前 `deadline` 已过，IO 壳不发并终结该链；只在崩溃恢复窗口与复合链腿间可达。
+- 第四种：IO 壳超时。不是终态，只是 `Undetermined` 的原因之一。
+
+## 11.4 研究与调查报告索引
+
+每个报告一行：路径 / 它是什么的一手出处 / 支撑的章节或条目 ID。本索引只作证据出处，不复述设计结论。
+
+- 核心证据在 `design/research/*` 与 `design/investigation/*`。
+- 可选子系统的证据在 `design/hpc-derivation/research/*`，由其文档 §12 逐篇索引。
+- 本设计不改动它们。
+
+| 路径 | 一手出处 | 支撑的章节 / 条目 ID |
+|---|---|---|
+| `design/research/fp-00-synthesis.md` | fp-01–fp-05 五份 FP 调查的综合索引与三把尺子（统一 litmus、五种关联、能力三阶段） | §0.1；§10.1 大对象行 |
+| `design/research/fp-01-haskell-finance-cases.md` | Haskell 金融/多 provider 生产系统（Haxl、Composing Contracts、Marlowe、cardano-ledger STS、Mercury 等） | §2.5（M9/M10 闭合构造子）、§4.3、§6.1（M7）、§6.3；§10.1 值树/程序/`EffectRequest`/泛型 Embed 行 |
+| `design/research/fp-02-scala-jvm-cases.md` | Scala/JVM 交易与 provider 栈（gvolpe/trading、Fetch、Stitch、ZIO、fs2 等） | §0.1（命题 12）、§2.2（命题 1/2）；§10.1 大对象行 |
+| `design/research/fp-03-effect-composition-and-open-providers.md` | 效应组合与开放 provider 的理论/库（tagless final、Free/DTC、Servant、能力三阶段、reify+event sourcing） | §2.2（命题 3/8）、§2.5（条目 2/4/5）、§6.3（命题 6）、§4.4（命题 1）；§10.1 泛型 Embed / 类型级 capability / 全局 effect enum 行 |
+| `design/research/fp-04-base-types-and-domain-primitives.md` | 基础类型与域原语（safe-money、Squants、DMMF、Incremental、幂等、位置/时钟） | §2.1（命题 15/16）、§2.3（命题 10/11）、§2.6；§10.1 信封解析行 |
+| `design/research/fp-05-streams-incremental-frp.md` | 观察侧流/增量/FRP（fs2、Incremental、Salsa、Differential、Materialize、Pine Script） | §2.4（案例 13⑤）、§3.1（命题 12）、§4.1（命题 12）、§7.7；§10.1 增量引擎 / 两侧共表 / 快照重建行 |
+| `design/research/fp-06-reconciliation-and-in-doubt.md` | 写边界 / in-doubt / 对账的一手出处（2PC 先例、四面泄漏、命题 1–6） | §6.5–§6.7；§10.1 两阶段行；§10.5 #8/#17 |
+| `design/hpc-derivation/research/fp-07-*.md` … `fp-12-*.md`（含 `fp-11-appendix-*.md`） | 可选子系统的一手证据（类型导出与外部编译、段池选库、算法层与 SIMD、数组中间层、原语集实证、L2 订单簿 demo） | hpc-derivation/design.md §12 逐篇索引；本设计只经 §8.7、Q24/Q30 引用 |
+| `design/investigation/alice-consumers.md` | Alice 消费面真实入口（SDK/路由/UI/connector/CLI） | §1.3.1（A 表）、§1.4、§1.6.4；S10/S11；§8.5 操作集与读模型集合 |
+| `design/investigation/existing-capabilities.md` | 旧 UTA 可观察行为、后台任务、持久化与 20 条缺陷 | §1.1（O11）、§1.3.1；C9–C14；Q8/Q17/Q19/Q20 |
+| `design/investigation/venue-capabilities.md` | venue 能力矩阵（推送流/幂等键/回读/续传游标；限额与 pacing） | §1.1（F6/F7）、§1.2（P1）、§1.6.1；§10.1 写批处理行 |
+| `design/investigation/rust-feasibility.md` | Rust 生态可行性（tonic/Windows UDS、Wasmtime 快照缺口、fuel/epoch、gRPC 流、rust_decimal） | §1.6.2、§7.1、§8.6、§7.7；§10.1 持久化引擎 / 线缆编码 / 程序隔离运行时行 |

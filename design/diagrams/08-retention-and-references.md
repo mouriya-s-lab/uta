@@ -1,10 +1,10 @@
 # 08 保留边界、引用登记、`basis_validity`
 
-对照：§2.3 保留语义、§4、§6.4 `advance_retention`、§6.7.2 保留边界与引用登记、W13。索引见 `README.md`。
+对照：§2.4 保留语义、§5.2、§8.5 `advance_retention`、§7.5 保留边界与引用登记、W13。索引见 `README.md`。
 
 ## D8.1 引用登记的生命周期（三种持有者）
 
-对照：§2.3"权责与周期归属"；§6.7.2 引用登记行。
+对照：§2.4 登记方与解除时机；§7.5 保留边界与引用登记。
 
 ```mermaid
 stateDiagram-v2
@@ -42,7 +42,7 @@ stateDiagram-v2
 
 ## D8.2 `advance_retention` 与压缩
 
-对照：§2.3 保留语义、§6.4 控制组、§6.7.1 `compact_below_retention`、§6.7.2 保留边界行、§3.1、W13。
+对照：§2.4 保留语义、§8.5 控制组、§7.4 `compact_below_retention`、§7.5 保留边界与引用登记、§4.1、W13。
 
 ```mermaid
 flowchart TB
@@ -58,24 +58,24 @@ flowchart TB
   WIN -->|"否"| RJ2["Rejected(InsideWindow{bound})"]
   WIN -->|"是，且各流都通过"| APPLY["写各流新边界；控制记录 Applied(position)"]
   APPLY --> COMPACT["compact_below_retention：仅观察侧 RetractableDelta 表，逐流 DELETE 边界之下<br/>执行 J 没有保留边界：不压缩、不删除"]
-  COMPACT --> INV["不变量 §2.5-3：所有已登记引用 ≥ 其所在观察流的边界"]
+  COMPACT --> INV["不变量 §6.9-3：所有已登记引用 ≥ 其所在观察流的边界"]
 ```
 
 读法：边界按观察流分别维持、只前进（`LogPosition` 只在同一 `StreamId` 内有序）；执行事实永不删除；派生历史的 `DELETE` 只在各流边界之下。
 
-核出：边界是逐流的位置集、越过留存窗口的拒绝名 `InsideWindow{bound}`、执行事实侧没有边界，原文未写——已并入 §2.3、§6.4、§6.7.2。
+核出：边界是逐流的位置集、越过留存窗口的拒绝名 `InsideWindow{bound}`、执行事实侧没有边界，原文未写——已并入 §2.4、§8.5、§7.5。
 
 ## D8.3 `basis_validity` 判定
 
-对照：§4 `basis_valid`（`BeyondRetention` 只对观察侧位置）、默认窗口 `Lag = 0`、执行事实侧引用不因年龄变假；§5.2 门。
+对照：§5.2 `basis_valid`（`BeyondRetention` 只对观察侧位置）、默认窗口 `Lag = 0`、执行事实侧引用不因年龄变假；§6.2 门。
 
 ```mermaid
 flowchart TB
   IN["basis: Set<LogPosition>；操作的 Lag（策略声明，缺省 0）"]
-  IN --> EACH["对每个位置（逐位置顺序：边界 → 撤回 → 滞后，后一项以前一项通过为前提，§4）"]
+  IN --> EACH["对每个位置（逐位置顺序：边界 → 撤回 → 滞后，后一项以前一项通过为前提，§5.2）"]
   EACH --> SIDE{"位置在哪侧？"}
   SIDE -->|"执行事实侧（VenueAccepted / SendBarrier / EffectRequest 位置）"| EOK["有效（执行事实侧没有保留边界，不因年龄变假）"]
-  SIDE -->|"派生侧（观察）"| D1{"≥ 该流保留边界？"}
+  SIDE -->|"派生侧（观察，含归因观察）"| D1{"≥ 该流保留边界？"}
   D1 -->|"否"| BR["BeyondRetention(pos)"]
   D1 -->|"是"| D2{"该位置的贡献被撤回？"}
   D2 -->|"是"| RT["Retracted(pos)"]
@@ -85,7 +85,7 @@ flowchart TB
   EOK --> AGG
   DOK --> AGG
   AGG{"全部有效？"} -->|"是"| FRESH["Fresh"]
-  AGG -->|"否"| NOT["取最严重一类作 BasisValidity：BeyondRetention > Retracted > Stale（§4）<br/>门 fail-closed；全部失败位置及原因给审批人"]
+  AGG -->|"否"| NOT["取最严重一类作 BasisValidity：BeyondRetention > Retracted > Stale（§5.2）<br/>门 fail-closed；全部失败位置及原因给审批人"]
   BR --> AGG
   RT --> AGG
   ST --> AGG
@@ -93,4 +93,4 @@ flowchart TB
 
 读法：`Lag = 0`（缺省）时 `Fresh` 是"决定至少看到了所有之前不再变的记录"；策略声明正 `Lag` 时允许落后完备位置至多 `Lag` 个 `Seq`。空 `basis` 空真为 `Fresh`，此时能不能放行由第二层必要项决定（D5.5）。
 
-核出：默认窗口语义已改为"不早于最近一次完备位置"（§4，`Lag = 0` 限定）；逐位置顺序与集合值的严重度取法原文未写——已并入 §4。
+核出：默认窗口语义已改为"不早于最近一次完备位置"（§5.2，`Lag = 0` 限定）；逐位置顺序与集合值的严重度取法原文未写——已并入 §5.2。

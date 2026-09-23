@@ -1,10 +1,10 @@
 # 03 观察入库、readiness、回填、订阅与 gap
 
-对照：§3.1、§3.2、§6.3.6、§6.3.8、§6.3.10、§6.4 订阅组、W6。索引见 `README.md`。
+对照：§4.1、§4.2、§8.3、§8.4、§8.5 订阅组、W6。索引见 `README.md`。
 
 ## D3.1 一次推送的入库时序
 
-对照：§6.3.6 推送表、§6.3.8 时间权威与归因、§2.2 处理器、§3.3、§3.2 投递、§5.2 偏离是状态。
+对照：§8.3 推送表与集成义务（时间权威与归因）、§2.1 处理器、§4.3、§4.2 投递、§6.2 偏离是状态。
 
 ```mermaid
 sequenceDiagram
@@ -46,14 +46,14 @@ sequenceDiagram
 
 ## D3.2 集成 × 流的 readiness 与流 epoch 决定
 
-对照：§6.3.10 readiness 状态机、§6.3.5 `handshake` 行、§3.2 `Gap{Source}` 原因集、§6.7.3 `rotate_credential`。
+对照：§8.4 readiness 状态机、§8.2 `handshake`、§4.2 `Gap{Source}` 原因集、§7.6 `rotate_credential`。
 
 ```mermaid
 stateDiagram-v2
   state "Live（非 Degraded）" as LN
   [*] --> Starting : 会话建立（新 session_seq）
   Starting --> Backfilling : 集成声明 Backfilling{through: Seq}
-  Starting --> Live : 无需回填 / 能力不支持回填
+  Starting --> Live : 无回填可做：以 venue 游标续接原 epoch / 能力不支持回填
   Backfilling --> Live : 进入 Live 时集成声明 live_from（首条实时记录的 venue seq）
   state Live {
     [*] --> LN
@@ -84,7 +84,7 @@ stateDiagram-v2
 
 ## D3.3 回填与实时边界
 
-对照：§6.3.10 回填、实时边界；Q14。
+对照：§8.4 回填、实时边界；Q14。
 
 ```mermaid
 flowchart LR
@@ -105,7 +105,7 @@ flowchart LR
 
 ## D3.4 订阅、cursor、ack、慢消费者与重连
 
-对照：§3.2 cursor 与确认、§6.4 订阅组、§6.7.2 订阅表、W6 步 3–4、W14。
+对照：§4.2 cursor 与确认、§8.5 订阅组、§7.5 订阅表、W6 步 3–4、W14。
 
 ```mermaid
 sequenceDiagram
@@ -153,19 +153,24 @@ sequenceDiagram
 
 ## D3.5 三种消费方式
 
-对照：§3.2 消费方式表。
+对照：§4.2 消费方式表。
 
-| 方式 | 触发依据 | 是否跳过 | 损失记法 | 典型消费者 |
-|---|---|---|---|---|
-| await-all | 所有输入流的**完备进度**到达要求位置 | 否（等待） | — | 依赖完整状态路径的阈值策略、程序节点的 `Join` |
-| ordered | 单流顺序 | 否（背压） | — | 程序 cursor、读模型 fold |
-| latest / conflated | 最新值 | 是 | `Gap{Delivery, conflated}` 或消费者声明的窗口界 | UI 报价显示 |
+| 方式 | 触发依据 | 是否跳过 | 损失记法 |
+|---|---|---|---|
+| await-all | 所有输入流的**完备进度**到达要求位置 | 否（等待） | — |
+| ordered | 单流顺序 | 否（背压） | — |
+| latest / conflated | 最新值 | 是 | `Gap{Delivery, conflated}` 或消费者声明的窗口界 |
 
-读法：`await-all` 看 frontier 不看 cursor——读到 Seq 60 不等于 60 之前的事件时间不再迟到。
+读法：
+
+- `await-all` 看 frontier 不看 cursor——读到 Seq 60 不等于 60 之前的事件时间不再迟到。
+- 损失语义由消费者显式声明：UI 报价显示可接受 conflation，依赖完整状态路径的阈值策略不能默认接受。
+
+核出：无。
 
 ## D3.6 gap 来源判定
 
-对照：§3.2 gap 三来源、§6.3.7 映射表、§5.4 两故障面。
+对照：§4.2 gap 三来源、§8.3 映射表、§6.7 两故障面。
 
 ```mermaid
 flowchart TB
@@ -178,4 +183,4 @@ flowchart TB
 
 读法：集成一个进程崩溃可能同时产生 `Gap{Source}`（它的流）和 `Undetermined`（它在途的 `submit`）；两面各自收敛，互不替代。
 
-核出：`Gap{Channel}` 的落点（取证 → 执行事实侧属该 Attempt；回填 / 一次性读 → 观察侧该流）原文未写——已并入 §3.2。
+核出：`Gap{Channel}` 的落点（取证 → 执行事实侧属该 Attempt；回填 / 一次性读 → 观察侧该流）原文未写——已并入 §4.2。

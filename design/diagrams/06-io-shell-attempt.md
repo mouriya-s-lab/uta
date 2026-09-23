@@ -1,12 +1,12 @@
 # 06 IO 壳：Attempt 链、取证、复合链、时序
 
-对照：§5.4、§5.5、§6.3.5、§6.3.3 归因、W1、W2、W5、W12。索引见 `README.md`。
+对照：§6.5、§6.6、§3.4、§8.2、§8.1 归因、W1、W2、W5、W12。索引见 `README.md`。
 
-身份约定（§5.4 代数）：Attempt 身份 = `attempt_position`；腿身份 `AttemptRef = (attempt_position, leg)`，单腿 `leg = 1`，`Replace` 无原子能力时 `leg = 1` 撤单、`leg = 2` 新单。图中 `r` 指一条腿。
+身份约定（代数，§6.5）：Attempt 身份 = `attempt_position`；腿身份 `AttemptRef = (attempt_position, leg)`，单腿 `leg = 1`，`Replace` 无原子能力时 `leg = 1` 撤单、`leg = 2` 新单。图中 `r` 指一条腿。
 
 ## D6.1 腿的状态机
 
-对照：§5.4 代数（腿的线性阶段链、发出前门、`SendBarrier`、`VenueAccepted` 只认业务回执）、转移表（单腿）、恢复；§6.3.5 `submit`。
+对照：§6.5 代数（腿的线性阶段链、发出前门、`SendBarrier`、`VenueAccepted` 只认业务回执）、转移表（单腿）；§6.7 恢复；§8.2 `submit`。
 
 ```mermaid
 stateDiagram-v2
@@ -49,7 +49,7 @@ stateDiagram-v2
 
 ## D6.2 取证循环（`Undetermined` 之后）
 
-对照：§5.4 对账驱动的自动化边界（取证结果与记录的固定矩阵、`ReconciliationReopened`）、先例谱系、`replay_by_key`；§6.3.5 四个读操作；§6.3.1 `CapabilityProof` 渠道声明；§6.4 `resolve`/`retry_reconciliation`；§3.2 `Gap{Channel}`。
+对照：§6.6 对账驱动（取证结果与记录的固定矩阵、`ReconciliationReopened`）、先例谱系、`replay_by_key`；§8.2 四个读操作；§8.1 `CapabilityProof` 渠道声明；§8.5 `resolve`/`retry_reconciliation`；§4.2 `Gap{Channel}`。
 
 ```mermaid
 flowchart TB
@@ -77,14 +77,14 @@ flowchart TB
 读法：
 
 - 每一步取证都是一条记录，所以重启后"做到第几个渠道"由 fold 重建，不需要驱动器内存。
-- `Unavailable` 不是证据：一个不可用的渠道不能被"跳过"，否则"没查到"会伪装成"查过了"；重试同渠道直到可用，或等会话重建后 `SessionRestored` 重开。
+- `Unavailable` 不是证据：一个不可用的渠道不能被"跳过"，否则"没查到"会伪装成"查过了"；同渠道按 pacing 重试直到可用。
 - 撤阻塞头（D6.7）让 venue 侧到达可读终态，它的作用是触发 `ReconciliationReopened{CancelLegTerminal}` 重走一轮，不是自己产生证据。
 
-核出：撤单后"重访已取证渠道"的触发原文没有——已并入 §5.4（`ReconciliationReopened`）。
+核出：撤单后"重访已取证渠道"的触发原文没有——已并入 §6.6（`ReconciliationReopened`）。
 
 ## D6.3 一次 venue 交互的记录矩阵
 
-对照：§5.4 回执与取证的记录模型；§8.5 #17；§4 归因由谁填；§6.3.8。
+对照：§6.5 回执与取证的记录模型；§10.5 #17；§5.3 归因由谁填；§8.3。
 
 | 交互 | 执行事实侧（永存，含原始字节） | 观察侧（可压缩副本） | 同事务 |
 |---|---|---|---|
@@ -105,7 +105,7 @@ flowchart LR
     E[("执行 J：VenueAccepted{…, receipt 字节, observation}<br/>或 ResolutionEvidence{r, channel, Found{observation, evidence 字节}}")]
     O[("观察 J：同内容的观察副本<br/>provenance: Receipt{r} 或 Reconciliation{r, channel}<br/>attribution: FromAttempt(r)（IO 壳填）")]
     E -->|"observation 位置引用（效应 → 观察）"| O
-    O -.->|"provenance：不透明出处值，观察侧不解析（§2.5）"| E
+    O -.->|"provenance：不透明出处值，观察侧不解析（§3.2）"| E
   end
   E --> AUD["审计 / 恢复：读执行 J 的字节，不依赖副本是否被压缩"]
   O --> RM["读模型 orders：fold 执行事实 + 归因观察"]
@@ -115,11 +115,11 @@ flowchart LR
 
 读法：Attempt 只回答"我的提交到达了吗"；订单是什么状态、成交了多少，在观察副本里给观察宇宙的消费者看，在执行记录的字节里给审计看。
 
-核出：回执字节的永存归属（C13）原文只写了观察侧记录——已并入 §5.4（执行侧持有原始字节）。
+核出：回执字节的永存归属（C13）原文只写了观察侧记录——已并入 §6.5（执行侧持有原始字节）。
 
 ## D6.4 `Replace` 复合链（无原子 cancel/replace 能力）
 
-对照：§5.2 改单是单一意图类型、§5.4 转移表复合链（`AwaitingTargetTerminal`）、§5.5 写→读→写、W12、§7.2 #8。
+对照：§6.2 改单是单一意图类型、§6.5 转移表复合链（`AwaitingTargetTerminal`）、§3.4 写→读→写、W12、§9.2 #8。
 
 ```mermaid
 stateDiagram-v2
@@ -154,11 +154,11 @@ stateDiagram-v2
 - 撤单腿被拒、缺席或过期 → 链终结、新腿永不发；负责人看观察记录另起单据。
 - 崩在撤单腿终态已持久、新腿未 `SendBarrier`（#8）：先 fold 链是否已 `Resolved`；未完则续 `AwaitingTargetTerminal`，读目标终态算量，过门后发新腿。
 
-核出：等待目标终态的完整出边（非终态 / 未见 / 不可用 / `deadline`）与腿身份原文没有——已并入 §5.4。
+核出：等待目标终态的完整出边（非终态 / 未见 / 不可用 / `deadline`）与腿身份原文没有——已并入 §6.5。
 
 ## D6.5 正常下单闭环时序（W1）
 
-对照：W1 步 1–7；§5.1、§5.2、§5.3、§5.4、§6.3.5、§6.3.6、§6.4 读模型。
+对照：W1 步 1–7；§6.1、§6.2、§6.3、§6.5、§8.2、§8.3、§8.5 读模型。
 
 ```mermaid
 sequenceDiagram
@@ -198,7 +198,7 @@ sequenceDiagram
 
 ## D6.6 `NoResponse` → 取证 → 停等 → 人工（W2）
 
-对照：W2 步 1–4；§5.4 恢复、对账驱动；§6.1 第 1/3 步；§6.4 `read`、`resolve`。
+对照：W2 步 1–4；§6.7 恢复、§6.6 对账驱动；§7.2 第 1/3 步；§8.5 `read`、`resolve`。
 
 ```mermaid
 sequenceDiagram
@@ -218,26 +218,28 @@ sequenceDiagram
     IO->>EJ: append Undetermined((p,1), CrashWindow)（同事务回查）
     Note over IO,I: 重启第 3 步：新会话 B（新 session_seq）；第 4 步：启动对账
   end
-  Note over IO: 渠道集 = 能力证据声明的渠道；无 by-key 能力则跳过该渠道
-  IO->>I: query_by_key(key)
-  alt Found(state)
-    I-->>IO: Found
-    IO->>EJ: ResolutionEvidence{(p,1), ByKey, Found{observation, evidence}}
-    IO->>OJ: 同事务 观察副本(Reconciliation{(p,1), ByKey})
-    Note over IO: 腿终结
-  else Absent
-    I-->>IO: Absent
-    IO->>EJ: ResolutionEvidence{(p,1), ByKey, Absent} → 腿终结（本次未发生）
-  else Unavailable
-    I-->>IO: Unavailable
-    IO->>EJ: Gap{Channel, ByKey}；同渠道稍后再发
-  else ByKey 已用尽或不可用 → 下一渠道
+  Note over IO: 渠道集 = 能力证据声明的渠道，按固定顺序取证
+  alt 有 by-key 能力
+    IO->>I: query_by_key(key)
+    alt Found(state)
+      I-->>IO: Found
+      IO->>EJ: ResolutionEvidence{(p,1), ByKey, Found{observation, evidence}}
+      IO->>OJ: 同事务 观察副本(Reconciliation{(p,1), ByKey})
+      Note over IO: 腿终结
+    else Absent
+      I-->>IO: Absent
+      IO->>EJ: ResolutionEvidence{(p,1), ByKey, Absent} → 腿终结（本次未发生）
+    else Unavailable
+      I-->>IO: Unavailable
+      IO->>EJ: Gap{Channel, ByKey}；同渠道按 pacing 再发（不换渠道）
+    end
+  else 无 by-key 能力（该渠道跳过）→ listing 起
     IO->>I: list_open(scope)
     I-->>IO: Listing（核心按归因身份匹配）
     IO->>EJ: 未命中 → ResolutionEvidence{(p,1), Listing, Inconclusive}
     IO->>I: list_fills(scope, since) → 同上；replay_by_key（若开启）→ 同上
     IO->>EJ: 渠道穷尽：停等；腿留在阻塞头集合
-    OP->>IO: read(scopes, orders, by venue_order_id)（§6.4；核心 → 集成 read）
+    OP->>IO: read(scopes, orders, by venue_order_id)（§8.5；核心 → 集成 read）
     IO->>OJ: 观察记录 @obs（provenance OneShot{origin: Session(OP)}）
     OP->>IO: resolve((p,1), Found(obs), note)
     IO->>EJ: 授权 ✓ 腿处于 Undetermined ✓ obs 属该 WriteScope ✓ → ResolutionEvidence{(p,1), Manual, Found{obs}} → 腿终结
@@ -252,7 +254,7 @@ sequenceDiagram
 
 ## D6.7 同 lane 并发与撤阻塞头（W5）
 
-对照：W5 正常—失败路径与扩展路径；§5.3 lane 步、无第二类越顶队列；§5.2 目标身份来源之二；§5.4 `ReconciliationReopened{CancelLegTerminal}`。
+对照：W5 正常—失败路径与扩展路径；§6.4 lane 步、无第二类越顶队列；§6.2 目标身份来源之二；§6.6 `ReconciliationReopened{CancelLegTerminal}`。
 
 ```mermaid
 sequenceDiagram
@@ -277,14 +279,19 @@ sequenceDiagram
   IO->>I: SendBarrier(p3,1) → submit cancel
   I-->>IO: Ack → VenueAccepted((p3,1))（撤单腿终结，不决议 p1）
   IO->>IO: append ReconciliationReopened{(p1,1), CancelLegTerminal((p3,1))}
-  IO->>I: 重走一轮：query_by_key(p1 key)
-  alt 读到目标（已撤或任何状态）
-    I-->>IO: Found → ResolutionEvidence{(p1,1), ByKey, Found} → 腿终结
-  else ByKey 明确否定
-    I-->>IO: Absent → ResolutionEvidence{(p1,1), ByKey, Absent} → 腿终结
-  else ByKey 无能力 / 本轮未给出结果
+  Note over IO: 重走一轮：按能力证据声明的渠道从头取证（D6.2）
+  alt 有 by-key 能力
+    IO->>I: query_by_key(p1 key)
+    alt 读到目标（已撤或任何状态）
+      I-->>IO: Found → ResolutionEvidence{(p1,1), ByKey, Found} → 腿终结
+    else ByKey 明确否定
+      I-->>IO: Absent → ResolutionEvidence{(p1,1), ByKey, Absent} → 腿终结
+    else Unavailable
+      I-->>IO: Unavailable → Gap{Channel, ByKey}；同渠道按 pacing 再发（不换渠道）
+    end
+  else 无 by-key 能力（该渠道跳过）
     IO->>I: list_open(scope)
-    I-->>IO: Listing 未见目标 → Inconclusive（F10）→ 继续下一渠道；穷尽仍停等
+    I-->>IO: Listing 未见目标 → Inconclusive（F10）→ 下一渠道；穷尽仍停等
   end
   Note over S: 集合清空 → lane 解除 → T2 放行，先过期步再过门 → Prepared @p2
   Note over UI,I: 另一 lane（不同账户）的写全程不等待
@@ -292,4 +299,4 @@ sequenceDiagram
 
 读法：撤单让 venue 侧到达一个读得出的终态，并触发阻塞头重开一轮取证；阻塞头仍只由取证收敛，撤单不提升任何渠道的证明力（listing 未见仍是 `Inconclusive`）。两条路径（撤阻塞头 / `bypass_lane`）都让该 lane 出现两条 `SendBarrier`，区别只在有无 `bypass_lane` Decision。
 
-核出："读不到即 `Absent`"的原表述违反 F10——已改为 by-key 否定才 `Absent`（§5.3/W5）。
+核出："读不到即 `Absent`"的原表述违反 F10——已改为 by-key 否定才 `Absent`（§6.4、W5）。

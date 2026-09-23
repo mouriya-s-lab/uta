@@ -1,10 +1,10 @@
 # 02 记录模型：信封、位置、值树、两个宇宙
 
-对照：§2.2、§2.3、§2.4、§2.5、§4、§5.4 记录模型、§6.7.2。索引见 `README.md`。
+对照：§2.1、§2.3、§2.5、§3.1、§5、§6.5 记录模型、§7.5。索引见 `README.md`。
 
 ## D2.1 一条记录进核心：信封 / 锚点 / 处理器 / 载荷
 
-对照：§2.2（信封与反向代理、协议 = 注册单元）、§6.3.2 锚点表、§6.3.3 处理器字段注册表、§6.3.4 `payload_schema`。
+对照：§2.1（信封与反向代理）、§2.2（协议 = 注册单元）、§8.1 锚点表、处理器字段注册表、`payload_schema`。
 
 ```mermaid
 flowchart LR
@@ -37,7 +37,7 @@ flowchart LR
 
 ## D2.2 一条流的时间线：epoch、Seq、三种进度
 
-对照：§2.3（位置、三种进度、保留语义）、§3.2 gap 三来源、§6.3.10 实时边界。
+对照：§2.3（位置、三种进度）、§2.4（保留语义）、§4.2 gap 三来源、§8.4 实时边界。
 
 ```mermaid
 flowchart LR
@@ -47,12 +47,12 @@ flowchart LR
   end
   subgraph E2["StreamId = (source, stream, epoch 2)"]
     direction LR
-    B0["Seq 1 = Gap{Source, disconnect}<br/>含前一 StreamId 与最后 Seq 1200"] --- B1["Seq 2 backfilled"] --- B2["…"] --- B3["Seq 40：首条实时记录<br/>（其 venue seq ≥ live_from）"] --- B4["…"] --- B5["Seq 88"]
+    B0["Seq 1 = Gap{Source, disconnect}<br/>含前一 StreamId 与最后 Seq 1200"] --- B1["Seq 2 backfilled"] --- B2["…"] --- B3["Seq 40：首条实时记录<br/>（其 venue seq = live_from）"] --- B4["…"] --- B5["Seq 88"]
   end
   A6 -.->|"断线无游标 → 新 epoch"| B0
-  RET["保留边界<br/>epoch1 @ 901<br/>= min(配置窗口下界, 最早登记引用)"] -.-> A4
+  RET["保留边界<br/>epoch1 @ 901<br/>≤ min(配置窗口下界, 最早登记引用)（可推进上限）"] -.-> A4
   CUR["消费位置 cursor<br/>订阅者 X：epoch2 @ 60"] -.-> B4
-  FR["完备进度 frontier = 逻辑时间 t（有游标：按证据；无游标：received_at − 滞后界）<br/>完备位置 = 推进时的流末 epoch2 @ 88（§4：basis_valid 只比较位置）"] -.-> B5
+  FR["完备进度 frontier = 逻辑时间 t（有游标：按证据；无游标：received_at − 滞后界）<br/>完备位置 = 推进时的流末 epoch2 @ 88（§5.2：basis_valid 只比较位置）"] -.-> B5
 ```
 
 读法：
@@ -65,7 +65,7 @@ flowchart LR
 
 ## D2.3 `DerivationNode` 值树与五个 fold
 
-对照：§2.4（组合子值树、五个 fold、同一 enum 的四处使用）、§3.3、§5.1、§6.5 装载期校验。
+对照：§2.5（组合子值树、五个 fold、同一 enum 的四处使用）、§4.3、§6.1、§8.6 装载期校验。
 
 ```mermaid
 flowchart TB
@@ -100,7 +100,7 @@ flowchart TB
 
 ## D2.4 两个类型宇宙与唯一边（含边的四种承载）
 
-对照：§2.5（第一边界、两套抽象、允许/禁止关系表）、§3.4（读副作用、读即观察记录）、§4（`basis`、归因记录归观察/响应归效应）、§5.4 记录模型。
+对照：§3.1–§3.3（第一边界、两套抽象、允许/禁止关系表）、§3.4（读副作用、读即观察记录）、§5（`basis`、归因记录归观察/响应归效应）、§6.5 记录模型。
 
 ```mermaid
 flowchart LR
@@ -137,7 +137,7 @@ flowchart LR
 
 读法：
 
-- 边的方向唯一：效应侧读观察侧，或效应侧产生观察记录。①–③ 是"效应侧记录里放一个观察位置"或"效应侧代码读观察值"；④ 是效应侧写入观察 J。观察记录上的 `provenance`/`attribution` 是不透明的位置值，观察侧存它、路由它、不解析它——边约束的是类型依赖与语义消费（§2.5）。
+- 边的方向唯一：效应侧读观察侧，或效应侧产生观察记录。①–③ 是"效应侧记录里放一个观察位置"或"效应侧代码读观察值"；④ 是效应侧写入观察 J。观察记录上的 `provenance`/`attribution` 是不透明的位置值，观察侧存它、路由它、不解析它——边约束的是类型依赖与语义消费（§3.2）。
 - 同一个程序值跨两边：解释①在观察宇宙产派生记录，解释②在效应宇宙产 `EffectRequest`——程序是值不是类型，所以不构成反向引用。
 - 撤回不跨边：行情修订撤回旧派生信号，已发出的 `SendBarrier` 只能追加后续事实（W16）。
 
@@ -145,7 +145,7 @@ flowchart LR
 
 ## D2.5 记录种类总表（假想磁盘上有什么）
 
-对照：§2.5、§3.1、§3.2、§5.1、§5.2、§5.3、§5.4、§6.4、§6.5、§6.7.2。这张表是 D1.4 的"内容"侧：每种记录归哪个 `Journal`、谁 append、关键字段、引用了谁。
+对照：§3.1、§4.1、§4.2、§6.1、§6.2、§6.3、§6.5、§8.5、§8.6、§7.5。这张表是 D1.4 的"内容"侧：每种记录归哪个 `Journal`、谁 append、关键字段、引用了谁。
 
 | Journal | 记录 | 写者 | 关键字段 | 位置引用（→ 谁） |
 |---|---|---|---|---|
@@ -158,9 +158,9 @@ flowchart LR
 | 观察 | 派生记录（含 alert） | 派生 DAG | 程序流 `StreamId`、`RetractableDelta` | — |
 | 观察 | `ProgramReset{reason}` / `ProgramFailed{reason}` | 宿主协议 | 程序 id、`reason` | — |
 | 观察 | 健康 / readiness 派生观察 | 集成推送入口 | 集成、账户、`reach`、`tier`、`readiness` | — |
-| 执行 | `TicketAction`：`Draft` / `Revise` / `Transfer` / `SubmitForDecision` / `SendBack` / `Close(outcome)` | 单据 | `ticket_id`、`by: principal`、`basis`、意图版本 hash | `basis` → 观察位置 + `EffectRequest` 位置 |
+| 执行 | `TicketAction`：`Draft` / `Revise` / `Transfer` / `SubmitForDecision` / `SendBack` / `Close(outcome)` | 单据 | `ticket_id`、`by: principal`、`basis`、意图版本 hash | `basis` → 观察位置（含归因观察）+ 执行事实侧位置（`EffectRequest` / `VenueAccepted` / `SendBarrier`） |
 | 执行 | Decision / `Outcome` / `Rejection` | STS 规则链 | `ticket_id`、绑定 `current_version`、`principal`、`rule_version`、`checked_as_of` | → 单据记录；`checked_as_of` → 观察位置 |
-| 执行 | `Prepared` | 单据（放行事务） | `attempt_position` 即自身位置、`WriteLaneKey`、`OperationKind`、`deadline`、`idempotency_key`、`target?`、意图载荷 | → `Close(Prepared)` 同事务 |
+| 执行 | `Prepared` | 单据（放行事务） | `attempt_position` 即自身位置、`WriteLaneKey`、`OperationKind`、`deadline`、`target?`、意图载荷 | → `Close(Prepared)` 同事务 |
 | 执行 | `SendBarrier` | IO 壳（fsync） | `AttemptRef = (attempt_position, leg)`、该腿的 `idempotency_key` | → `Prepared` |
 | 执行 | `VenueAccepted{venue_order_id, receipt, observation}` | IO 壳 | `AttemptRef`、`venue_order_id`、`receipt: RawPayload`（永存） | `observation` → 回执观察副本 |
 | 执行 | `VenueRejected(reason)` | IO 壳 | `AttemptRef`、`reason`（含 `Unmapped(raw)`） | → `Prepared` |
@@ -181,6 +181,6 @@ flowchart LR
 读法：
 
 - lane 的阻塞头、`Resolved`、单据状态、"下一取证渠道"都不是记录，是执行 J 的 fold；磁盘上只有上表。
-- 观察 J 的记录可被压缩到保留边界之下；执行 J 的记录永不删除，但可以落到边界之下而不再被精确重建（§2.3）。
+- 观察 J 的记录可被压缩到其所在流的保留边界之下；执行 J 的记录永不删除，没有保留边界（§2.4）。
 
-核出：回执与取证证据的原始字节归执行事实（C13）、观察侧只是可压缩副本；腿身份 `AttemptRef`；`EffectResponse`；`ReconciliationReopened`；`checked_as_of`——均在画图/复核时并入正文（§5.1、§5.2、§5.3、§5.4）。
+核出：回执与取证证据的原始字节归执行事实（C13）、观察侧只是可压缩副本；腿身份 `AttemptRef`；`EffectResponse`；`ReconciliationReopened`；`checked_as_of`——均在画图/复核时并入正文（§6.1、§6.2、§6.3、§6.5）。

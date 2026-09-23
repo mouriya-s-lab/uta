@@ -1,10 +1,10 @@
 # 01 进程拓扑、启动、会话 epoch、持久化归属
 
-对照：§6.1、§6.3.6、§6.7。索引见 `README.md`。
+对照：§7.1、§7.2、§7.4、§7.5、§8.3。索引见 `README.md`。
 
 ## D1.1 进程拓扑与信道
 
-对照：§6.1（进程、信任边界、凭据链、传输）、§6.4（principal）、§6.7.1（单写者）、§6.7.3（配置文件与运行期登记）。
+对照：§7.1（进程、信任边界、凭据链、传输）、§8.5（principal）、§7.4（单写者）、§7.6（配置文件与运行期登记）。
 
 ```mermaid
 flowchart TB
@@ -45,7 +45,7 @@ flowchart TB
 
 ## D1.2 启动五步
 
-对照：§6.1"启动与接管的顺序"第 1–5 步；§5.4 恢复；§7.2 #15/#21。
+对照：§7.2 启动与接管顺序第 1–5 步；§6.7 恢复；§9.2 #15/#21。
 
 ```mermaid
 sequenceDiagram
@@ -84,8 +84,8 @@ sequenceDiagram
   N->>N: STS 链按 RuleState 续跑待决单据；按 deadline 重装过期计时器
   Note over N,H: 第 5 步 恢复观察侧与消费面
   N->>I: 按订阅表重建路由，按需 backfill
-  N->>H: 拉起宿主并登记；Load(program, checkpoint, budget)
-  H-->>N: Loaded 或 LoadRejected
+  N->>H: 拉起宿主并登记；比对 checkpoint 的 state_version → Load(program, checkpoint?, budget)
+  H-->>N: Loaded 或 LoadRejected（版本不被接受不是 LoadRejected：不携带 checkpoint 装载并 Reset，D4.2）
   N->>A: 开放会话；此前 health() 返回 Starting
 ```
 
@@ -95,11 +95,11 @@ sequenceDiagram
 - 第 4 步先取证后发送：已能 `Resolved` 的 lane 先解除，再放未发出的 `Prepared`；发送依赖第 3 步的会话 epoch。
 - 任一步失败整体拒绝启动，不进入部分运行态；消费方在第 5 步之前只看到 `Starting`。
 
-核出：第 4 步原文只写了取证与发送，没写 `EffectRequest` 重派与待决单据的计时器重装——已并入 §6.1 第 4 步。
+核出：第 4 步原文只写了取证与发送，没写 `EffectRequest` 重派与待决单据的计时器重装——已并入 §7.2 第 4 步。
 
 ## D1.3 会话 epoch 与边界接受
 
-对照：§6.1 第 3 步、§6.3.6（推送错误列）、§6.3.10 readiness、§6.7.3 `rotate_credential`。
+对照：§7.2 第 3 步、§8.3（推送错误）、§8.4 readiness、§7.6 `rotate_credential`。
 
 ```mermaid
 stateDiagram-v2
@@ -131,7 +131,7 @@ stateDiagram-v2
 
 ## D1.4 持久化归属：谁写哪张表
 
-对照：§6.7.2 持久化归属表；§6.7.3 运行期登记文件；§6.2"执行事实 append 链的唯一写入口"。
+对照：§7.5 持久化归属表；§7.6 运行期登记文件；§7.3“执行事实 append 链的唯一写入口”。
 
 ```mermaid
 flowchart LR
@@ -162,6 +162,7 @@ flowchart LR
     PT[("进程表 (instance_id, pid, start_time, role)")]
     RB[("保留边界 + 引用登记")]
     SN[("快照")]
+    IID[("instance_id")]
   end
   subgraph F["统一路径文件（核心写、Alice 只读）"]
     RUN["运行期登记：instance_id · 格式版本 · 最近快照位置"]
@@ -183,16 +184,19 @@ flowchart LR
   IOE --> CAP
   HOSTP --> CK
   FENCE --> PT
-  FENCE -->|"instance_id（与 fence 同事务）"| EJ
+  FENCE -->|"instance_id += 1（与 fence 同事务）"| IID
   FENCE --> RUN
   RET --> RB
-  IOE -.->|"Prepared / ResolutionEvidence 自动登记引用"| RB
+  TK -.->|"Prepared 同事务自动登记 basis"| RB
+  IOE -.->|"ResolutionEvidence 自动登记引用"| RB
+  ATTR -.->|"ResolutionEvidence 自动登记引用"| RB
+  CTL -.->|"ResolutionEvidence 自动登记引用"| RB
   HOSTP -.->|"Checkpoint 自动登记 cursor"| RB
 ```
 
 读法：
 
-- 观察 J 有四类写者，执行 J 有七类；两侧共享存储原语但类型宇宙不共享（§3.1）。
+- 观察 J 有四类写者，执行 J 有七类；两侧共享存储原语但类型宇宙不共享（§4.1）。
 - 读模型不写任何表：它是执行 J（+ 归因观察）的只读 fold，随请求或订阅计算。
 - 引用登记不是独立写者动作：随 `Prepared`/`Checkpoint`/`ResolutionEvidence` 的 append 自动写入，随 `Resolved`/下一 checkpoint 自动解除（D8.1）。
 
@@ -200,21 +204,21 @@ flowchart LR
 
 ## D1.5 同事务集合
 
-对照：§6.7.1 事务原子性；§5.1 请求完成事实；§5.2 与写边界的接口；§5.4 记录模型；§6.5 `Advance`；§6.1 第 1 步。
+对照：§7.4 事务原子性；§6.1 请求完成事实；§6.2 与写边界的接口；§6.5 记录模型；§8.6 `Advance`；§7.2 第 1 步。
 
-| 同一 SQLite 事务内必须一起提交 | 依据 | 崩在中途的后果（§7.2） |
+| 同一 SQLite 事务内必须一起提交 | 依据 | 崩在中途的后果（§9.2） |
 |---|---|---|
-| `Close(Prepared(position))` + `Prepared` | §5.2、§6.7.1 | #1：二者皆无，单据仍 `AwaitingDecision` |
-| Decision / `Outcome` / `Rejection` 记录 + `RuleState` 更新 | §6.7.1 | 链步未发生，重启按 `RuleState` 重跑该步 |
-| 程序写处理器的 `Draft` + `SubmitForDecision` + `EffectResponse{Drafted}` | §5.1 | #21：无 `EffectResponse` → 重派开单 |
-| 读处理器的观察记录 / `Gap{Channel}` + `EffectResponse{Observed / Unavailable}` | §5.1 | #21：无 `EffectResponse` → 重新执行一次 |
-| `submit` 的 `Ack`：`VenueAccepted`（含回执字节）+ 回执观察副本 | §5.4 记录模型 | #5：视为无后继 → `Undetermined` → by-key 取证重得同一状态 |
-| 一次取证命中：`ResolutionEvidence{Found}`（含证据字节）+ `provenance: Reconciliation` 观察副本 | §5.4 | #7：该次取证不存在，下一轮重做（读可重试） |
-| 推送归因命中：观察记录 + `ResolutionEvidence{Attributed}` | §5.4、§6.3.3 | 推送未 append：核心崩溃即集成成孤儿被回收，重启握手后该流续接（集成以 venue 游标证明）或新 epoch + `Gap{Source}`；续接则记录重到，仍处 `Undetermined` 的腿照常归因 |
-| `Undetermined` append + 回查已到达的归因观察 | §5.4 | 二者同事务，不存在"归因已到但未匹配"的持久态 |
-| `Advance` 输出：`EffectRequest` 记录 + 派生记录 + `Checkpoint` + 程序 cursor | §6.5 | #16：整批不存在，重放同一批记录 |
-| fence 取得 + `instance_id += 1` | §6.1 第 1 步 | 未提交则旧 `instance_id` 仍有效，重来 |
-| 单条观察 append + `LogPosition` 分配 | §6.7.1 | #9：半写不可见 |
+| `Close(Prepared(position))` + `Prepared` | §6.2、§7.4 | #1：二者皆无，单据仍 `AwaitingDecision` |
+| Decision / `Outcome` / `Rejection` 记录 + `RuleState` 更新 | §7.4 | 链步未发生，重启按 `RuleState` 重跑该步 |
+| 程序写处理器的 `Draft` + `SubmitForDecision` + `EffectResponse{Drafted}` | §6.1 | #21：无 `EffectResponse` → 重派开单 |
+| 读处理器的观察记录 / `Gap{Channel}` + `EffectResponse{Observed / Unavailable}` | §6.1 | #21：无 `EffectResponse` → 重新执行一次 |
+| `submit` 的 `Ack`：`VenueAccepted`（含回执字节）+ 回执观察副本 | §6.5 记录模型 | #5：视为无后继 → `Undetermined` → by-key 取证重得同一状态 |
+| 一次取证命中：`ResolutionEvidence{Found}`（含证据字节）+ `provenance: Reconciliation` 观察副本 | §6.5 | #7：该次取证不存在；fold 显示本轮该渠道未取证，重做（读可重试） |
+| 推送归因命中：观察记录 + `ResolutionEvidence{Attributed}` | §6.6、§8.1 | 推送未 append：核心崩溃即集成成孤儿被回收，重启握手后该流续接（集成以 venue 游标证明）或新 epoch + `Gap{Source}`；续接则记录重到，仍处 `Undetermined` 的腿照常归因 |
+| `Undetermined` append + 回查已到达的归因观察 | §6.6 | 二者同事务，不存在"归因已到但未匹配"的持久态 |
+| `Advance` 输出：`EffectRequest` 记录 + 派生记录 + `Checkpoint` + 程序 cursor | §8.6 | #16：整批不存在，重放同一批记录 |
+| fence 取得 + `instance_id += 1` | §7.2 第 1 步 | 未提交则旧 `instance_id` 仍有效，重来 |
+| 单条观察 append + `LogPosition` 分配 | §7.4 | #9：半写不可见 |
 
 读法：`SendBarrier` 不在任何集合里——它单独 durable append（fsync）后才允许 `submit`，这正是把崩溃窗口二分的屏障（D6.1）。
 

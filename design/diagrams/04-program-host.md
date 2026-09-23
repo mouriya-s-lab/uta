@@ -1,10 +1,10 @@
 # 04 程序宿主：`Advance` 循环、生命周期、`EffectRequest` 分派
 
-对照：§3.3、§5.1、§6.5、§6.7.2 程序状态、W10、W17、§7.2 #16/#21。索引见 `README.md`。
+对照：§4.3、§6.1、§8.6、§7.5 程序状态、W10、W17、§9.2 #16/#21。索引见 `README.md`。
 
 ## D4.1 一轮 `Advance`
 
-对照：§6.5 宿主协议、§3.3 输入 = 位置推进、§5.1 出口、§6.7.2 `Checkpoint` 与 cursor 同事务、§3.2 程序订阅。
+对照：§8.6 宿主协议、§4.3 输入 = 位置推进、§6.1 出口、§7.5 `Checkpoint` 与 cursor 同事务、§4.2 程序订阅。
 
 ```mermaid
 sequenceDiagram
@@ -58,24 +58,25 @@ sequenceDiagram
 - 事务边界在 `COMMIT`：`Emit` 是否"发生"以 `EffectRequest` 记录是否持久为准；处理器执行在其后，通过位置引用与请求关联（D4.3）。
 - `fetch.bars`（读）与 `trade.place`（写）对程序是同一构造子；差别在注册表。
 
-核出：读处理器的每种完成结果（含空结果、`Unavailable`、`Unsupported`）都需要与请求同寿命的完成事实——已并入 §5.1（`EffectResponse`）。
+核出：读处理器的每种完成结果（含空结果、`Unavailable`、`Unsupported`）都需要与请求同寿命的完成事实——已并入 §6.1（`EffectResponse`）。
 
 ## D4.2 程序生命周期
 
-对照：§6.5 `Load`/`Reset`/`Unload`、预算语义、状态迁移；§6.4 `load_program`/`unload_program`；§3.2 `program_upgrade`。
+对照：§8.6 `Load`/`Reset`/`Unload`、预算语义、状态迁移、运维冷启动；§8.5 `load_program`/`unload_program`；§4.2 `program_upgrade`。
 
 ```mermaid
 stateDiagram-v2
-  [*] --> Loading : load_program(manifest_ref) 或 启动第 5 步
+  [*] --> Loading : load_program(manifest_ref, cold_start?) 或 启动第 5 步
   Loading --> Running : Load(program, checkpoint?, budget) → Loaded{state_version}
   Loading --> Rejected : LoadRejected（Id 越界/环、required_inputs 缺、含 Pooled 而子系统未装）
   state "Reset 处理中" as RST
-  Loading --> RST : state_version 不符 → Reset(StateVersionMismatch)
+  Loading --> RST : 核心 Load 前比对：checkpoint 的 state_version 不被程序接受 → 不携带装载，Reset(StateVersionMismatch)；替换时 Reset(Replace)
+  Loading --> RST : load_program(…, cold_start = true) → 不携带 checkpoint 装载，Reset(Operator)
   RST --> Running : append ProgramReset；程序流新 epoch Gap{Source, program_upgrade}；按 H9 回填
   Running --> Running : Advance 循环（D4.1）
   Running --> Failed : 超预算 / trap（宿主异常退出） → 终止宿主，append ProgramFailed
   Running --> Unloaded : unload_program → Unload，清除进程登记，最近 Checkpoint 保留
-  Failed --> Loading : load_program 重新装载（携最近 Checkpoint）
+  Failed --> Loading : load_program 重新装载（携最近 Checkpoint；状态本身致 trap 时用 cold_start）
   Unloaded --> Loading : 替换程序 = Unload 旧 + Load 新（携旧 checkpoint；新程序不接受旧版本 → Reset(Replace)）
   Rejected --> [*]
   note right of Running
@@ -91,7 +92,7 @@ stateDiagram-v2
 
 ## D4.3 `EffectRequest` 分派与重启重派
 
-对照：§5.1（读/写处理器、`EffectResponse`、请求与响应的关联是引用）、§3.4 读即观察记录、§6.2 出站请求处理器、§7.2 #21、§6.1 第 4 步。
+对照：§6.1（读/写处理器、`EffectResponse`、请求与响应的关联是引用）、§3.4 读即观察记录、§7.3 出站请求处理器、§9.2 #21、§7.2 第 4 步。
 
 ```mermaid
 flowchart TB
@@ -104,7 +105,7 @@ flowchart TB
   RD -->|"流未声明 / 能力不支持"| R3["EffectResponse{pos, Unsupported}（不调用集成）"]
   REG -->|"写处理器"| WR["同事务 Draft{responsible = 装载 principal, basis ∋ pos}<br/>+ SubmitForDecision + EffectResponse{pos, Drafted(ticket)}"]
   REG -->|"未注册"| UH["Unhandled：留在日志，无 EffectResponse"]
-  subgraph RESTART["重启（§6.1 第 4 步）：fold 出已注册且无 EffectResponse 的 EffectRequest"]
+  subgraph RESTART["重启（§7.2 第 4 步）：fold 出已注册且无 EffectResponse 的 EffectRequest"]
     Q1{"有 EffectResponse{request = pos}？"}
     Q1 -->|"无，读处理器"| RD2["重新执行一次"]
     Q1 -->|"无，写处理器"| WR2["重新开单（Draft 与 Drafted 同事务，'有 Draft 无响应'不可达）"]

@@ -9,8 +9,8 @@ You are a read-only discussion partner for the agent that spawned you. The topic
 
 ## Ground
 
-- Design: `design/uta-design.md` — one document: §1 domain facts (F/O/S/H/P/C numbered) and maintainer quotes (B/C), §2–§6 the design and its boundary contracts, §7 walkthroughs, §8 evaluation and open items (SP-n spikes, OD-n decisions), §9 glossary. Read it fully before your first answer; cite facts by number and sections by §.
-- Subsystem: `design/hpc-derivation/design.md` — the optional derivation compute subsystem, a separate module; its interface to the core is `uta-design.md` §6.6, its own evidence is `design/hpc-derivation/research/fp-07..12-*.md`.
+- Design: `design/core/00-reading-guide.md` … `11-glossary.md` — the core design split into chapters, section `§N.M` lives in the file prefixed `N`: §0 reading guide and evidence tags, §1 domain facts (F/O/S/H/P/C numbered) and maintainer quotes (B), §2–§8 the design and its boundary contracts, §9 walkthroughs and crash matrix, §10 evaluation (alternatives, risks, falsifiers, acceptance items), §11 glossary and research index. Read §0 first and every chapter before your first answer; cite facts by number and sections by §.
+- Subsystem: `design/hpc-derivation/design.md` — the optional derivation compute subsystem, a separate module; its interface to the core is §8.7 (`design/core/08-interfaces.md`), its own evidence is `design/hpc-derivation/research/fp-07..12-*.md`.
 - Evidence: `design/research/fp-00..06-*.md` — first-source case studies for the core. Every [证据] claim in the design points here; check the claim against the cited proposition before accepting it.
 - Everything else in the repo (`src/`, `services/`, `packages/`, `ui/`) is the old design and carries no authority. Do not read it as a basis for argument.
 

@@ -1,10 +1,10 @@
 # 09 Alice 会话、操作集落点、人工决议、控制动作
 
-对照：§6.4、§6.1 信任边界、§6.7.3、W14、W19、W8。索引见 `README.md`。
+对照：§8.5、§7.1 信任边界、§7.6、W14、W19、W8。索引见 `README.md`。
 
 ## D9.1 会话建立、身份与重连（W14、W19）
 
-对照：§6.4 会话与 principal、已定事实；§6.1 H7；W14 步 3；W19 步 1–2；§7.2 #20。
+对照：§8.5 会话与 principal、已定事实；§7.1 H7；W14 步 3；W19 步 1–2；§9.2 #20。
 
 ```mermaid
 sequenceDiagram
@@ -18,7 +18,7 @@ sequenceDiagram
   A->>C: handshake(contract_version, actor)
   alt 契约版本不兼容
     C-->>A: 拒绝会话，记 P14
-  else 启动第 5 步之前（§6.1 最后开放 Alice 会话）
+  else 启动第 5 步之前（§7.2 最后开放 Alice 会话）
     C-->>A: 会话可建立；除 handshake / health 外的操作一律返回 Starting，不给部分状态
   else 正常
     C-->>A: Session{principal = (os_user, actor), instance_id, contract_version}
@@ -40,7 +40,7 @@ sequenceDiagram
 
 ## D9.2 操作集到核心元素的落点
 
-对照：§6.4 操作集表；§6.2 模块指南；§3.4 读副作用与读模型；§6.3.5 `read`。
+对照：§8.5 操作集；§7.3 模块指南；§3.4 读副作用、§4.4 读模型；§8.2 `read`。
 
 ```mermaid
 flowchart LR
@@ -49,7 +49,7 @@ flowchart LR
     S2["read(scopes, selector, range?, deadline)"]
     S3["read_model(kind, as_of?)"]
     S4["draft / revise / submit_for_decision / decide / send_back / withdraw / transfer"]
-    S5["load_program · unload_program · reload_config · rotate_credential · restart_integration · request_snapshot · advance_retention · rewind_cursor · bypass_lane"]
+    S5["load_program(manifest_ref, cold_start?) · unload_program · reload_config · rotate_credential · restart_integration · request_snapshot · advance_retention · rewind_cursor · bypass_lane"]
     S6["resolve(attempt: AttemptRef, Found(obs) 或 Absent, note)"]
     S6b["retry_reconciliation(attempt: AttemptRef)"]
     S7["health()"]
@@ -81,11 +81,11 @@ flowchart LR
 
 读法：写类按 `(principal, WriteLaneKey, OperationKind)` 授权，控制与决议按 `(principal, 动作种类)` 授权，同一规则族；三组都留下带 principal 的记录。
 
-核出：`read` 与 `resolve` 两组上一轮已并入 §6.4。
+核出：`read` 与 `resolve` 两组上一轮已并入 §8.5。
 
 ## D9.3 人工决议流程
 
-对照：§6.4 决议组；§5.4 对账驱动的自动化边界；§3.4 读即观察记录。
+对照：§8.5 决议组；§6.6 对账驱动；§3.4 读即观察记录。
 
 ```mermaid
 flowchart TB
@@ -111,7 +111,7 @@ flowchart TB
 
 ## D9.4 控制动作触发的记录
 
-对照：§6.4 控制组；§6.7.3 每文件契约与原子替换；§6.1 第 3 步；§3.2 gap 原因；W8。
+对照：§8.5 控制组；§7.6 每文件契约与原子替换；§7.2 第 3 步；§4.2 gap 原因；W8。
 
 ```mermaid
 flowchart LR
@@ -131,7 +131,7 @@ flowchart LR
   A1r --> F1c["读运行期参数文件：快照频率 · 派生侧留存窗口 · deadline 全局缺省 · 投递缓冲上限<br/>合法 → Applied；不合法 → Rejected，保留上一有效版本；不改规则版本"]
   A2 --> F2["凭据链 文件 → 核心 → 集成；该集成新 session_seq<br/>各流强制新 epoch Gap{Source, credential_rotated}"]
   A3 --> F3["终止并重新拉起集成进程；新 session_seq；各流按游标证明决定续接或新 epoch"]
-  A4 --> F4["宿主 Load / Unload（D4.2）"]
+  A4 --> F4["宿主 Load / Unload（D4.2）；cold_start → 不携带 Checkpoint，ProgramReset{Operator}"]
   A5 --> F5["写快照（仅加速重建，不改 append-only）"]
   A6 --> F6["D8.2"]
   A7 --> F7["cursor 退回；已确认区间重投（显式控制动作，不是恢复路径）"]
