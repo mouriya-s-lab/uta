@@ -48,6 +48,7 @@
 | IO 壳 | 效应侧的解释器：核心中唯一向集成发出写调用、把集成的返回值变成记录的地方 | §6.5 |
 | `Attempt` / `AttemptRef` | 一条 `Prepared` 记录及其后继阶段链，身份 = `attempt_position`；腿身份 `AttemptRef = (attempt_position, leg)`，所有腿级记录与归因以它关联；正常路径下同 lane 至多一条未终结 | §6.5 |
 | `Prepared` / `SendBarrier` / `Undetermined` / `Expired` | 阶段链的记录：已放行待执行 / 发送屏障（已 fsync，之后才可 `submit`）/ 已发出但结果未知 / 未发出即到期 | §6.5 |
+| 发出前门 | IO 壳在 append `SendBarrier` 时对一条腿求值的三个条件：`deadline` 未过、该集成会话已建立、当前能力支持该操作及其参数 schema；结果为发送、等待（腿保持 `Prepared`，不 append 记录）或 `Expired` | §6.5 |
 | `ResolutionEvidence` / `ReconciliationReopened` | 一次取证的执行事实记录（`channel × outcome`，`Found` 含 `Evidence` 并引用观察副本）/ 重开一轮取证的标记（`CancelLegTerminal` / `SessionRestored` / `Manual`） | §6.5、§6.6 |
 | `Resolved` / `AwaitingTargetTerminal` | 阶段链的 fold 状态而非记录：链已达终态（各腿终结且无下一腿）/ 复合链撤单腿已终结、等待目标订单终态以决定第二腿（出口：目标终态或 `deadline`） | §6.5 |
 | `Gap{origin}` | 显式标记的缺口记录，`origin ∈ {Source, Delivery, Channel}` | §4.2 |
@@ -65,6 +66,8 @@
 | 程序宿主（program host） | 解释值树程序的受监督子进程，只提供隔离与预算，不进设计中心；协议 = `Load`/`Advance`/`Reset`/`Unload` | §7.1、§8.6 |
 | `Checkpoint` / `state_version` | 程序状态的显式序列化字节及其版本号；与程序 cursor 同事务持久化 | §8.6、§7.5 |
 | `SessionEpoch` / `instance_id` | 会话 epoch `(instance_id, session_seq)`：`instance_id` 随 fence 单调递增，`session_seq` 每次握手加一；推送与回执只在 epoch 相等时接受 | §7.2 |
+| 会话状态 | 核心为每个登记的集成运行的 `Connecting`（无会话，自动重连）/ `Established(SessionEpoch)` / `Halted{cause}`（无会话，需运维动作；`cause ∈ {ProjectionInvalid, ContractIncompatible, Refused}`，跨核心重启保持） | §7.2 |
+| 健康面（`IntegrationHealth`） | 每个集成的会话状态、逐流 readiness、按调用目标（作用域或逻辑流）的连续失败数与最近成功时间；全部是健康观察的 fold，不进写路径 | §8.4 |
 | principal | 会话绑定的身份 `(os_user, actor)`：OS 对端凭据给出 `os_user`，下游自报 `actor`、经解释层带入握手；授权与审计的键 | §8.5 |
 | `Snapshot` / `as_of` | 读模型的一次读取结果，及其吃到的位置集 `Set<LogPosition>` 与范围内生效的 `gaps`；`tickets`、`subscriptions` 只给当前态，没有历史切面 | §8.5 |
 | 信任边界 = OS 用户 | 写权限来自认证得到的 principal × 策略 scope，不来自连接；同用户进程视为用户本人（H7） | §7.1 |
@@ -106,6 +109,8 @@
 | `LogPosition` / `Hash` | 日志位置：顺序身份 | 内容寻址：版本身份 | `current_version` 是 `Hash`，`Prepared(position)` 是 `LogPosition` | §4.1、§6.2 |
 | 四种“过期” | `Ticket.Close(Expired)`：负责人失联或审批超时，或 lane 等待期间到期（H6，STS 过期步，在 `Prepared` 之前） | `DecisionStep::Expire(Deadline)`：程序规则时限 | 见表下 | §6.2、§6.1、§6.5 |
 | 两种“拒绝” | `VenueRejected`：写已发出，venue 拒了；执行事实、终态之一 | `DecisionRejected`：审批拒了；单据关闭，从未进入 `Prepared` | 前者在链上，后者在单据上 | §6.5、§6.2 |
+| 上游的两种 `Refused` | `handshake` 返回 `Refused`：上游明确拒绝集成的身份或配置，整个集成登记 `Halted`，等运维动作 | `read`/`backfill` 返回 `Refused`：上游拒绝这一次读请求，集成照常运行，不是 gap | 都只在上游给出明确拒绝时返回；不可达、超时一律 `Unavailable` | §8.2、§8.3 |
+| 离线 / 待处理 | `Connecting`：没有会话，会自己恢复（传输失败、上游暂时不可达） | `Halted`：没有会话，不会自己恢复（投影不合法、契约不兼容、身份被拒） | 二者都不发写（发出前门等待）；只有后者要 `restart_integration` 或 `rotate_credential` | §7.2、§6.5 |
 | 两种“证据” | `CapabilityProof`：venue 有这个能力（握手结果） | `ResolutionEvidence`：我的尝试发生了没（对账结果） | 前者进 `Projection.capabilities`，后者进链 | §2.2、§6.5 |
 | 形状 / 投影 | 上游形状：上游对象长什么样，只在集成里被消费，从不越过集成 | 投影：有几个作用域、几条流、各支持什么；UTA 定 schema、集成填、核心按它路由，并原样交给解释层翻成对外概念 | 账户只是特例；订单、持仓、流、渠道都如此；外部下游不见投影本身 | §2.2 |
 | 载荷 / 原始负载 | 载荷：集成的消费结论，契约 schema，程序与钩子解释 | 原始负载：集成所消费的上游原文，只作证据 | 前者是结论，后者是出处；两者一起进 `Evidence` | §2.1、§6.5 |
@@ -128,7 +133,7 @@
 
 **四种“过期”的后两种：**
 
-- 第三种：链记录 `Expired(deadline)`。已放行，但某腿发出前 `deadline` 已过，IO 壳不发并终结该链；只在崩溃恢复窗口与复合链腿间可达。
+- 第三种：链记录 `Expired(deadline)`。已放行，但某腿发出前 `deadline` 已过，IO 壳不发并终结该链；在崩溃恢复窗口、复合链腿间，以及腿在发出前门等待会话或能力期间可达。
 - 第四种：IO 壳超时。不是终态，只是 `Undetermined` 的原因之一。
 
 ## 11.4 研究与调查报告索引

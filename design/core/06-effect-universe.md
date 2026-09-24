@@ -586,17 +586,17 @@ venue 对我方写的响应是执行事实：C13 原始负载完整保留，执�
 
 响应经集成消费后到达核心，由两部分组成（§2.1）：集成的结论（契约载荷 + `payload_schema`）与所消费的上游原文（原始负载）。执行事实侧永存的证据值 `Evidence = {payload, payload_schema, raw}` 同时保存两者：前者是 UTA 据以行动的结论，后者是结论的出处。集成为一次操作调用了多个上游接口时，`raw` 是全部上游响应的原文，按调用顺序（§8.1 操作的粒度）。[设计]
 
-因此一次 venue 交互在**同一 SQLite 事务**内落两条记录：
+因此一次 venue 交互在**同一 SQLite 事务**内落两侧记录：
 
 - **执行事实侧**一条，**持有 `Evidence`**（永存）。
-- **观察 `Journal`** 上一条同内容的观察记录，可压缩。它带 `provenance` 与归因 `attribution: FromAttempt(AttemptRef)`，由 IO 壳填（§8.3）。它供复合链读终态、供单据钩子与读模型消费、供订阅者与推送观察同形地看到。
+- **观察 `Journal`** 上该回应的观察记录，可压缩：订单状态一条（回应含订单状态时），加回应所含每笔可识别执行各一条成交记录（§8.1）。各条的 `attribution` 只按该条自己的关联证据填写，不因同在一个回应里继承；`provenance` 相同，由 IO 壳填（§8.3）。它们供复合链读终态、供单据钩子与读模型消费、供订阅者与推送观察同形地看到。
 
 具体：
 
 | 交互 | 执行事实侧 | 观察侧 |
 |---|---|---|
-| `submit` 返回 `Ack` | `VenueAccepted{venue_order_id, receipt: Evidence, observation: LogPosition}` | `provenance: Receipt{attempt}` 的观察记录 |
-| 取证命中 | `ResolutionEvidence{attempt, channel, round, outcome: Found{observation: LogPosition, evidence: Evidence}}` | `provenance: Reconciliation{attempt, channel}` 的观察记录 |
+| `submit` 返回 `Ack` | `VenueAccepted{venue_order_id, receipt: Evidence, observation: LogPosition}`；`observation` 指订单状态记录 | `provenance: Receipt{attempt}` 的观察记录 |
+| 取证命中 | `ResolutionEvidence{attempt, channel, round, outcome: Found{observation: LogPosition, evidence: Evidence}}`；`observation` 指命中的那条记录（`list_fills` 命中多笔归因到该腿的成交时，它们同在该作用域成交流上，取其中 `Seq` 最小者） | `provenance: Reconciliation{attempt, channel}` 的观察记录；`list_fills` 命中不造订单状态记录 |
 | 取证 `Absent` / `Inconclusive` | `ResolutionEvidence` | 无（没有订单状态可记） |
 | `Unavailable` | 只落 `Gap{origin: Channel}`，不是取证结果（§6.6） | 无 |
 | `submit` 返回 `Reject` | `VenueRejected`，`reason` 保留 `Unmapped(raw)`（§2.6） | 无（venue 侧不存在订单） |
@@ -637,7 +637,7 @@ venue 对我方写的响应是执行事实：C13 原始负载完整保留，执�
 ```
 
 - 链的 `Resolved` 由各腿状态与“是否还有下一腿”fold 出。
-- IO 壳是链的驱动器。每一步转移由 `venue 回应类型 × 该 (venue, op) 的能力证据 × 超时参数 × deadline` 决定。
+- IO 壳是链的驱动器。每一步转移由 `venue 回应类型 × 该集成的会话状态 × 该 (venue, op) 的能力证据 × 超时参数 × deadline` 决定。
 - 链是闭合 sum，转移表穷尽（见下），没有“其他”分支。
 
 **`Resolved` 是 fold 状态，不是记录。**
@@ -656,6 +656,33 @@ venue 对我方写的响应是执行事实：C13 原始负载完整保留，执�
 
 先例：PostgreSQL `EndPrepare` 先 `XLogFlush` 再 `MarkAsPrepared`。[证据：fp-06 修正 5]
 
+**发出前门** [设计]。IO 壳在 append `SendBarrier` 的那一刻对该腿求值三个条件，全部成立才 durable append `SendBarrier`，并在同一会话上 `submit`：
+
+1. 意图的 `deadline` 未过；
+2. 该 `WriteLaneKey` 所属集成的会话已建立（会话状态，§7.2），`submit` 将在这个会话 epoch 上发出；
+3. 该意图 `(WriteLaneKey, OperationKind)` 的当前能力证据（§7.5）为 `Supported`，且声明接受该意图参数所依据的 schema 身份（§2.2）。复合链的两条腿都按意图自身的 `(WriteLaneKey, OperationKind)` 求值。
+
+结果只有三种：
+
+- **发送**：三条都成立。
+- **过期**：`deadline` 已过 → `Expired(deadline)`，腿终结。
+- **等待**：其余条件不成立。腿保持 `Prepared` 无 `SendBarrier`，不 append 任何记录；它仍是确未发出，仍在 lane 阻塞头集合里（§6.4）。会话建立、能力证据变化、`deadline` 到时重新求值。等待永不变成 `Undetermined`；`deadline` 只终结尚无 `SendBarrier` 的腿。
+
+`SendBarrier` fsync 之后会话才断开时，`submit` 得 `NoResponse` → `Undetermined`（§8.2），与其他 `NoResponse` 同样收敛；已有 `SendBarrier` 的腿永不退回等待。
+
+理由：
+
+- **会话条件**：没有会话时 `submit` 只能失败于传输，得 `NoResponse`，一笔核心明知未发出的写就成了 `Undetermined`，阻塞 lane 直到取证收敛；在没有按键回读渠道的 venue 上只能人工决议（§1.6.1）。会话状态是核心自己运行的状态机（§7.2），不是健康观察，所以本门不读读模型。
+- **能力条件**：放行后单据已 `Closed`（§6.2），此后再没有别处按当前能力复查这条腿。重握手或 `CapabilityObserved` 收紧、移除该操作或它接受的参数 schema 时，不能凭放行时的旧能力发出。
+- **等待而不终结**：短暂断线或能力暂失不否决已放行的意图。放行时的批准在 `deadline` 内保持有效，这是有意的：时效由 `deadline` 界定（H6）。
+
+不选：
+
+- **在放行门把无会话集成的能力当作 `Unknown`**：一次瞬断就让到达放行门的单据 `PredicateFailure` 并关闭（§6.3）；会话抖动也会混进能力证据。
+- **被拒或需干预的集成由核心追加一版全 `Unknown` 能力证据**：那是核心替集成伪造声明；能力证据只记握手声明与能力观察（§7.5）。发送已由本门挡住，集成此刻的状态由健康面给出（§8.5）。
+- **以健康观察作必要检查项的输入**：集成死了就不再推送健康，最新的健康观察恰在它失效时过时；规则也不引用读模型（§6.3）。
+- **`Degraded` 阻断发送**：`Degraded` 是按流的 readiness 子态（§8.4），属观察侧；其中与写有关的能力收紧已经经 `CapabilityObserved` 进入能力证据与本门。
+
 ### 转移表（穷尽）
 
 以下按腿状态 × 事件列出全部转移；未列出的组合在 fold 中不可达（sum 穷尽，C13 风格：无“其他”分支）。
@@ -664,7 +691,9 @@ venue 对我方写的响应是执行事实：C13 原始负载完整保留，执�
 
 | 腿状态 | 事件 | 结果 |
 |---|---|---|
-| `Prepared` | 过发出前门失败 | `Expired(deadline)`（终） |
+| `Prepared` | 过发出前门 | durable append `SendBarrier`，随后 `submit` |
+| `Prepared` | 发出前门：`deadline` 已过 | `Expired(deadline)`（终） |
+| `Prepared` | 发出前门：会话或能力条件不成立 | 保持 `Prepared`，不 append 记录；条件变化或 `deadline` 到时重新求值 |
 | `SendBarrier` | `submit` 返回 `Ack` | `VenueAccepted`（终） |
 | `SendBarrier` | `submit` 返回 `Reject` | `VenueRejected`（终） |
 | `SendBarrier` | `submit` 返回 `NoResponse` | `Undetermined` |
@@ -700,6 +729,7 @@ venue 对我方写的响应是执行事实：C13 原始负载完整保留，执�
 - (i) 的目标终态观察有三种来源：撤单腿回执 / 取证观察本身已含目标终态（`cumulative_filled_quantity`）；带 `attribution` 指向目标的推送观察；IO 壳按目标身份的一次性读。一次性读在 `target` 为 `IdemKey` 时用 `query_by_key`，为 `VenueRef` 时用 `read(orders, venue_order_id)`；均为读、可重试、有 pacing。
 - (ii) 中 `unknown`/`Unmapped(raw)` 不冒充终态（C13）；listing / 一次性读未命中不证明不存在（F10）。
 - (iv) 的到期在等待期间由发出前门的同一时钟检查。
+- 集成无已建立会话时，IO 壳不发 (i) 的一次性读、也不记 (iii) 的 gap（同 §6.6 无会话不取证）；链照常等待，`deadline` 照常生效。
 
 因此该状态**有界**：出口是目标终态或 `deadline`，没有人工路径，也不会永久停留。负责人可在 `Expired` 后按目标的最新观察另起单据。`AwaitingTargetTerminal` 期间链未完，仍是 lane 阻塞头集合的成员（§6.4）。
 
@@ -707,7 +737,7 @@ venue 对我方写的响应是执行事实：C13 原始负载完整保留，执�
 
 核心对集成的操作集（IDL，小且闭合：`handshake`/`submit`/`query_by_key`/`list_open`/`list_fills`/`cancel`/`replay_by_key`/`backfill`/`read`）是核心↔集成契约，完整操作集与返回值见 §8.2。
 
-- IO 壳只用其中的写与取证操作。
+- IO 壳只用其中的写与取证操作，且只在该集成会话已建立时调用（发出前门；无会话时的取证见 §6.6）。
 - `backfill` 由订阅侧发起；`read` 由读处理器、钩子取证与消费方发起（§3.4）。
 - `NoResponse` 与 `Unavailable` 是一等返回值而非异常。
 
@@ -715,7 +745,7 @@ venue 对我方写的响应是执行事实：C13 原始负载完整保留，执�
 
 - IO 壳是核心中唯一向集成发出写调用的地方，不修改记录、不持权威。由关系表（§3.3）与 `fold_state` 重建保证。
 - `Prepared` 无 `SendBarrier` = 确未发出；`SendBarrier` 无后继 = 可能已发出；IO 壳不 `submit` 已有 `SendBarrier` 的腿。由发送屏障 durable append（fsync）保证。
-- 每条腿发出前过 `deadline` 门；过期即 `Expired(deadline)` 终结，永不发出。由发出前门保证。
+- 每条腿发出前过发出前门：`deadline` 已过即 `Expired(deadline)` 终结、永不发出；集成无已建立会话或当前能力不支持时只等待，不 append `SendBarrier`。由发出前门保证。
 - 链的每个 `Prepared` **至多**达一个终态，且在证据充分（`Found`/`Absent`/回执/`deadline`）时必达。由闭合 sum 与转移表保证。
 - `Undetermined` 的收敛不承诺时限（C2），只承诺停等可被推进：新证据（任一时刻到达的 `Attributed`、`ReconciliationReopened` 重开后的取证），或带 principal 的 `Manual`。
 - `VenueAccepted` 只认业务回执，其余落 `Undetermined`。由 `submit` 返回契约保证。
@@ -743,6 +773,7 @@ by-key → listing + venue 身份 → fills/positions → 保留期内 replay-by
 
 - 明确否定只有 by-key 的 `Absent`；listing/fills 没有这一语义（F10）。
 - `Unavailable` **不算取证**、不换渠道。一个不可用的渠道不是证据；跳过它会把“没查到”伪装成“查过了”。
+- **集成无已建立会话时不取证**：IO 壳不对它发任何取证读，也不因此记 `Gap{origin: Channel}`；没有发出的读不是渠道不可用。会话重新建立后，本轮进行中的驱动从本轮进度续跑（下一渠道由 fold 重建，§6.5）；已渠道穷尽而停等的腿按下文 `SessionRestored` 重开一轮。[设计] 理由：无会话时的“调用”只会是核心自造的失败，把它记成 `Gap{Channel}` 等于伪造渠道证据的出处。
 
 ### 停等
 
@@ -767,7 +798,7 @@ IO 壳**永不 heuristic**。取证是读副作用，可以重试；`submit` 是
 | cause | 谁 append | 何时 |
 |---|---|---|
 | `CancelLegTerminal(AttemptRef)` | IO 壳自动 | 以该阻塞头为 `target` 的撤单腿终结于 `VenueAccepted`/`Found` 时（§6.4） |
-| `SessionRestored` | IO 壳自动 | 该 venue 的集成会话重建（新 `session_seq`）时，对其所有停等的 `Undetermined` |
+| `SessionRestored` | IO 壳自动 | 该 venue 的集成会话实际建立（新 `session_seq`，§7.2）时，对其所有停等的 `Undetermined` |
 | `Manual(principal)` | 运维 principal | 经 `retry_reconciliation`（§8.5） |
 
 - `CancelLegTerminal` 表示 venue 已处理撤单请求，是新的取证机会，**不是**目标已到终态的证据。
@@ -813,9 +844,9 @@ IO 壳**永不 heuristic**。取证是读副作用，可以重试；`submit` 是
 1. **先 fold 链是否已 `Resolved`**：任一腿以 `Expired`/`VenueRejected` 终结，或末腿以 `VenueAccepted`/`Found`/`Absent` 终结且无下一腿。已 `Resolved` 者无动作；`Expired` 不会被再过一次发出前门。
 2. **未 `Resolved` 者先看链级状态**：复合链处于 `AwaitingTargetTerminal` 者，继续按目标身份读。
 3. **其余看当前腿：**
-   - 无 `SendBarrier` 者仍是可安全发送的腿，过发出前门后发送或 `Expired`；
+   - 无 `SendBarrier` 者仍是可安全发送的腿，过发出前门（§6.5）：发送、等待（该集成尚无已建立会话或当前能力不支持）或 `Expired`；
    - `SendBarrier` 无后继者，append `Undetermined(CrashWindow)`，进入对账驱动；
-   - `Undetermined` 未终结者，按 `round == 当前轮` 的 `ResolutionEvidence` 重建本轮进度（发起轮次归属，不按 append 先后），续跑下一渠道或停等。
+   - `Undetermined` 未终结者，按 `round == 当前轮` 的 `ResolutionEvidence` 重建本轮进度（发起轮次归属，不按 append 先后），在该集成会话建立后续跑下一渠道或停等。
 
 IO 壳不 `submit` 任何已有 `SendBarrier` 的腿。
 

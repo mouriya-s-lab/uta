@@ -84,8 +84,8 @@ flowchart TB
 
 启动顺序由存储归属（§7.4、§7.5）与写边界恢复（§6.7）推出。失败分两级 [设计]：
 
-- **核心级**：核心自身不能安全运行时整体拒绝启动，不进入部分运行态。只有三种：第 1 步取不到 fence（专用退出码，此时无权写 SQLite）；第 2 步格式版本校验、迁移或从快照 + 记录重建失败（C14）；第 3 步读取统一路径配置失败（§7.6、C14）。后两种以专用退出码与诊断报告原因。
-- **单元级**：只涉及一个集成或一个程序的失败，只使该单元不可用，其余照常启动：集成握手的传输失败（重连）或被拒（§8.2 `handshake`）；程序 `LoadRejected` 或状态版本不符（§8.6）。
+- **核心级**：核心自身不能安全运行时整体拒绝启动，不进入部分运行态。只有四种：第 1 步取不到 fence（专用退出码，此时无权写 SQLite）；第 2 步格式版本校验或迁移失败（C14）；第 2 步从快照 + 记录重建失败（状态重建不出，核心就无法判定哪些写可能已经发出）；第 3 步读取统一路径配置失败（§7.6、C14）。后三种以专用退出码与诊断报告原因。
+- **单元级**：只涉及一个集成或一个程序的失败，只使该单元不可用，其余照常启动：集成处于 `Connecting` 或 `Halted`（第 3 步会话状态）；程序 `LoadRejected` 或状态版本不符（§8.6）。
 
 理由：集成与程序宿主各是独立故障域（§7.1、§8.6）；一个 venue 不通就让全部账户与程序停摆，违背 Q15、Q18 的隔离。C14 管的是持久格式与迁移，不管集成是否可用。
 
@@ -104,18 +104,56 @@ flowchart TB
 ### 2. 从记录重建
 
 - 校验格式版本（C14），失败拒绝启动。
-- 从快照 + 记录 `fold_state` 重建 lane 链、单据、规则状态、订阅表。
+- 从快照 + 记录 `fold_state` 重建 lane 链、单据、规则状态、订阅表；重建失败拒绝启动。
 - IO 壳按恢复规则（§6.7）把 `SendBarrier` 无后继者 append 为 `Undetermined(CrashWindow)`。
 
 这一步**不接触任何集成**：恢复结论只来自记录，不依赖外部回音。
 
-### 3. 握手
+### 3. 握手与会话状态
 
-读统一路径配置（§7.6），拉起登记的集成进程并登记，按新会话 epoch 握手取得能力证据（§8.2）。各集成按会话状态机（D1.3）独立推进，本步不等全部集成建立会话：
+读统一路径配置（§7.6）。每个登记的集成有一个由核心运行的**会话状态** [设计]：
 
-- 握手成功：会话建立，第 4、5 步中与它有关的恢复随之进行。
-- 传输失败：按 §8.2 重连（新 `session_seq`），其间该集成没有会话。
-- 被拒（投影不合法、契约版本不兼容）：记 P14 原因；核心终止该集成进程并清除它在进程表中的登记，不自动重试，恢复经 `restart_integration`（§8.5）[设计]。集成登记配置、该集成已有的流记录与订阅不变。被拒期间它没有可用会话，不接受它的新推送，也不向它发写。理由：这是 fail-closed 的运维策略：握手不合格说明集成或其配置需要人处理，自动重试会在无人察觉时反复拉起一个不合格的凭据终点（C7）。
+| 状态 | 含义 | 核心的行为 |
+|---|---|---|
+| `Connecting` | 没有会话，可自动恢复 | 拉起集成进程（未在运行时）并登记，以新 `session_seq` 握手（§8.2）；失败按 pacing 再来 |
+| `Established(SessionEpoch)` | 会话已建立 | 只接受该 epoch 的推送与回执；IO 壳可对它发写与取证（发出前门，§6.5） |
+| `Halted{cause}` | 没有会话，需要人处理 | 进程已终止、进程表登记已清除；不自动握手 |
+
+`cause ∈ {ProjectionInvalid, ContractIncompatible, Refused(reason)}`：前两种由核心判定握手交来的投影不合法、契约版本不兼容；`Refused` 是集成报告上游明确拒绝了该登记的身份或配置（§8.2 `handshake`）。
+
+本步各集成独立推进，不等全部集成建立会话。上次持久状态为 `Halted` 的集成保持 `Halted`，不拉起；其余一律以新实例进入 `Connecting`：旧实例的 `Established` 不延续，它的 epoch 已在第 1 步作废。
+
+**转移（穷尽）：**
+
+| 当前 | 事件 | 结果 |
+|---|---|---|
+| `Connecting` | 握手返回合法 `Projection` | `Established`：append 该握手的声明版本（§7.5），各流按 §8.2 决定续 epoch 或开新 epoch；第 4、5 步中与它有关的恢复随之进行 |
+| `Connecting` | 传输失败、集成进程退出、握手返回 `Unavailable` | `Connecting`（新 `session_seq`，按 pacing） |
+| `Connecting` | 投影不合法 / 契约版本不兼容 | `Halted{ProjectionInvalid}` / `Halted{ContractIncompatible}` |
+| `Connecting` | 握手返回 `Refused(reason)` | `Halted{Refused(reason)}` |
+| `Established` | 传输断开、集成进程退出（含集成因上游在会话中拒绝身份而结束会话，§8.3） | `Connecting` |
+| `Connecting` / `Established` | `rotate_credential` 或 `restart_integration` 生效 | `Connecting`（新 `session_seq`；`rotate_credential` 另强制各流开新 epoch，§7.6） |
+| `Halted{Refused}` | `rotate_credential` 或 `restart_integration` 生效 | `Connecting` |
+| `Halted{ProjectionInvalid}` / `Halted{ContractIncompatible}` | `restart_integration` 生效 | `Connecting` |
+| `Halted{ProjectionInvalid}` / `Halted{ContractIncompatible}` | `rotate_credential` | 不转移，控制记录 `Rejected`：要重新拉起只经 `restart_integration`，届时照常读凭据文件 |
+
+- 只有当前在途握手（按其 `SessionEpoch`）的结果能改变状态；其他 epoch 的握手结果丢弃，不转移、不 append 任何记录。
+- 未生效的控制动作（越权、文件不合法，§8.5）不转移。
+- 状态每改变一次（`Connecting → Connecting` 不算），核心 append 一条健康观察（新状态、原因、起始时间，§8.4）。持久的会话状态就是这些观察的 fold，重启时本步据此恢复 `Halted`。
+- 进入 `Halted` 时记 P14 原因，核心终止该集成进程并清除它在进程表中的登记。集成登记配置、该集成已有的流记录与订阅不变。
+- 不在 `Established` 时该集成没有会话：不接受它的新推送；IO 壳不向它发写，也不发取证读（§6.5、§6.6）；已放行未发出的腿在发出前门等待或到期。
+
+理由：
+
+- `Halted` 只由显式运维动作解除，是 fail-closed 的运维策略：握手不合格或身份被上游拒绝，说明集成、配置或凭据需要人处理。自动重试会在无人察觉时反复拉起一个不合格的凭据终点（C7），或用同一份被拒凭据反复登录上游、得到同一拒绝；反复登录还可能触发上游的账户锁定 [推断]。
+- 核心重启不解除 `Halted`：否则重启就是一次未声明的自动重试。
+- `Refused` 与传输失败分开：传输失败会自己好，自动重连是对的；上游明确拒绝不会自己好。二者对运维是“等一等”与“去处理”的区别，必须可辨（§8.5 健康）。
+- **拒绝的粒度是整个集成登记** [设计]：上游拒绝登记所列的任何一个账户、凭据或配置，整个登记 `Halted{Refused}`，同一登记下其他账户随之不可用。这是有意承担的代价：独立故障域是集成进程（§7.1），`rotate_credential` 与 `restart_integration` 也按集成作用；需要账户之间互不牵连，就把它们登记为不同集成。单笔操作被上游拒绝权限（某一单、某一次读）不是握手拒绝，按该操作的封闭返回值处理（写仍是 `Reject` 或 `NoResponse`，§8.2），不使集成 `Halted`。
+
+不选：
+
+- **按账户拒绝**（握手照常建立，被拒账户单列，核心此后不再向集成注入这些账户的凭据，直到运维动作）：它要另定配置账户 → 凭据 → `WriteScope` 的对应、共享登录下的拒绝范围、按账户的抑制记录与解除规则，是第二套持久生命周期；而核心不知道上游账户结构（§2.1）。
+- **拒绝也按传输失败重连**：同一份凭据反复登录，运维看到的只是“离线”，分不清该等还是该处理。
 
 **会话 epoch** `SessionEpoch = (instance_id, session_seq)`：
 
@@ -130,11 +168,11 @@ flowchart TB
 
 1. 为每条未终结的 `Undetermined` 启动对账驱动（读，可重试）。渠道已穷尽而停等者，在其集成建立新会话时自动 append `ReconciliationReopened{SessionRestored}`（§6.6），然后重走一轮；该集成尚无会话时，停等只能由 `Manual` 或新证据推进。
 2. 复合链处于 `AwaitingTargetTerminal` 者，继续按目标身份读。
-3. 对当前腿无 `SendBarrier` 者过发出前门：过期则 `Expired`，否则 `SendBarrier` → `submit`。
+3. 对当前腿无 `SendBarrier` 者过发出前门（§6.5）：过期则 `Expired`；其集成会话已建立且当前能力支持则 `SendBarrier` → `submit`；否则等待。
 4. fold 出无 `EffectResponse` 的 `EffectRequest` 重派（§6.1、§9.2 #21）。
 5. STS 链按 `RuleState` 续跑待决单据；过期计时器按各单据的 `deadline`（UTC，§2.6）重新装上。
 
-顺序理由：取证在前，可让已终结的腿先移出阻塞头集合；发送需要该集成的会话，尚无会话的集成，其腿等会话建立再发。
+顺序理由：取证在前，可让已终结的腿先移出阻塞头集合；发送与取证都需要该集成已建立的会话，尚无会话的集成，其腿在发出前门等会话建立再发、其取证等会话建立再续。
 
 ### 5. 恢复观察侧与消费面
 
@@ -398,7 +436,7 @@ flowchart TB
 | 运行期参数 | Alice | 快照频率、派生侧留存窗口、`deadline` 全局缺省（仅在策略规则未按 scope 给出时生效）、投递缓冲上限 | `reload_config(runtime)` |
 | 运行期登记 | UTA | 当前 `instance_id`、格式版本、最近快照位置 | 只由核心写；Alice 只读 |
 
-**`rotate_credential` 的重载效果**：重建目标集成会话（新 `session_seq`），并强制该集成各流开新 epoch（`Gap{origin: Source, reason: credential_rotated}`），不续接。
+**`rotate_credential` 的重载效果**：重建目标集成会话（进入 `Connecting`，新 `session_seq`），并强制该集成各流开新 epoch（`Gap{origin: Source, reason: credential_rotated}`），不续接。它也解除 `Halted{Refused}`；对因投影不合法或契约版本不兼容而 `Halted` 的集成被拒，那只经 `restart_integration` 解除（§7.2 第 3 步）。
 
 **策略 / 审批规则文件的内容：**
 

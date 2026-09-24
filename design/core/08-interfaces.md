@@ -224,24 +224,38 @@
 - 每个操作的**动作轴**（对外部世界是读 / 写 / 非动作）与**核心内部结果**（append / 持久化）分开写，避免“读 / 写副作用”一词混两义。
 - `NoResponse` 与 `Unavailable` 是一等返回值而非异常。
 
-### `handshake(session_epoch) → Projection`
+### `handshake(session_epoch) → Projection | Refused | Unavailable`
 
-- **语义**：声明作用域 / 流 / 能力。
+- **语义**：声明作用域 / 流 / 能力。集成为构造声明可以先询问上游（`design/integration/design.md` 2.3）。
 - **动作轴**：非动作（声明交换）。
-- **返回**：`Projection`（含契约版本）。
-- **核心内部结果**：
-  - 更新路由表；
-  - append 一版能力证据（§7.5）；
-  - `required_inputs` 比对；
-  - 该集成的每条观察流按 P3 决定是否开新 `StreamId.epoch`：集成能以 venue 游标证明续接，则续用原 epoch、`Seq` 接续；否则新 epoch 首条为 `Gap{origin: Source}`。会话 epoch 与流 epoch 独立。
+- **返回**：
+  - `Projection`（含契约版本）；
+  - `Refused(reason)`：上游明确拒绝了该登记所列的身份或配置（凭据被拒、账户不存在或未开通、配置被上游拒绝）。只在上游给出明确拒绝时返回；
+  - `Unavailable`：上游此刻不可达或未在时限内回答，没有得到明确结论。
+- **核心内部结果**（会话状态见 §7.2 第 3 步）：
+  - 合法 `Projection` → 会话 `Established`；更新路由表；append 该握手的声明版本（§7.5）；`required_inputs` 比对；既有订阅按新声明重算路由（见下）；
+  - 该集成的每条观察流按 P3 决定是否开新 `StreamId.epoch`：集成能以 venue 游标证明续接，则续用原 epoch、`Seq` 接续；否则新 epoch 首条为 `Gap{origin: Source}`。会话 epoch 与流 epoch 独立；
+  - `Refused(reason)` → `Halted{Refused(reason)}`：记 P14 原因，核心终止该集成进程，不自动重握手，等 `rotate_credential` 或 `restart_integration`；
+  - `Unavailable` → 仍 `Connecting`，按 pacing 重连（新 `session_seq`）。
 - **错误**：
   - 传输失败 → 重连（新 `session_seq`）；
-  - 投影不合法 → 拒绝该集成并记 P14 原因；
-  - 契约版本不兼容 → 拒绝该集成并记 P14 原因，不降级运行；
-  - 被拒只影响该集成：核心终止它的进程、不自动重试，等 `restart_integration`（§7.2 第 3 步）；
+  - 投影不合法 → `Halted{ProjectionInvalid}`，记 P14 原因；
+  - 契约版本不兼容 → `Halted{ContractIncompatible}`，记 P14 原因，不降级运行；
+  - `Halted` 只影响该集成：核心终止它的进程、不自动重试；投影与契约版本的拒绝只经 `restart_integration` 解除（§7.2 第 3 步）；
+  - 不属当前在途握手的结果丢弃，不改变会话状态（§7.2 第 3 步）；
   - 能力比对缺失 → 引用该字段的树 fail-closed（§2.5）；
   - `session_epoch` 形状与接受条件见 §7.2 第 3 步。
-- **重试**：传输失败时幂等、可重发；被拒不自动重发。
+- **重试**：传输失败与 `Unavailable` 时幂等、可重发；`Halted` 不自动重发。
+
+**既有订阅随新声明** [设计]：
+
+- 订阅的 selector 按逻辑流 `(source, stream)` 匹配，不随流 epoch 变。
+- 新声明不再声明某条已选流时，该订阅对这条流**挂起**（P4），原因 `StreamUndeclared`：核心不再向集成路由这条流的需求；已 append 的记录仍按 cursor 投递，cursor 不变。挂起与恢复是由订阅状态派生的状态通知（P3），不是损失，不需确认。
+- 同一订阅的其他已选流照常。订阅的整体状态为“活”，并逐流列出挂起的流；全部已选流都挂起时整体为“挂起”。
+- 这条流再次被声明时恢复路由，续接与否按上一条的流 epoch 规则：能以游标证明续接则同 epoch、`Seq` 接续；否则新 epoch 首条是 `Gap{origin: Source}`，断代显式。cursor 不重置。
+- 集成断连或 `Halted` 不使订阅挂起：流仍在最近一次声明里，没有新记录只是没有会话，由 readiness `Disconnected` 表达（§8.4）。
+- 理由：订阅的 owner 是核心、归属 principal（C5），集成换了声明不能删除它；挂起保留需求，流回来时下游不必重新订阅。只停路由、不停投递，是因为已 append 的记录与声明无关。
+- 不选：删除订阅或把它转为“被拒”（需求丢失，下游须自行发现后重订）；照旧“活”却不再有供给（与正常安静的流不可区分）。
 
 ### `submit(attempt) → Ack | Reject | NoResponse`
 
@@ -249,7 +263,7 @@
 - **动作轴**：**写**。
 - **返回**：`Ack(venue_id, receipt)`（业务回执，`receipt` 是订单状态的契约载荷及其原始负载）/ `Reject(reason)` / `NoResponse`。
 - **核心内部结果**（记录模型，§6.5）：
-  - `Ack` → 同一事务 append `VenueAccepted{venue_order_id, receipt: Evidence, observation}`（执行 J，永存，§6.5）+ 回执观察记录（`provenance: Receipt{AttemptRef}`，`attribution: FromAttempt(AttemptRef)`）；
+  - `Ack` → 同一事务 append `VenueAccepted{venue_order_id, receipt: Evidence, observation}`（执行 J，永存，§6.5）+ 回执观察记录（订单状态；回执含成交时每笔可识别执行另一条成交记录，§8.1；`provenance: Receipt{AttemptRef}`，`attribution` 按各条自己的关联证据填写）；
   - `Reject` → `VenueRejected`；
   - `NoResponse` → `Undetermined`。
 - **错误**：超时 / 集成崩溃 / 传输 ACK / HTTP 5xx 全部 `NoResponse` → `Undetermined`。venue 单方面决定，无 commit ack。
@@ -278,14 +292,15 @@
 ### `list_fills(scope, since) → Fills | Unavailable`
 
 - **语义**：列成交。**动作轴**：**读**。
-- **返回**：`Fills(items, next_cursor?)` / `Unavailable`。
+- **返回**：`Fills(items, next_cursor?)` / `Unavailable`。`items` 是成交记录，各带 `execution_id`（§8.1）。
 - **核心内部结果**：
   - 命中带归因身份的成交 → 同事务 观察记录 + `ResolutionEvidence{Fills, Found}`；
   - 未命中 → `ResolutionEvidence{Fills, Inconclusive}`（本渠道没有 `Absent`）。
 - **错误**：
   - `Unavailable`（超时 / 断连 / 配额拒绝）→ `Gap{origin: Channel}`，同渠道再发；
   - 缺 `since` 游标 → 范围按声明保守取，仍只作 advisory；
-  - 能力不支持则跳过。
+  - 能力不支持则跳过；
+  - 结果中某笔执行给不出身份时整体返回 `Unavailable`，不交出删掉它的缺项集合；上游那些不是执行的行（如 Binance `t = -1`）由记录映射丢弃，不是错误（§8.1）。
 - **重试**：可重试；分页按 `next_cursor` 续。
 
 ### `cancel(venue_id | key)`
@@ -349,8 +364,8 @@
 |---|---|---|
 | 观察记录 | 集成推送观察记录（含 `session_epoch`、venue seq/cursor 证据、`attribution`、契约载荷 + `payload_schema`、原始负载）；`LogPosition` 由核心按到达顺序分配 | append 观察 `Journal`、推进 cursor/frontier、触发处理器与 DAG |
 | `Gap{origin: Source}` | 集成负责的观察流断代 | 记来源 gap（新 epoch 首条记录，含前一范围与最后 `Seq`、原因） |
-| 能力变更 | 握手后能力/配额变化 | IO 壳 append `CapabilityObserved`（执行 J，§7.5）、重算受影响单据的 `alignment` |
-| readiness / 健康（P16） | 按集成/账户：reach、tier、连续失败数、最后成功时间；回填 readiness（backfilling/live） | 派生健康观察；订阅状态派生（非损失，不需确认） |
+| 能力变更 | 握手后能力/配额变化，含某流一次性读与回填能力（§2.2 `StreamDecl`） | IO 壳 append `CapabilityObserved`（执行 J，§7.5）、重算受影响单据的 `alignment` |
+| readiness（P16） | 按集成 × 流：`Starting` / `Backfilling` / `Live`（含 `Degraded` 子态）；回填 readiness 的 `live_from`（§8.4） | 派生健康观察；订阅状态派生（非损失，不需确认） |
 
 错误与 undesired events：
 
@@ -360,7 +375,7 @@
   - 同一 `StreamId` 内 venue seq 倒退或重复的记录**照常 append**，并打质量标记（P2：`replayed` / `out_of_order`）；不去重、不重排。核心不伪造流顺序；frontier 不因倒退记录后退。重复与乱序由派生侧 fold 按记录种类的契约语义处理：成交按执行身份与修订计数（§8.1“成交与订单状态的契约语义”），不按 venue seq；其余种类按 venue seq 等证据，由各自的 fold 规定（`orders` 的订单状态见 §8.5）。
 - **`Gap{origin: Source}`**：只波及其流；核心不受影响。
 - **能力变更**：能力收紧使待决单据 `Diverged`。
-- **readiness / 健康**：断线 → `Gap{origin: Source}`；健康面经读模型对解释层可见，再由它翻成下游的连接状态（§8.5）。
+- **readiness**：断线 → `Gap{origin: Source}`。集成离开 `Established` 后自己推不了任何东西，所以由核心为它的各流 append `Disconnected{since}`（§8.4）。健康面经读模型对解释层可见，再由它翻成下游的连接状态（§8.5）。
 
 ### 领域返回值 → 线缆错误的映射（同一失败三层）
 
@@ -374,6 +389,8 @@
 | `Gap{origin: Delivery}` | 慢消费者/conflated（§4.2） | 投递侧损失，需显式确认 |
 | `VenueRejected(reason)` | `submit` 返回 `Reject` | 写已发出、venue 拒了——终态 |
 | `Unmapped(raw)` | 记录映射的枚举映射表无对应词表值（§8.1） | 保留原始，不伪造穷尽映射（C13） |
+| `Refused(reason)` | `read`/`backfill` 返回 `Refused` | 上游对该次读请求的明确拒绝；无记录缺失，不是 gap |
+| `Halted{Refused(reason)}`（§7.2） | `handshake` 返回 `Refused` | 上游明确拒绝集成的身份或配置；集成停止自动重连，等运维动作 |
 
 ### 集成义务清单
 
@@ -383,12 +400,14 @@
 
 - 声明投影：作用域、流及其 `payload_schema`、能力与取证渠道、扩展载荷 schema（§2.2）。
 - 交互契约的对齐：把上游账户结构、市场地址、身份体系对齐到锚点契约（`WriteLaneKey`、`basis` 可引用的流、`target` 用的身份）。这是判断性设计动作，每个集成自己负责，做错只影响它自己的流。
+- 为每个作用域给出 `account_ref`（§2.2）：在本集成内唯一；同一上游账户跨握手、重启、换凭据不变；一旦用过不再给另一个账户。核心只能查出声明之间的矛盾，这条义务由一致性测试验证。
 
 **记录映射义务**（值，集成侧求值）：
 
 - 为每条流与每种操作结果给出记录映射（§8.1），通过握手时的静态校验。
 - 有公共 schema 的种类以公共 schema 输出；上游状态按枚举映射表落到契约词表，表外值为 `Unmapped(raw)`（§2.2）。
 - 按映射保留原始负载：写路径与可带 `attribution` 的流必须保留（§8.1）。
+- 成交记录带按 §8.1 构造的 `execution_id`（只用上游证明能唯一识别一笔执行的键）；上游明确给出修正次序与完整替代内容时带 `execution_revision`。同一执行在各渠道、各会话给出同一身份；对齐 `WriteScope` 的方式跨握手不变。
 
 **行为义务**（适配器代码，每次调用与推送）：
 
@@ -398,7 +417,13 @@
 - 把当前 `session_epoch` 回填到每条推送与回执（§7.2 第 3 步）。
 - 响应投放、对账查询、一次性读与回填（仅限核心调用），返回值只取 §8.2 的封闭集合，且每个值的含义严格成立：
   - `Ack` 只在上游给出业务回执时返回；`Reject` 只在上游明确拒绝时返回；其余一律 `NoResponse`（§8.2）。
+  - 集成在 `submit` / `cancel` 内自行决定不发写（例如先读到上游没有交易权限、发现上游连接已断、载荷含它发不出的选项），同样返回 `NoResponse`，核心记 `Undetermined` [设计]。`SendBarrier` 此时已在，核心只凭证据区分“没发出”与“发出了没回音”。
+    - 理由：设一个“未发送”返回值，要集成证明这笔写从未交给任何能把它送出去的东西（SDK 缓冲、断线排队后补发都算送出）。这与 `Absent` 同类，原则上可证；但发出前门已把最常见的来源（没有会话）挡在 `SendBarrier` 之前（§6.5），能力与参数 schema 也在 `Prepared` 之前检查（§6.2）。剩下的本地拒绝有多少是推断 [推断]，不足以抵消新终态给转移表、恢复与对外翻译带来的分支。保持现状的代价只是 fail-closed：lane 等取证收敛或人工决议。会推翻它的观测见 §10.4 #16。
+  - `handshake` 的 `Refused` 只在上游对身份或配置给出明确拒绝时返回；上游不可达、超时或回答不明确一律 `Unavailable`（§8.2）。单笔操作被拒（某一单的权限、某一次读的开通）不是握手的 `Refused`，不使集成 `Halted`。
+  - 会话中上游拒绝了集成的身份（凭据被吊销、会话令牌不能续期）时，集成立即结束当前会话；核心随即重握手，由那次握手返回 `Refused`（§7.2 第 3 步）。不另设推送：会话结束是核心本来就观察得到的事件。
   - `Absent` 只在上游对该键给出明确否定、且这个否定足以证明该键对应的写未发生时返回。上游的“查不到”不足以证明时（例如键已超出上游保证唯一或可查的期限，§1.6.1），返回 `Unavailable`，不返回 `Absent`。
+  - `read`/`backfill` 的 `Refused` 只在上游对本次请求给出明确拒绝（未开通、主体不受支持、参数被拒）时返回；超时、断连、限流一律 `Unavailable`。`Refused` 不改变该流的声明能力。
+  - `backfill` 的 `covered_to` 只表示从请求窗口起点起、本次实际取得的连续前缀，且只在上游历史已穷尽时短于窗口；任一次上游调用失败即整体 `Unavailable`（§8.1），不交出缺项结果。
   - 一次 `submit` / `cancel` 在上游至多产生一次写调用：集成内部不重发写，上游 SDK 自带的写重试必须关闭。写的重试由核心决定，而核心永不重试写（§8.2）。
 - **不以拷贝回答读**：`query_by_key`、`list_open`、`list_fills`、`replay_by_key`、`backfill`、`read` 的回答必须来自本次对上游的询问，不来自集成自己保存的状态；问不到上游即 `Unavailable`。集成为消费推送流而维持的状态（如由增量重建的盘口）只用于产出推送记录，不用于回答读。理由：读的回答被核心当作证据（`Absent` 终结一条腿，§6.6），而集成保存的状态是上游原值在过去某刻的拷贝（§0.1）。
 - 上报 `Gap{origin: Source}` 与 readiness（§8.4）。
@@ -440,11 +465,31 @@
 
 - `Starting → Backfilling{through: Seq} → Live`。
 - 该流无回填可做时 `Starting → Live`：握手以 venue 游标证明续接原 epoch（§8.2 `handshake`），或能力不支持回填（断代只能标 gap）。
-- 任一状态可进 `Disconnected{since}`；重连回 `Starting`（新 `session_seq`）。
-- `Degraded{reason}` 是 `Live` 的子态（能力收紧、配额受限），不改变记录接受条件。
+- 任一状态可进 `Disconnected{since}`；重连回 `Starting`（新 `session_seq`）。集成离开 `Established` 后自己推不了记录，所以它各流的 `Disconnected` 由核心 append，旧的 `Live` 不会继续显得在线。
+- `Degraded{reason}` 是 `Live` 的子态（能力收紧、配额受限），不改变记录接受条件，也不阻断写：发出前门只看会话与能力（§6.5）。
 - readiness 变化是派生健康观察，不需确认。
 
-**健康面**（P16）字段：按集成 / 账户 `reach: Reachable | Unreachable`、`tier`、`consecutive_failures`、`last_success_at`、`readiness`。经读模型对解释层可见（§8.5）。
+**健康面**（P16）[设计]：每个登记的集成一份 `IntegrationHealth`，只由健康观察 fold 出，经读模型对解释层可见（§8.5）。
+
+| 字段 | 含义 | 由谁 append |
+|---|---|---|
+| `session` | `Connecting{since}` / `Established{since}` / `Halted{cause, since}`（§7.2 第 3 步） | 核心，在会话状态改变时 |
+| `readiness` | 每条流的 readiness（上文） | 集成推送；`Disconnected` 由核心 |
+| 按调用目标的 `consecutive_failures`、`last_success_at` | 见下 | 核心，在每个调用结果被接受时 |
+
+调用结果的计数：
+
+- **目标**是调用显式寻址的对象：`submit`、`cancel`、`query_by_key`、`list_open`、`list_fills`、`replay_by_key` 的目标是 `WriteScope`（按作用域寻址，或经 `AttemptRef` 所在 lane）；`read`、`backfill` 的目标是逻辑流 `(source, stream)`。不从 `WriteScope.streams` 推定某条流属于哪个作用域。
+- **计入**：核心向集成实际发出、结果属当前会话而被接受的调用；每个最终结果恰推进一次它的目标，并 append 一条健康观察。握手不计（由 `session` 表达）；推送、`Attributed`、`Manual` 与 `CrashWindow` 都不是调用结果；无会话时没有发出的调用不计。
+- **失败** = `Unavailable`、`NoResponse`：`consecutive_failures` 加一。
+- **成功** = 其余每个封闭结果，含空 `Records`、`Reject`、`Refused`、`Absent`、`Inconclusive`：上游给出了回答。`consecutive_failures` 归零，`last_success_at` 取该结果被接受的时刻。它回答“这个目标最近一次得到上游回答是什么时候”，不表示业务成功。
+- 从未成功过的目标没有 `last_success_at`。计数跨会话、跨核心重启延续：健康观察是记录，fold 即得。
+
+由此“公共可用、私有失败”可以观察：公共流这一目标最近成功，某个作用域这一目标连续失败；逐流 readiness 另给流一级。它只说各个被调用目标自己的近况，不推断整个账户或鉴权域是否可用。
+
+- **删去 `reach` 与 `tier`**：`reach`（旧 UTA 的 down / connected / readable 阶梯）由 `session`、逐流 readiness 与按目标的调用结果分别表达；合成单一可达度会丢掉“哪一面不通”。`tier`（旧 UTA 由 keyless / readOnly 推出的 data / account / trading，O4）说的是作用域能做什么，已由投影里的能力判定表达（§2.2）；在健康里再存一份会与能力证据分叉。
+- **降级 / 离线的阈值**（旧 UTA 按连续失败 3 次、6 次）是呈现策略，不在核心：解释层或下游按上述字段自定。
+- **健康不进写路径**：它只供运维与下游观察。放行门读能力证据（§6.3），发出前门读核心自己的会话状态与能力证据（§6.5）；集成失效时它的健康观察恰好停止更新，拿它作门的输入会在最需要时过时。
 
 ## 8.5 核心↔解释层
 
@@ -543,7 +588,7 @@
   - `AwaitingTargetTerminal` 的链不接受 `resolve`：它有界，出口是目标终态或 `deadline`（§6.5）。
 - 不要求渠道已穷尽：人工可在任一时刻决议；自动取证仍在进行时的决议同样记为 `Manual`。
 
-**健康**：`health() → Vec<IntegrationHealth>`。动作轴：读。核心内部结果：无。启动期返回 `Starting`（§7.2 第 5 步）。
+**健康**：`health() → Vec<IntegrationHealth>`，每个登记的集成一份：会话状态、逐流 readiness、按调用目标的连续失败数与最近成功时间（§8.4）。它等于 `read_model(health)` 的当前态。动作轴：读。核心内部结果：无。启动期返回 `Starting`（§7.2 第 5 步）。
 
 ### 读模型集合与一致性
 
@@ -554,7 +599,7 @@
 - `lanes`：每 lane 的未终结 Attempt 与 `Undetermined` 列表，执行事实的 fold。
 - `tickets`：单据 fold 的当前态（§6.2）：执行事实 + 其 `basis_validity` 与 `alignment` 的当前评估。评估还取决于完备位置、撤回、保留边界与当时生效的能力证据和策略（§6.2、§6.3），所以这一种只给当前态；`Snapshot` 仍带它实际消费的位置（含 `checked_as_of`）供追溯，但那不是可重建的切面。
 - `subscriptions`：订阅表与 cursor 的当前态（§7.5）。订阅表不是 `Journal`，没有历史切面，所以这一种只给当前态。
-- `health`：健康 / readiness 观察的 fold（§8.3、§8.4）。
+- `health`：健康观察的 fold（§8.3、§8.4）：集成推送的 readiness，与核心 append 的会话状态、`Disconnected` 与调用结果计数。
 
 理由：持仓、订单状态、健康的原值在上游或来自观察，读模型只能 fold 已观察到的记录；lane 与单据是 UTA 自己的执行事实。读模型读观察记录，是效应侧读观察侧的同一条单向边（§3.2）。
 

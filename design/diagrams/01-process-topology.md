@@ -74,22 +74,23 @@ sequenceDiagram
   N->>DB: 快照 + 记录 fold_state：lane 链、单据、RuleState、订阅表
   N->>DB: 每条链先 fold 是否已 Resolved；未完链的当前腿 SendBarrier 无后继 → append Undetermined(CrashWindow)
   Note over N,I: 第 3 步 握手（读统一路径配置失败即拒绝启动；各集成独立推进）
+  N->>DB: fold 各集成会话状态：上次 Halted 者保持 Halted，不拉起；其余进入 Connecting
   N->>I: 按集成登记拉起进程，写进程表 (instance_id, pid, start_time, role)
   N->>I: handshake(session_epoch = (instance_id, session_seq))
   alt 合法 Projection
     I-->>N: Projection（scopes / streams / capabilities）
-    N->>DB: append 一版能力证据；required_inputs 比对；各流决定续 epoch 或新 epoch + Gap{Source}
-  else 投影不合法 / 契约版本不兼容
-    N->>DB: 记 P14 原因
-    N->>I: 终止该集成进程，清除其进程表登记；不自动重试（等 restart_integration）
-  else 传输失败
-    N->>I: 重连（新 session_seq，D1.3）；本步不等它
+    N->>DB: Established：append 声明版本与健康观察；required_inputs 比对；各流决定续 epoch 或新 epoch + Gap{Source}；既有订阅按新声明重算路由
+  else 投影不合法 / 契约版本不兼容 / Refused(reason)
+    N->>DB: Halted{cause}：记 P14 原因，append 健康观察
+    N->>I: 终止该集成进程，清除其进程表登记；不自动重试（等 restart_integration；Refused 另可 rotate_credential）
+  else 传输失败 / Unavailable
+    N->>I: 保持 Connecting，按 pacing 重握手（新 session_seq，D1.3）；本步不等它
   end
   Note over N,I: 第 4 步 恢复效应侧（只为已建立会话的集成发送与取证；之后建立会话者届时补做）
   N->>DB: 其集成已建立新会话的停等 Undetermined → append ReconciliationReopened{SessionRestored}
   N->>I: 每条未终结的 Undetermined 启动对账驱动（读，D6.2）；AwaitingTargetTerminal 的链继续读目标
-  N->>N: 当前腿无 SendBarrier 者过发出前门（D7.1）
-  N->>I: 未过期者 SendBarrier → submit
+  N->>N: 当前腿无 SendBarrier 者过发出前门（D7.1）：deadline 已过 → Expired；会话未建立或能力不支持 → 等待
+  N->>I: 过门者 SendBarrier → submit
   N->>N: fold 出无 EffectResponse 的 EffectRequest 重派（D4.3）
   N->>N: STS 链按 RuleState 续跑待决单据；按 deadline 重装过期计时器
   Note over N,H: 第 5 步 恢复观察侧与消费面
@@ -102,33 +103,46 @@ sequenceDiagram
 读法：
 
 - 第 2 步的结论只来自记录：`Undetermined(CrashWindow)` 在没有任何集成在线时就已 append；随后第 4 步才去问 venue。
-- 第 4 步先取证后发送：已能 `Resolved` 的 lane 先解除，再放未发出的 `Prepared`；发送依赖该集成已建立的会话 epoch，尚无会话的集成其腿等会话建立再发。
-- 失败分两级：取不到 fence、格式版本 / 迁移 / 重建失败、统一路径配置读不出，整体拒绝启动，不进入部分运行态；单个集成握手被拒或不可达、单个程序装载失败，只使该单元不可用，其余照常启动。消费方在第 5 步之前只看到 `Starting`。
+- 第 4 步先取证后发送：已能 `Resolved` 的 lane 先解除，再放未发出的 `Prepared`；发送与取证都依赖该集成已建立的会话 epoch，尚无会话的集成其腿在发出前门等会话建立（或 `deadline` 到期）。
+- 失败分两级：取不到 fence、格式版本 / 迁移 / 重建失败、统一路径配置读不出，整体拒绝启动，不进入部分运行态；单个集成 `Connecting` 或 `Halted`、单个程序装载失败，只使该单元不可用，其余照常启动。`Halted` 跨核心重启保持。消费方在第 5 步之前只看到 `Starting`。
 
 核出：第 4 步原文只写了取证与发送，没写 `EffectRequest` 重派与待决单据的计时器重装——已并入 §7.2 第 4 步。
 
-## D1.3 会话 epoch 与边界接受
+## D1.3 集成的会话状态与边界接受
 
-对照：§7.2 第 3 步、§8.3（推送错误）、§8.4 readiness、§7.6 `rotate_credential`。
+对照：§7.2 第 3 步（会话状态、转移表）、§8.2 `handshake`、§8.3（推送错误、会话中吊销身份）、§8.4 readiness 与健康、§7.6 `rotate_credential`。
 
 ```mermaid
 stateDiagram-v2
-  state "握手中：session_seq += 1，以 (instance_id, session_seq) 发起 handshake" as HS
-  state "会话已建立（当前 epoch 生效）" as EST
-  state "已拒绝" as REJ
-  [*] --> HS : 核心拉起集成 / 重连 / rotate_credential / restart_integration
-  HS --> EST : handshake 返回合法 Projection，能力证据 append
-  HS --> REJ : 投影不合法 / 契约版本不兼容（记 P14，不降级；终止进程，不自动重试）
-  HS --> HS : 传输失败 → 重连（再次 += 1）
-  EST --> HS : 传输断开 / 集成进程退出
+  state "Connecting：无会话；以 (instance_id, session_seq) 发起 handshake" as HS
+  state "Established(SessionEpoch)" as EST
+  state "Halted{ProjectionInvalid | ContractIncompatible}" as REJ
+  state "Halted{Refused(reason)}" as REF
+  [*] --> HS : 登记 / 核心启动（上次非 Halted）
+  [*] --> REJ : 核心启动（上次即此状态，不拉起）
+  [*] --> REF : 核心启动（上次即此状态，不拉起）
+  HS --> EST : handshake 返回合法 Projection（append 声明版本）
+  HS --> REJ : 投影不合法 / 契约版本不兼容（记 P14，不降级；终止进程）
+  HS --> REF : handshake 返回 Refused（上游明确拒绝身份或配置；记 P14；终止进程）
+  HS --> HS : 传输失败 / 进程退出 / handshake 返回 Unavailable → 按 pacing 重连（session_seq += 1）
+  HS --> HS : rotate_credential / restart_integration → 重新握手（session_seq += 1）
+  EST --> HS : 传输断开 / 集成进程退出（含集成因上游吊销身份而结束会话）
+  EST --> HS : rotate_credential / restart_integration
   EST --> EST : 推送 epoch == 当前 → 接受并分配 LogPosition
   EST --> EST : 推送 epoch != 当前 → 边界拒绝，不 append
+  REF --> HS : rotate_credential / restart_integration（运维 principal）
   REJ --> HS : restart_integration（运维 principal）
+  REJ --> REJ : rotate_credential → 控制记录 Rejected
   note right of EST
     SessionEpoch = (instance_id, session_seq)
     集成把它回填到每条推送与 submit 回执
-    旧 epoch 的迟到回执不进核心；
+    旧 epoch 的迟到回执与握手结果不进核心、不改状态；
     venue 已受理的写由新会话观察或对账并入原腿（D6.6 步 4）
+  end note
+  note left of HS
+    只有 Established 时 IO 壳才发写与取证（发出前门，D6.1）
+    每次状态改变（HS→HS 不算）核心 append 一条健康观察；
+    离开 Established 时核心为其各流 append readiness Disconnected
   end note
 ```
 
@@ -136,6 +150,8 @@ stateDiagram-v2
 
 - 会话 epoch 与流 epoch 独立：重连后集成若能以 venue 游标证明续接，流 epoch 不变、`Seq` 接续；证明不了才开新流 epoch（D3.2）。
 - `rotate_credential` 强制新流 epoch（`credential_rotated`），不允许续接。
+- `Connecting` 会自己恢复，两种 `Halted` 只由运维动作解除，核心重启不解除；健康面把二者分开给出。
+- 重握手后不再声明的流：选中它的订阅对该流挂起（原因 `StreamUndeclared`），流再被声明时恢复；断连与 `Halted` 不使订阅挂起（§8.2）。
 
 核出：无。
 
@@ -222,8 +238,8 @@ flowchart LR
 | Decision / `Outcome` / `Rejection` 记录 + `RuleState` 更新 | §7.4 | 链步未发生，重启按 `RuleState` 重跑该步 |
 | 程序写处理器的 `Draft` + `SubmitForDecision` + `EffectResponse{Drafted}` | §6.1 | #21：无 `EffectResponse` → 重派开单 |
 | 读处理器的观察记录 / `Gap{Channel}` + `EffectResponse{Observed / Unavailable}` | §6.1 | #21：无 `EffectResponse` → 重新执行一次 |
-| `submit` 的 `Ack`：`VenueAccepted`（含 `Evidence`）+ 回执观察副本 | §6.5 记录模型 | #5：视为无后继 → `Undetermined` → by-key 取证重得同一状态 |
-| 一次取证命中：`ResolutionEvidence{Found}`（含 `Evidence`）+ `provenance: Reconciliation` 观察副本 | §6.5 | #7：该次取证不存在；fold 显示本轮该渠道未取证，重做（读可重试） |
+| `submit` 的 `Ack`：`VenueAccepted`（含 `Evidence`）+ 该回应的观察记录（订单状态；每笔可识别执行一条成交记录） | §6.5 记录模型 | #5：视为无后继 → `Undetermined` → by-key 取证重得同一状态 |
+| 一次取证命中：`ResolutionEvidence{Found}`（含 `Evidence`）+ `provenance: Reconciliation` 的该回应观察记录 | §6.5 | #7：该次取证不存在；fold 显示本轮该渠道未取证，重做（读可重试） |
 | 推送归因命中：观察记录 + `ResolutionEvidence{Attributed}` | §6.6、§8.1 | 推送未 append：核心崩溃即集成成孤儿被回收，重启握手后该流续接（集成以 venue 游标证明）或新 epoch + `Gap{Source}`；续接则记录重到，仍处 `Undetermined` 的腿照常归因 |
 | `Undetermined` append + 回查已到达的归因观察 | §6.6 | 二者同事务，不存在"归因已到但未匹配"的持久态 |
 | `Advance` 输出：`EffectRequest` 记录 + 派生记录 + `Checkpoint` + 程序 cursor | §8.6 | #16：整批不存在，重放同一批记录 |

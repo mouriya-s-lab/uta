@@ -18,11 +18,12 @@ stateDiagram-v2
   state "Expired(r, deadline)" as EX
   state "腿终结（fold 状态，不是记录）" as RS
   [*] --> P
-  P --> SB : 发出前门 deadline 未过 → durable append（fsync）
-  P --> EX : 发出前门 deadline 已过（可达窗口：崩溃恢复、复合链等待目标终态期间）
-  SB --> VA : submit 返回 Ack → 同事务 VenueAccepted（含 Evidence：契约载荷 + 原始负载）+ 回执观察副本
+  P --> SB : 发出前门：deadline 未过 ∧ 集成会话 Established ∧ 当前能力 Supported 且接受该意图参数 schema → durable append（fsync）
+  P --> P : 发出前门：会话未建立或能力不支持 → 等待（不 append 记录；会话建立 / 能力变化 / deadline 到时重新求值）
+  P --> EX : 发出前门 deadline 已过（可达窗口：崩溃恢复、复合链等待目标终态期间、在发出前门等待期间）
+  SB --> VA : submit 返回 Ack → 同事务 VenueAccepted（含 Evidence：契约载荷 + 原始负载）+ 该回应的观察记录（订单状态；每笔可识别执行一条成交记录，带 execution_id）
   SB --> VR : submit 返回 Reject（业务级；无观察记录）
-  SB --> UD : submit 返回 NoResponse（超时 / 集成崩溃 / 传输 ACK / 5xx）
+  SB --> UD : submit 返回 NoResponse（超时 / 集成崩溃 / 传输 ACK / 5xx / 集成本地不发 / SendBarrier 后会话断开）
   SB --> UD : 重启时无后继 → Undetermined(CrashWindow)
   UD --> UD : ResolutionEvidence Inconclusive → 下一渠道；渠道穷尽 → 停等 Manual 或 ReconciliationReopened
   UD --> RS : ResolutionEvidence Found（任一渠道，含 Attributed / Manual）
@@ -41,9 +42,9 @@ stateDiagram-v2
 
 读法（假想运行时）：
 
-- 正常路径 `P → SB → VA`：`SendBarrier` 单独 fsync，`VenueAccepted` 与回执观察副本同一事务。
-- 只有 `SB → UD` 这一条边把系统带进对账；进去以后写已经"可能发生"，永不重发，只能用读收敛。
-- `Found` 之后没有 `VenueAccepted`：`Evidence` 在 `ResolutionEvidence` 里，观察副本供读模型/钩子 fold。
+- 正常路径 `P → SB → VA`：`SendBarrier` 单独 fsync，`VenueAccepted` 与该回应的观察记录同一事务。
+- 只有 `SB → UD` 这一条边把系统带进对账；进去以后写已经"可能发生"，永不重发，只能用读收敛。`P → P` 的等待不进对账：没有 `SendBarrier`，写确未发出。
+- `Found` 之后没有 `VenueAccepted`：`Evidence` 在 `ResolutionEvidence` 里，该回应的观察记录供读模型/钩子 fold。
 
 核出：无。
 
@@ -60,7 +61,7 @@ flowchart TB
   CALL --> RES{"返回？"}
   RES -->|"Unavailable"| GAP["只 append Gap{Channel}<br/>不算取证、不换渠道；同渠道按 pacing 再发"]
   GAP --> CALL
-  RES -->|"命中带归因身份的订单 / 成交 / 原响应"| FOUND["同事务：观察副本(provenance Reconciliation{r, channel})<br/>+ ResolutionEvidence{r, channel, Found{observation, evidence: Evidence}}"]
+  RES -->|"命中带归因身份的订单 / 成交 / 原响应"| FOUND["同事务：该回应的观察记录(provenance Reconciliation{r, channel}；list_fills 命中只有成交记录，observation 指同流 Seq 最小者)<br/>+ ResolutionEvidence{r, channel, Found{observation, evidence: Evidence}}"]
   RES -->|"ByKey 明确否定"| ABS["ResolutionEvidence{r, ByKey, Absent}（唯一有否定语义的渠道）"]
   RES -->|"未命中（listing / fills 空 ≠ absent，F10）"| INC["ResolutionEvidence{r, channel, Inconclusive}"]
   INC --> NEXT
@@ -103,7 +104,7 @@ flowchart LR
   V["venue 响应，经集成消费（submit / query_by_key / list_open / list_fills / replay_by_key）<br/>= 契约载荷 + 原始负载"] --> TX
   subgraph TX["同一 SQLite 事务（Ack / 取证命中）"]
     E[("执行 J：VenueAccepted{…, receipt: Evidence, observation}<br/>或 ResolutionEvidence{r, channel, Found{observation, evidence: Evidence}}")]
-    O[("观察 J：同内容的观察副本<br/>provenance: Receipt{r} 或 Reconciliation{r, channel}<br/>attribution: FromAttempt(r)（IO 壳填）")]
+    O[("观察 J：该回应的观察记录（订单状态；每笔可识别执行一条成交记录，带 execution_id）<br/>provenance: Receipt{r} 或 Reconciliation{r, channel}<br/>attribution: FromAttempt(r)（IO 壳填）")]
     E -->|"observation 位置引用（效应 → 观察）"| O
     O -.->|"provenance：不透明出处值，观察侧不解析（§3.2）"| E
   end
@@ -113,7 +114,7 @@ flowchart LR
   O --> SUBS["订阅者：与推送观察同形"]
 ```
 
-读法：Attempt 只回答"我的提交到达了吗"；订单是什么状态、成交了多少，在观察副本里给观察宇宙的消费者看，在执行记录的 `Evidence` 里给审计看（契约载荷是结论，原始负载是出处）。
+读法：Attempt 只回答"我的提交到达了吗"；订单是什么状态、成交了多少，在观察记录里给观察宇宙的消费者看，在执行记录的 `Evidence` 里给审计看（契约载荷是结论，原始负载是出处）。
 
 核出：回执证据的永存归属（C13）原文只写了观察侧记录——已并入 §6.5（执行侧持有 `Evidence`）。
 
@@ -177,18 +178,18 @@ sequenceDiagram
   T->>S: AwaitingDecision(v1)
   S->>EJ: 授权 ✓ 输入约束 ✓ 审批（策略不要求人工，rule_version）✓ lane 集合空 ✓ 过期 ✓ 门 ✓（Outcome 带 checked_as_of）
   S->>EJ: 同事务 Prepared @p + Close(Prepared(p)) + RuleState
-  IO->>IO: 发出前门：deadline 未过
+  IO->>IO: 发出前门：deadline 未过 ∧ 会话已建立 ∧ 能力支持 Place 及其参数 schema
   IO->>EJ: durable append SendBarrier(p,1)（fsync）
   IO->>I: submit(attempt (p,1), idempotency_key)
   I->>V: 上游下单
   V-->>I: 业务回执（受理，venue_order_id）
   I-->>IO: Ack(venue_id, receipt)
   IO->>EJ: 同事务：VenueAccepted{venue_order_id, receipt: Evidence, observation}
-  IO->>OJ: 同事务：回执观察副本（Receipt{(p,1)}, FromAttempt((p,1))）
+  IO->>OJ: 同事务：该回应的观察记录（Receipt{(p,1)}, FromAttempt((p,1))）：订单状态；回执已含执行则每笔一条成交记录（带 execution_id）
   Note over IO: 腿终结 → 链 Resolved → 移出阻塞头集合（集合空 → lane 解除）；basis 引用登记解除
   V-->>I: 部分成交 / 成交推送
-  I->>OJ: 观察记录（attribution FromAttempt((p,1))，cumulative_filled_quantity）
-  OJ-->>A: 依次投递：受理、部分成交、成交（字段与原生身份保真）
+  I->>OJ: 观察记录（attribution FromAttempt((p,1))，cumulative_filled_quantity；成交记录带 execution_id）
+  OJ-->>A: 依次投递：受理、部分成交、成交（字段与原生身份保真；orders 对同一 execution_id 只计一次）
   A->>A: read_model(orders) 或自 fold → 最终 = 成交
 ```
 
@@ -208,15 +209,16 @@ sequenceDiagram
   participant EJ as 执行 J
   participant OJ as 观察 J
   participant OP as 运维 principal
+  Note over IO,I: 发出前门已过：会话 A 已建立、能力支持（D6.1）
   IO->>EJ: SendBarrier(p,1)（fsync）
   IO->>I: submit(attempt (p,1))
-  alt 核心存活：集成崩溃 / 超时 / 传输 ACK / 5xx
+  alt 核心存活：集成崩溃 / 超时 / 传输 ACK / 5xx / 集成本地不发
     I-->>IO: NoResponse
     IO->>EJ: append Undetermined((p,1), NoResponse)（同事务回查已到达、归因到 (p,1) 的观察）
   else 核心 kill -9
     Note over IO: 重启第 1 步：instance_id += 1；第 2 步：SendBarrier 无后继
     IO->>EJ: append Undetermined((p,1), CrashWindow)（同事务回查）
-    Note over IO,I: 重启第 3 步：新会话 B（新 session_seq）；第 4 步：启动对账
+    Note over IO,I: 重启第 3 步：新会话 B（新 session_seq）建立后，第 4 步才启动对账（无会话不取证、不记 Gap）
   end
   Note over IO: 渠道集 = 能力证据声明的渠道，按固定顺序取证
   alt 有 by-key 能力
@@ -224,7 +226,7 @@ sequenceDiagram
     alt Found(state)
       I-->>IO: Found
       IO->>EJ: ResolutionEvidence{(p,1), ByKey, Found{observation, evidence}}
-      IO->>OJ: 同事务 观察副本(Reconciliation{(p,1), ByKey})
+      IO->>OJ: 同事务 该回应的观察记录(Reconciliation{(p,1), ByKey})
       Note over IO: 腿终结
     else Absent
       I-->>IO: Absent
@@ -239,8 +241,8 @@ sequenceDiagram
     IO->>EJ: 未命中 → ResolutionEvidence{(p,1), Listing, Inconclusive}
     IO->>I: list_fills(scope, since) → 同上；replay_by_key（若开启）→ 同上
     IO->>EJ: 渠道穷尽：停等；腿留在阻塞头集合
-    OP->>IO: read(scopes, orders, by venue_order_id)（§8.5；核心 → 集成 read）
-    IO->>OJ: 观察记录 @obs（provenance OneShot{origin: Session(OP)}）
+    OP->>IO: read([(来源, 该作用域的订单流, 按 venue 身份的请求)])（§8.5；核心 → 集成 read）
+    IO->>OJ: 观察记录 @obs（provenance OneShot{origins ∋ Session(OP), request}），另有读结论记录
     OP->>IO: resolve((p,1), Found(obs), note)
     IO->>EJ: 授权 ✓ 腿处于 Undetermined ✓ obs 属该 WriteScope ✓ → ResolutionEvidence{(p,1), Manual, Found{obs}} → 腿终结
   end
@@ -248,7 +250,7 @@ sequenceDiagram
   I->>OJ: 观察记录 → (p,1) 处于 Undetermined → 同事务 EJ: ResolutionEvidence{(p,1), Attributed, Found} → 腿终结
 ```
 
-读法：末态可枚举（found → `Evidence` + 观察副本 / absent → 未发生 / 无渠道 → 停等）；停等态之后仍有多条收敛入口：带 principal 的 `resolve`、任一时刻到达的 `Attributed Found`、或 `ReconciliationReopened`（撤阻塞头 / 会话重建 / `retry_reconciliation`）重开的自动取证。
+读法：末态可枚举（found → `Evidence` + 观察记录 / absent → 未发生 / 无渠道 → 停等）；停等态之后仍有多条收敛入口：带 principal 的 `resolve`、任一时刻到达的 `Attributed Found`、或 `ReconciliationReopened`（撤阻塞头 / 会话重建 / `retry_reconciliation`）重开的自动取证。
 
 核出：无。
 

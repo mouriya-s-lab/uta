@@ -16,16 +16,18 @@ flowchart TB
   Q3 -->|"否"| LEG["取当前腿 r（单腿：leg 1；复合链：撤单腿未终结则 r = 撤单腿，否则 r = 已有 SendBarrier 的新单腿）"]
   LEG --> Q1{"r 有 SendBarrier？"}
   Q1 -->|"无"| SAFE["本腿确未发出（不变量 §6.9-8）"]
-  SAFE --> G{"第 4 步：发出前门 deadline 未过？"}
-  G -->|"是"| SEND["durable append SendBarrier(r) → submit（需第 3 步会话）"]
-  G -->|"否"| EXP["append Expired(r, deadline)：终，不误升 Undetermined，不补偿（#2）"]
+  SAFE --> G{"第 4 步：发出前门<br/>deadline 未过？该集成会话已建立？能力支持该操作及其参数 schema？"}
+  G -->|"三者皆是"| SEND["durable append SendBarrier(r) → submit"]
+  G -->|"deadline 未过，但会话未建立或能力不支持"| WAIT["不 append 记录，腿保持 Prepared；会话建立 / 能力变化 / deadline 到时重新求值"]
+  WAIT --> G
+  G -->|"deadline 已过"| EXP["append Expired(r, deadline)：终，不误升 Undetermined，不补偿（#2）"]
   Q1 -->|"有"| Q2{"SendBarrier(r) 有后继？"}
   Q2 -->|"无"| UD["第 2 步即 append Undetermined(r, CrashWindow)（#3/#4/#5）<br/>同事务回查已到达、归因到 r 的观察"]
-  UD --> DRV["第 4 步：启动对账驱动（D6.2）；本轮进度 = round == 当前轮 的 ResolutionEvidence（#7）<br/>停等者因会话重建自动 append ReconciliationReopened{SessionRestored}"]
+  UD --> DRV["第 4 步（该集成会话已建立后）：启动对账驱动（D6.2）；本轮进度 = round == 当前轮 的 ResolutionEvidence（#7）<br/>停等者因会话建立自动 append ReconciliationReopened{SessionRestored}"]
   Q2 -->|"Undetermined 未终结"| DRV
 ```
 
-读法：判定只用记录；两个二分点之前先问"链是否已完"，把已终结的链（含只有 `Expired` 的链）挡在驱动之外；其余归入"重发 / 过期 / 对账 / 等目标终态"四个桶。
+读法：判定只用记录；两个二分点之前先问"链是否已完"，把已终结的链（含只有 `Expired` 的链）挡在驱动之外；其余归入"重发 / 过期 / 对账 / 等目标终态"四个桶。"重发"桶在集成会话建立前停在发出前门等待，不产生记录；只有 `deadline` 能把它变成 `Expired`。
 
 核出："已 `Expired` 且从未有 `SendBarrier`"的链在原恢复规则下会被再过一次发出前门——已并入 §6.7（先 fold `Resolved`）。
 
@@ -48,14 +50,14 @@ sequenceDiagram
   C->>DB: STS 各步 Outcome（带 checked_as_of）+ RuleState
   Note over C,DB: ✕1 Prepared + Close(Prepared) 同事务中途：皆无，单据仍 AwaitingDecision
   C->>DB: COMMIT Prepared + Close(Prepared)
-  Note over C,DB: ✕2 Prepared 有、SendBarrier 无：确未发出 → 过门后重发或 Expired
+  Note over C,DB: ✕2 Prepared 有、SendBarrier 无：确未发出 → 过发出前门后发送（会话未建立则等待），或 deadline 已过 → Expired
   C->>DB: SendBarrier fsync
   Note over C,I: ✕3 SendBarrier 有、submit 未发：可能已发出 → Undetermined(CrashWindow)
   C->>I: submit
   Note over C,I: ✕4 submit 已发、回执未到：同 ✕3；✕14 集成在此崩溃：NoResponse → Undetermined
   I-->>C: Ack
   Note over C,DB: ✕5 回执已到、未 append：同 ✕3，by-key 取证重得同一状态（Evidence 落执行 J）
-  C->>DB: COMMIT VenueAccepted（含 Evidence）+ 回执观察副本
+  C->>DB: COMMIT VenueAccepted（含 Evidence）+ 该回应的观察记录
   Note over C,A: ✕6 记录已提交、cursor 未推进：从已确认 cursor 重投，按 LogPosition 去重
   C->>A: 投递
 ```
