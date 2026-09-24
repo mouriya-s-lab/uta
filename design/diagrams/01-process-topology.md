@@ -4,7 +4,7 @@
 
 ## D1.1 进程拓扑与信道
 
-对照：§0.1（权威在上游，上游只在集成内被消费；三段：清洗、抽象、清洗）、§7.1（进程、信任边界、凭据链、传输）、§8.5（principal、核心↔解释层）、§7.4（单写者）、§7.6（配置文件与运行期登记）。
+对照：§0.1（权威在上游，上游只在集成内被消费；三段：清洗、抽象、清洗）、§7.1（进程、信任边界、凭据链、传输）、§7.3（核心→集成调用全部经集成会话的调用通道）、§8.5（principal、核心↔解释层）、§7.4（单写者）、§7.6（配置文件与运行期登记）。
 
 ```mermaid
 flowchart TB
@@ -110,7 +110,7 @@ sequenceDiagram
 
 ## D1.3 集成的会话状态与边界接受
 
-对照：§7.2 第 3 步（会话状态、转移表）、§8.2 `handshake`、§8.3（推送错误、会话中吊销身份）、§8.4 readiness 与健康、§7.6 `rotate_credential`。
+对照：§7.2 第 3 步（会话状态、转移表）、§7.3 集成会话、§8.2 `handshake`、§8.3（推送错误、会话中吊销身份）、§8.4 readiness 与健康、§7.6 `rotate_credential`。
 
 ```mermaid
 stateDiagram-v2
@@ -165,7 +165,7 @@ flowchart LR
   subgraph W["写者（都在核心进程内）"]
     PUSH["集成推送入口<br/>（位置由核心分配）"]
     DAG["派生 DAG 解释①"]
-    RD["一次性读与回填：读处理器 · 钩子取证 · IO 壳按目标身份的读 · 消费方 read · 订阅侧 backfill<br/>（结果项 + 读结论记录）"]
+    RD["一次性读元素：除回填外的 read（发起方：读处理器 · 钩子先查后判 · IO 壳按目标身份的读 · 消费方 read）<br/>（结果项 + 读结论记录或 Gap{Channel} + 计数观察；并入的发起方各自的 EffectResponse / TargetTerminal 由其 owner 同事务 append）"]
     IOR["IO 壳：回执 / 取证的观察记录（订单状态；每笔可识别执行一条成交记录）"]
     TK["单据（TicketAction）"]
     STS["STS 规则链（含授权步否决时的安全事件）"]
@@ -208,7 +208,7 @@ flowchart LR
   SESS --> EJ
   OUT --> EJ
   SUBEL --> SUB
-  SUBEL -->|"回填进度健康观察 · 路由结论记录"| OJ
+  SUBEL -->|"回填的结果项与读结论记录 · 回填进度健康观察 · 路由结论记录"| OJ
   ISESS --> CAP
   ISESS -->|"声明版本 · IntegrationHalted"| EJ
   ISESS -->|"集成进程的行"| PT
@@ -229,7 +229,7 @@ flowchart LR
 
 读法：
 
-- 观察 J 有七类写者（含集成会话的健康观察、持久订阅的回填进度与路由结论、宿主协议的程序观察），执行 J 有八类（含会话入口的安全事件、集成会话的声明版本与 `IntegrationHalted`）；两侧共享存储原语但类型宇宙不共享（§4.1）。
+- 观察 J 有七类写者（含一次性读元素的读结果、集成会话的健康观察、持久订阅的回填结果、回填进度与路由结论、宿主协议的程序观察），执行 J 有八类（含会话入口的安全事件、集成会话的声明版本与 `IntegrationHalted`）；两侧共享存储原语但类型宇宙不共享（§4.1）。
 - 进程表有两个写者，按 `role` 分行：集成会话写集成进程的行，程序宿主元素写宿主进程的行（§7.5）。
 - 读模型不写任何表：它是按种类对执行 J、观察 J 的只读 fold（`subscriptions` 读订阅表当前态，§8.5），供 `read_model` 读取。
 - 引用登记不是独立写者动作：随 `Prepared`/`Checkpoint`/`ResolutionEvidence` 的 append 自动写入，随 `Resolved`/下一 checkpoint 自动解除（D8.1）。
@@ -256,7 +256,7 @@ flowchart LR
 | 调用结果的记录（回执、取证、读结论、`Gap{Channel}`、`Undetermined`）+ 该调用的计数健康观察 | §7.3、§8.4 | 二者皆无：调用结果未落，计数不前进；不存在“计了数却无结果”的持久态 |
 | `IntegrationHalted` + `Halted` 健康观察 | §7.2 第 3 步 | 二者皆无：会话仍在上一状态，重启按执行事实重判 |
 | 解除 `Halted` 的控制记录 `Applied`（引用 `IntegrationHalted`）+ `Connecting` 健康观察 | §7.2 第 3 步 | 二者皆无：仍 `Halted`，没有握手发生 |
-| 目标终态观察到达 + `TargetTerminal` | §6.5 转移表 | #8：无 `TargetTerminal` 则重启后按目标身份再读；有则新单数量取记录 |
+| 使目标终态判定成立的记录 + `TargetTerminal` | §6.5 转移表 | #8：无 `TargetTerminal` 则重启后按目标身份再读；有则新单数量取记录 |
 
 读法：`SendBarrier` 不在任何集合里——它单独 durable append（fsync）后才允许该腿的写调用，这正是把崩溃窗口二分的屏障（D6.1）。
 

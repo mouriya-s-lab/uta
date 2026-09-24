@@ -25,7 +25,7 @@ Emit(EffectRequest { effect_kind: EffectKind, payload: Bytes, basis: Basis, key:
 
 **读处理器：**
 
-- 立即执行一次核心→集成的 `read`（§8.2）。
+- 立即经一次性读元素（§7.3）执行一次核心→集成的 `read`（§8.2）；同 identity 的在途调用照常并入（§2.2）。
 - 集成作答（含上游明确拒绝）时，该流上同一事务 append 作答的 N 条观察记录与一条读结论记录（§8.2），出处 `OneShot{origins ∋ Request(该 EffectRequest 记录的 LogPosition), request}`（§3.4）。
 - 程序按位置推进看到作答的记录：闭环走观察侧。
 - `Unavailable` → 观察侧 `Gap{origin: Channel}`。核心未调用集成的情形（来源未登记、来源从未有过声明版本、流未声明、最近有效声明为 `Unsupported` 或 `Unknown`、请求不合 schema、来源无当前会话，判定顺序见 §8.2 `read`、§8.5 一次性读）不调用、不 append 观察记录。
@@ -93,7 +93,7 @@ Emit(EffectRequest { effect_kind: EffectKind, payload: Bytes, basis: Basis, key:
 
 ## 6.2 单据 `Ticket`
 
-> 图：D5.1 单据状态机、D5.2 意图构造与参数合规、D5.5 两层对账与检查目录重算（`design/diagrams/05-ticket-and-sts.md`）。
+> 图：D5.1 单据状态机、D5.2 意图构造与参数合规、D5.3 顺序固定链（参数合规在输入约束步）、D5.5 两层对账与检查目录重算（`design/diagrams/05-ticket-and-sts.md`）；D6.4 `Replace` 两腿计划（`06-io-shell-attempt.md`）。
 
 单据是意图形成期的抽象，它的锁 = 责任持有。
 
@@ -492,7 +492,7 @@ trait Rule {
 
 **输入约束步** [设计]。三项彼此独立，以 `Validated` 累积，一次否决列出全部违反：
 
-- `parameter_validity` 不是 `Valid`：`Invalid` 带逐项违反，`NotSupported` 与 `SchemaMismatch` 各自单列，三者原因可区分（§6.2）。它无条件生效，策略不能关闭。
+- `parameter_validity` 不是 `Valid`：`Invalid` 带逐项违反，`NotSupported`、`SchemaMismatch` 与 `TargetNotAccepted` 各自单列，四者原因可区分（§6.2）。它无条件生效，策略不能关闭。
 - instrument 属目标账户（C9）、目标子账户已枚举（C10）。
 - **允许集合**：策略为该 `(principal, WriteLaneKey, OperationKind)` 给出 instrument 允许集合时，意图的 instrument 不在集合内即否决；不给出即不限制；给出空集即全部否决。
 - **各项的适用范围** [设计]：一项校验只对带它所读字段的操作种类求值（守卫字段表，§6.2 交易协议）。意图的 instrument 是 `Place` 与 `Replace` 新单部分的守卫字段，`Close` 取 `PositionRef` 的 instrument；`Cancel` 没有 instrument，C9 与允许集合对它不适用，它的目标订单属于目标作用域已由构造保证（§6.2 目标身份）。C10 按作用域而定，对全部操作种类照常适用。策略给 `Cancel` 配 instrument 允许集合，规则文件不合法（§7.6），不在运行期忽略。理由：`Cancel` 没有 instrument，规则无从比较；否决全部、放行全部或在运行期忽略，是三种都说得通、结果不同的做法，而写这条规则的人以为它在起作用。给文件判不合法与“给 `Close` 配冷却”同理。

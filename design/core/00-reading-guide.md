@@ -81,7 +81,7 @@ flowchart LR
   TE["Journal&lt;Record, Delta&gt;<br/>执行事实：intent/decision/attempt/receipt/reconcile<br/>接口只暴露 append"]
   STS["决策代数 STS<br/>(Context, RuleState, Input) → Result&lt;(RuleState, Outcomes), NonEmpty&lt;Rejection&gt;&gt;"]
   PROG["程序 = 封闭值代数<br/>解释①派生 → TD<br/>解释②决策 → Intent"]
-  IO["唯一 IO 壳<br/>投放 / 对账证据 / 能力握手"]
+  IO["唯一 IO 壳<br/>投放 / 对账证据 / 能力观察"]
   FR["三种进度<br/>消费位置 · 完备进度 · 保留边界"]
   INT -->|位置推进| TD
   TD -->|cursor 集| PROG

@@ -404,6 +404,13 @@
 - 不选：会话归 IO 壳（观察侧的 `route`/`backfill` 要经过效应侧元素）；归持久订阅（写的发出前门依赖观察侧状态）；各发起方自己计数（状态值没有唯一写者）；另设健康元素（没有秘密的转发者）。
 - 证据：§3.2；§7.3；§8.4。
 
+**一次性读与当前声明的归属**（§7.3 一次性读、集成会话；§2.2 只读批处理条件）。已定（验收 §10.5 #51）。
+
+- 选中：观察侧元素“一次性读”发起并完成除回填外的全部 `read`：同一集成会话 epoch 内同一 identity 的在途调用必然并入，`origins` 在完成提交时冻结，一次调用计一次，发起方的 `deadline` 或会话先结束时调用照常完成；发起方自己的记录（`EffectResponse`、`TargetTerminal`）由各自 owner 在同一事务 append。每个来源的当前声明由集成会话从声明版本与 `CapabilityObserved` 求出，以契约值交给写门、持久订阅与一次性读。
+- Q 场景后果：Q15/Q16：同一查询不论谁发起都只打一次上游，`Pending` 后的结论与计数有人提交；Q13/Q32：订阅接纳、读路由与写门用同一份声明，观察侧不读效应侧记录。
+- 不选：在途表放进集成会话的调用通道（中性通道要解释读的 identity 与结论）；各发起方各自发读（是否共享上游调用取决于谁发起，消费方离开后调用无人完成）；各读者自行 fold 声明记录（同一规则 fold 多遍，唯一边上开例外）；改由集成会话 append `CapabilityObserved`（只改调用者，不改语义依赖）。
+- 证据：§3.2；§7.3；§8.2、§8.5。
+
 **重握手后不再声明的流**（§8.2）。已定（验收 §10.5 #37）。
 
 - 选中：订阅对该流挂起（带原因）、其余已选流照常、已 append 记录照常按 cursor 投递；流再被声明时恢复，断代按流 epoch 规则显式标出。
@@ -635,6 +642,8 @@
 23. **解释层**（§0.1、§8.5；`design/downstream/design.md`）：以 fixture 上游与 fixture 下游客户驱动解释层观测：（对应 Q2/Q16/Q29）
     - 泄露检查：以核心概念词表（`design/downstream/design.md` 第 7 节）检查全部命令帮助、结构化输出、长连接消息与错误，不出现任何核心概念名；
     - 注入 `NoResponse` 后，下游看到“结果未知”，输出中没有“失败”也没有重新下单的提示；随后取证终结时，下游收到“已确认发生 / 未发生”；
+    - 两腿改单：撤单腿以 `VenueAccepted` 或 `Manual` 的 `Found` 终结后，fixture 上游从不给出原单终态、`deadline` 到期：下游看到“新单已过期、未发送，原单是否已结束尚未确认”，输出中没有“原单已撤 / 已结束”，也没有重新下单的提示；已有 `TargetTerminal` 而新单腿在发出前门等待中到期时，下游看到原单已结束（附该终态）；`TargetTerminal` 数量 ≤ 0 时，下游看到的是“原单已成交的数量已达到这次改单要求的数量”，不是“原单已全部成交”；
+    - `design/downstream/design.md` 第 5 节翻译表的每一行（含订阅挂起的每种原因、一次性读的每个结果、跨流冲突的订单与持仓）都有 fixture 触发，下游得到该行的对外含义，不出现核心概念名；
     - 长连接存续期间重启解释层：客户凭续传令牌重连，收到的记录与不重启时相同（未确认区间可能重复），断连期间的损失以缺失通知给出；
     - 能力 `Unsupported` 与 `Unknown` 对外分别得到明确的“不支持”与“未确认”，不返回空结果；
     - 某集成新增扩展字段后重新构建，只有该来源下出现对应参数与字段；运行期遇到构建时没有的 schema 版本，该来源专有字段如实提示不可用，公共字段照常。
@@ -657,9 +666,9 @@
     - 参数不合流的 `request_schema`、所依据的 schema 身份与当前声明不符、`range` 用在无事件时间的流上：得 `InvalidRequest`，集成未被调用；
     - 空回答得 `Answered` 且只有一条读结论记录；非空回答的 item 记录与读结论记录同一事务 append，结论引用的恰是本次 item 的位置；另一个订阅该流的消费者在 cursor 流里看到同一条结论；
     - 分别触发来源未登记、从未有声明、流未声明、`read` 为 `Unsupported`、为 `Unknown`、无已建立会话、上游明确拒绝、调用后渠道失败：结果依次为 `UnknownTarget`、`Unavailable{source_state}`、`Unsupported`、`Unsupported`、`Unconfirmed`、`Unavailable{source_state}`、`Refused`、`Unavailable{gap}`（`gap` 指向该流上刚记的 `Gap{origin: Channel}`），不同结果之间可区分；前六种都不调用集成、不 append 观察记录，“无会话”不计入健康的连续失败；
-    - fixture 上游拖过 `deadline` 才作答：该 target 得 `Pending{from}`，此时该流上没有结论也没有 gap，健康计数不变；之后该流上出现一条结论记录（与本次同一请求身份，`origins` 含该会话）并计一次健康结果；拖过 `deadline` 后失败则出现一条 `Gap{origin: Channel}`；在结论 append 之后才以 `from` 订阅该流，仍收到这条结论；同一会话 epoch 内在调用结束前以同一 identity 再读，fixture 只收到一次调用；
+    - fixture 上游拖过 `deadline` 才作答：该 target 得 `Pending{from, instance_id}`，此时该流上没有结论也没有 gap，健康计数不变；之后该流上出现一条结论记录（与本次同一请求身份，`origins` 含该会话）并计一次健康结果；拖过 `deadline` 后失败则出现一条 `Gap{origin: Channel}`；在结论 append 之后才以 `from` 订阅该流的一个只投递项，仍收到这条结论；同一集成会话 epoch 内在调用结束前以同一 identity 再读，fixture 只收到一次调用；
     - 无作用域的公共来源可按流读取与订阅，不出现在账户列表里；
-    - 同一 identity 的两个在途请求可合并为一次集成调用，读结论的 `origins` 含两者，较短的 `deadline` 照常到期；跨会话 epoch 的请求不合并。
+    - 同一集成会话 epoch 内同一 identity 的两个在途请求（发起方不同亦然）必然并为一次集成调用，读结论的 `origins` 含两者，健康只计一次，较短的 `deadline` 照常到期；调用完成之后的同一请求是新调用；跨会话 epoch 的请求不合并。
 28. **读侧声明：配额、回填、数据等级**（§2.2、§8.2、§8.4、§8.5）：（对应 Q13/Q14）
     - 同一流同一主体被两个 principal 订阅，配额用量只计一次；配额池里的流上的整流订阅被拒；重新握手使上限变小后，按创建先后保留、超出者转挂起（原因 `QuotaExceeded`），集成不收到超限主体，有余量时按同一顺序恢复；
     - 回填：注入任一页失败得 `Unavailable`：不 append 部分页的记录，也不 append 读结论记录，按失败契约记 `Gap{origin: Channel}` 与健康观察；上游历史穷尽时 `covered_to` 为连续前缀，未覆盖区间以 `Gap{Source, backfill_incomplete}` 标出；崩溃重启后从最近的读结论接着请求，同 epoch 无重复记录；
@@ -702,7 +711,7 @@
     - 一串注入的调用结果（`Unavailable`、`NoResponse`、空 `Answered`、记录集为空的 `Covered`、`Routed`、`Reject`、`Refused`、`Absent`、`Inconclusive`）使对应目标的连续失败数按“失败加一、其余归零”变化，每个结果恰一条健康观察，与该结果的记录同一事务；握手、推送、`Attributed`、`Manual`、`CrashWindow` 与无会话时未发出的调用不改变计数；
     - 公共流的读成功、某作用域的调用连续失败时，健康同时给出二者；
     - 会话断开后该集成各流 readiness 为 `Disconnected`；`Halted` 与 `Connecting` 在健康中可区分，且跨核心重启不变；
-    - 健康中没有 `reach` 与 `tier`；`read_model(health)` 按任一历史 `as_of` 与对同一健康观察集的独立 fold 相等（同 #18）。
+    - 健康中没有 `reach` 与 `tier`；`read_model(health)` 按任一不低于保留边界的历史 `as_of` 与对同一健康观察集的独立 fold 相等（同 #18；低于边界得 `BeyondRetention`，见 #43）。
 39. **成交跨渠道计数**（§8.1、§8.3、§4.2）：以 fixture 上游让同一笔执行经推送、`submit` 回执、`list_fills` 取证命中、一次性 `read`、`backfill` 各到达一次，其间断线重连换流 epoch、核心重启一次：（对应 Q1/Q5）
     - 观察 J 中每次到达各有一条记录；`orders` 读模型与一个按 §8.1 规则独立写的参照 fold 都只计该执行一次，二者相等；
     - 两笔价格、数量、时间都相同而 `execution_id` 不同的执行计两笔；同一原生成交号在两个 `WriteScope` 下计两笔；
@@ -768,6 +777,12 @@
     - 只有事件时间的流：fixture 在实时订阅确认前发出一条事件时间晚于首条实时记录的记录、并让首条实时记录迟到：进度恰一次变为 `Reached`，不是 `Closed`；该 epoch 起点的 `Gap{origin: Source}` 仍在读模型的 `gaps` 里；迟到或修订的实时记录与回填记录并存时二者都 append、核心不去重；
     - 只有事件时间、一直没有实时记录的流：没有回填任务，健康为 `Starting`、无回填进度，`gaps` 里仍有该 epoch 起点的 `Gap{origin: Source}`；此间带 `range` 的一次性 `read` 可取得历史，不改变回填进度与完备进度；首条实时记录到达后建立任务，回填窗口为 `[起点, live_from)`，终态为 `Reached`；
     - 集成一致性：`joinable_venue_seq` 只在上游序号于流 epoch 内连续、回填与实时同一序号空间时声明；`live_from` 的声明时机按两种流各自的规则。
+51. **一次性读与当前声明**（§7.3 一次性读与集成会话、§2.2 只读批处理条件、§8.5）：（对应 Q13/Q15/Q16/Q32）
+    - 消费方 `read` 得 `Pending` 后关闭其会话：调用照常完成，该流上恰一条结论记录（或一条 `Gap{origin: Channel}`）与恰一条计数健康观察，同一事务提交；在它们提交之前注入崩溃：重启后二者都不在，核心不再替消费方发起这次调用，消费方以同一 identity 重新 `read` 是一次新调用、得到它自己的结果；读处理器的同一请求按 §6.1 重派，恰得一条 `EffectResponse`；新会话握手给出的 `instance_id` 与 `Pending` 所带的不同，下游对这次读取显示“读取作废、需重新读取”，不显示为仍在等待；
+    - IO 壳按目标身份的读、读处理器与消费方在同一集成会话 epoch 内以同一 identity 发读：fixture 只收到一次调用，结论记录的 `origins` 含三者、健康只计一次；读处理器的 `EffectResponse` 与结论同一事务；命中目标终态时 `TargetTerminal` 也在这一事务里；
+    - 钩子“先查后判”的读与消费方 `read` 的记录、计数与读处理器同形；
+    - 同一时刻，写门（能力项与发出前门）、持久订阅的接纳与配额、一次性读的判定与 `read_model(sources)` 给出的每个写能力、流的读 / 回填能力与配额逐项相同，包括一条 `CapabilityObserved` 之后与重启之后；
+    - 代码中观察侧元素只经集成会话取得当前声明，接口只含契约值类型；观察侧 crate 不依赖效应侧 crate（同 #45）。
 53. **目标终态判定**（§6.5 目标终态判定、§8.1“订单身份与最近观察”）：两腿改单的链，以 fixture 上游与 fixture 集成驱动，并以一个只按 §6.5 规则、只读已提交记录写的参照判定对照：（对应 Q2/Q17/Q27）
     - 每种情形下 `TargetTerminal` 的有无、所在事务、引用的观察与数量，都与参照判定相等；
     - 回看：目标的终态推送在撤单腿 `Undetermined` 期间到达、撤单腿之后以 `Manual` `Found` 终结：进入等待的那个事务 append `TargetTerminal`，不发按目标身份的读；目标终态随撤单腿的回执到达：同一事务 append `VenueAccepted` 与 `TargetTerminal`；

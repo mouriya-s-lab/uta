@@ -186,7 +186,7 @@
 **失败路径。**
 
 1. 核心在“追加观察记录”或“替换订阅表”中途 `kill -9`。存储为单个 SQLite 文件、单写者、每次 append 原子（§7.4）。
-2. 重启：半写事务不提交，`fold_state` 从已提交记录重建（§4.1、§7.4）；半写状态不可见（不变量 §6.9-2）。
+2. 重启：半写事务不提交，`fold_state` 从已提交记录重建（§4.1、§7.4）；半写状态不可见（§7.4 事务原子性）。
    - 恢复者：核心（独占 SQLite，H10 OS 文件锁与 SQLite 锁同向，§7.4）。
    - 快照加速重建、不改 append-only（§7.5）。
 3. 对外可见：无半条记录；订阅者按 cursor 续接（订阅表 / cursor 恢复）。
@@ -250,7 +250,7 @@
    - 旧实例登记的集成 / 宿主进程按进程表回收。
    - 旧 epoch 的推送与回执在边界丢弃（§8.3）。
    - 旧在途 `submit` 的命运与 W2 脑裂变体相同：由 `SendBarrier` 记录 + 新实例对账收敛，不依赖旧实例。
-   - 对外可见：接管不产生双写（不变量 §6.9-2 单写者 + fence）；进程表中无旧 `instance_id` 名下的存活进程。
+   - 对外可见：接管不产生双写（§7.1 单实例、§7.4 单写者，fence 与 H10）；进程表中无旧 `instance_id` 名下的存活进程。
 
 **走通。**
 
@@ -295,7 +295,7 @@
 
 1. 改单意图类型 `Replace [交易协议]`，构造期必须携带 `target: VenueRef | IdemKey`（parse-don't-validate，§6.2、§8.1）。
    - 该 `(scope, Replace)` 声明两腿计划 `[cancel, submit]` → IO 壳在**同一条 Attempt 链**解释为 `SendBarrier(cancel) → TargetTerminal（目标终态判定成立）→ SendBarrier(new)`（§6.2、§6.5）。计划在撤单腿过发出前门时选定并记进它的 `SendBarrier`，之后能力声明换成原子计划也不改这条链。这是 `>>=`：第二腿读第一腿结果，发生在 IO 壳内。
-   - `target` 的种类不在该来源接受之列（例如撤一条只有请求键的腿、来源只接受 venue 订单身份）→ 输入约束步 `TargetNotAccepted`，单据在 `Prepared` 之前关闭（§6.2 可执行性）。
+   - `target` 的种类不在该来源接受之列（例如 `target` 是调用方键 `IdemKey`、而来源只接受 venue 订单身份）→ 输入约束步 `TargetNotAccepted`，单据在 `Prepared` 之前关闭（§6.2 可执行性）；`target` 是只记为请求键的键时，意图构造不出（`Malformed`，§6.2 参数合规）。
    - 行动者：IO 壳，身份 = `attempt_position` + `WriteLaneKey`。
 2. 撤单腿（`leg = 1`）`cancel` 无回执 → `Undetermined`（§6.5）→ 整条链停在对账，新单腿**不发**（§6.2）；取证只用撤单腿自己请求键的 by-key / replay-by-key，listing 与成交对账不属撤单腿，不带键的撤单腿没有自动取证渠道，只由 `Attributed` 或 `Manual` 收敛；目标订单的记录（例如 listing 上仍在或已不在）不是撤单腿的 `Found`（§6.6 撤单腿的取证）。
    - 撤单腿终结于 `VenueAccepted`/`Found` 后，链进入 `AwaitingTargetTerminal`（转移表，§6.5）。进入的那个事务先看 `deadline`，再对截至此刻的全部记录做目标终态判定（§6.5）：目标订单（`VenueRef` 即该 `venue_order_id`；`IdemKey` 取能证明属于记下该键的那条腿的记录所带的 `venue_order_id`）在进入时该作用域所挂订单状态流（按进入之前最近的声明版本定下，此后不变）上的最近观察（§8.1）是终态（剩余量口径下还须带 `cumulative_filled_quantity`），就在这个事务 append `TargetTerminal`。撤单腿还 `Undetermined` 时就已推送到达的目标终态（例如外部订单的 `External` 推送），撤单腿之后经 `Manual` 终结时同样在此成立。
@@ -494,7 +494,7 @@
 | 6 | 记录已 append 提交，投递/cursor 推进前崩溃 | 记录已提交、cursor 未推进 | 核心：`fold_state` 重建；订阅者从已确认 cursor 之后重收，未确认的记录可重复可见，按 `LogPosition` 去重 | 记录不丢；重复只出现在未确认区间 | §4.2；§7.4 | — |
 | 7 | 对账取证中途 | 部分 `ResolutionEvidence` 已 append | IO 壳：取证是读副作用、可重放；未收敛者继续按渠道取证（下一渠道由 fold 重建） | 收敛进度不丢；渠道穷尽仍 `inconclusive` 停人工 | §6.5；§6.6 | §10.5 #17 |
 | 8 | `Replace` 两腿计划：cancel 腿（`leg = 1`）终态已持久、new 腿（`leg = 2`）未过 `SendBarrier` 时崩溃 | cancel 腿终态有；可能已有 `TargetTerminal`；无 `leg = 2` 的 `SendBarrier` | IO 壳：见表下 | 复合操作按链续；new 腿未重复；已完的链不被再驱动 | §6.5；§6.7；不变量 §6.9-8 | §10.5 #8(c)/#14 |
-| 9 | 观察 append 中途 | 半写事务未提交 | 核心：单写者原子回滚；半写不可见；`fold_state` 重建 | 无半条记录；订阅者按 cursor 续接 | §4.1；§7.4；不变量 §6.9-2 | §10.5 #8(d) |
+| 9 | 观察 append 中途 | 半写事务未提交 | 核心：单写者原子回滚；半写不可见；`fold_state` 重建 | 无半条记录；订阅者按 cursor 续接 | §4.1；§7.4 | §10.5 #8(d) |
 | 10 | 派生 DAG 重算中途 | 派生记录部分 append（`RetractableDelta`） | 核心：派生侧可重算，未提交贡献重建；无自反馈环 | 派生结果最终一致；可撤回可压缩 | §4.1；§4.3 | — |
 | 11 | 快照写入中途 | 快照部分写、原记录完整 | 核心：快照仅加速；半写快照丢弃，从保留边界 `fold_state` 重建 | 不改 append-only 语义；重启延迟增大 | §7.4；§7.5 | — |
 | 12 | 配置文件重载中途 | 统一路径文件原子替换半途 | 核心：见表下 | 重载成功或整体拒绝；无半写可见态 | §7.6；C14；O9 | — |
