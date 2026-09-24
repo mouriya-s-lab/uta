@@ -146,13 +146,14 @@ struct Program { nodes: Vec<DerivationNode>, rules: Vec<DecisionStep>, state: Ve
 
 ## 4.4 读模型
 
-> 图：D2.4 边的承载、D4.3 读处理器、D9.2 消费方 `read`（`design/diagrams/02-record-model.md`、`04-program-host.md`、`09-alice-session.md`）。
+> 图：D2.4 边的承载、D9.2 消费方 `read_model`（`design/diagrams/02-record-model.md`、`09-alice-session.md`）。
 
-**读模型**（read model）是读副作用（§3.4）的一种消费产物：消费侧对执行事实 `Journal` 的**可重建、非权威** fold（订单、持仓等），经同一对外接口暴露。
+**读模型**（read model）是读副作用（§3.4）的一种消费产物：核心对记录的**非权威**只读 fold（订单、持仓等），经核心↔解释层契约由 `read_model` 读取（§8.5）。每一种读什么（执行事实、观察记录，或 `subscriptions` 的订阅表当前态）、能否按历史 `as_of` 重建，在 §8.5“读模型集合”一处定。
 
+- 读模型元素不属于观察宇宙：有的种类读执行事实，所以它落在效应侧（§7.3）；它读观察记录走效应侧读观察侧的单向边（§3.2），观察侧不因此引用效应侧。放在本章，是因为它消费的是读副作用留下的记录。
 - 消费方也可直接订阅原始记录自行 fold。
 - 读模型不作权威、不被规则引用（§6.3），只服务下游可实现性，避免每个消费方重复 fold。
-- 读模型的集合、`as_of` 与 gap 一致性见 §8.5。
+- 读模型的 `as_of` 与 gap 一致性见 §8.5。
 
 ### 不变量
 

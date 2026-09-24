@@ -73,20 +73,27 @@ sequenceDiagram
   N->>DB: 校验格式版本（C14，失败即拒绝启动）
   N->>DB: 快照 + 记录 fold_state：lane 链、单据、RuleState、订阅表
   N->>DB: 每条链先 fold 是否已 Resolved；未完链的当前腿 SendBarrier 无后继 → append Undetermined(CrashWindow)
-  Note over N,I: 第 3 步 握手
+  Note over N,I: 第 3 步 握手（读统一路径配置失败即拒绝启动；各集成独立推进）
   N->>I: 按集成登记拉起进程，写进程表 (instance_id, pid, start_time, role)
   N->>I: handshake(session_epoch = (instance_id, session_seq))
-  I-->>N: Projection（scopes / streams / capabilities）
-  N->>DB: append 一版能力证据；required_inputs 比对；各流决定续 epoch 或新 epoch + Gap{Source}
-  Note over N,I: 第 4 步 恢复效应侧
-  N->>DB: 停等的 Undetermined → append ReconciliationReopened{SessionRestored}
+  alt 合法 Projection
+    I-->>N: Projection（scopes / streams / capabilities）
+    N->>DB: append 一版能力证据；required_inputs 比对；各流决定续 epoch 或新 epoch + Gap{Source}
+  else 投影不合法 / 契约版本不兼容
+    N->>DB: 记 P14 原因
+    N->>I: 终止该集成进程，清除其进程表登记；不自动重试（等 restart_integration）
+  else 传输失败
+    N->>I: 重连（新 session_seq，D1.3）；本步不等它
+  end
+  Note over N,I: 第 4 步 恢复效应侧（只为已建立会话的集成发送与取证；之后建立会话者届时补做）
+  N->>DB: 其集成已建立新会话的停等 Undetermined → append ReconciliationReopened{SessionRestored}
   N->>I: 每条未终结的 Undetermined 启动对账驱动（读，D6.2）；AwaitingTargetTerminal 的链继续读目标
   N->>N: 当前腿无 SendBarrier 者过发出前门（D7.1）
   N->>I: 未过期者 SendBarrier → submit
   N->>N: fold 出无 EffectResponse 的 EffectRequest 重派（D4.3）
   N->>N: STS 链按 RuleState 续跑待决单据；按 deadline 重装过期计时器
   Note over N,H: 第 5 步 恢复观察侧与消费面
-  N->>I: 按订阅表重建路由，按需 backfill
+  N->>I: 为已建立会话的集成按订阅表重建路由，按需 backfill（不等回填完成）
   N->>H: 拉起宿主并登记；比对 checkpoint 的 state_version → Load(program, checkpoint?, budget)
   H-->>N: Loaded 或 LoadRejected（版本不被接受不是 LoadRejected：不携带 checkpoint 装载并 Reset，D4.2）
   N->>A: 开放下游会话；此前 health() 返回 Starting
@@ -95,8 +102,8 @@ sequenceDiagram
 读法：
 
 - 第 2 步的结论只来自记录：`Undetermined(CrashWindow)` 在没有任何集成在线时就已 append；随后第 4 步才去问 venue。
-- 第 4 步先取证后发送：已能 `Resolved` 的 lane 先解除，再放未发出的 `Prepared`；发送依赖第 3 步的会话 epoch。
-- 任一步失败整体拒绝启动，不进入部分运行态；消费方在第 5 步之前只看到 `Starting`。
+- 第 4 步先取证后发送：已能 `Resolved` 的 lane 先解除，再放未发出的 `Prepared`；发送依赖该集成已建立的会话 epoch，尚无会话的集成其腿等会话建立再发。
+- 失败分两级：取不到 fence、格式版本 / 迁移 / 重建失败、统一路径配置读不出，整体拒绝启动，不进入部分运行态；单个集成握手被拒或不可达、单个程序装载失败，只使该单元不可用，其余照常启动。消费方在第 5 步之前只看到 `Starting`。
 
 核出：第 4 步原文只写了取证与发送，没写 `EffectRequest` 重派与待决单据的计时器重装——已并入 §7.2 第 4 步。
 
@@ -111,12 +118,12 @@ stateDiagram-v2
   state "已拒绝" as REJ
   [*] --> HS : 核心拉起集成 / 重连 / rotate_credential / restart_integration
   HS --> EST : handshake 返回合法 Projection，能力证据 append
-  HS --> REJ : 投影不合法 / 契约版本不兼容（记 P14，不降级）
+  HS --> REJ : 投影不合法 / 契约版本不兼容（记 P14，不降级；终止进程，不自动重试）
   HS --> HS : 传输失败 → 重连（再次 += 1）
   EST --> HS : 传输断开 / 集成进程退出
   EST --> EST : 推送 epoch == 当前 → 接受并分配 LogPosition
   EST --> EST : 推送 epoch != 当前 → 边界拒绝，不 append
-  REJ --> [*]
+  REJ --> HS : restart_integration（运维 principal）
   note right of EST
     SessionEpoch = (instance_id, session_seq)
     集成把它回填到每条推送与 submit 回执
@@ -200,7 +207,7 @@ flowchart LR
 读法：
 
 - 观察 J 有四类写者，执行 J 有七类；两侧共享存储原语但类型宇宙不共享（§4.1）。
-- 读模型不写任何表：它是执行 J（+ 归因观察）的只读 fold，随请求或订阅计算。
+- 读模型不写任何表：它是按种类对执行 J、观察 J 的只读 fold（`subscriptions` 读订阅表当前态，§8.5），供 `read_model` 读取。
 - 引用登记不是独立写者动作：随 `Prepared`/`Checkpoint`/`ResolutionEvidence` 的 append 自动写入，随 `Resolved`/下一 checkpoint 自动解除（D8.1）。
 
 核出：无。

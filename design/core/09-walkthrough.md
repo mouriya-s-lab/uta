@@ -27,9 +27,10 @@
    - 行动者：程序宿主（§8.6），以其**装载 principal** 为身份。
    - 输出：`EffectRequest` 值，未定型。对外可见：无。
 2. 核心出站写处理器接手（§6.1、§7.3），以装载 principal 为 `responsible` 开单 `Draft{basis}`（§6.2）。
-   - append 单据记录（执行 J）。
-   - 对外可见：审批人 / 读模型可见一张 `Drafting` 单据，负责人 = 装载 principal。
-3. 写处理器随即 `SubmitForDecision`（程序意图无编辑期，§6.1）：冻结 `current_version`，`Drafting → AwaitingDecision`（§6.2）。
+   - append 单据记录（执行 J），与步 3 的 `SubmitForDecision` 及 `EffectResponse{Drafted}` 同一事务（§6.1）。
+   - 对外可见：无；`Drafting` 只在该事务内出现，不对外可见。
+3. 写处理器在同一事务内 `SubmitForDecision`（程序意图无编辑期，§6.1）：冻结 `current_version`，`Drafting → AwaitingDecision`（§6.2）。
+   - 对外可见：事务提交后，审批人 / 读模型 `tickets` 看到一张 `AwaitingDecision` 单据，负责人 = 装载 principal。
    - STS 顺序固定链：授权 → 输入约束 → 审批 → lane → 过期（§6.3）。
    - 放行前读单据 fold 的 `basis_validity == Fresh`、必要项 `alignment == Aligned`、版本一致（§6.3 放行门）。
    - append RuleState + 单据记录（执行 J，同事务）。
@@ -118,7 +119,7 @@
 **正常—失败路径。**
 
 1. UI 与 AI 在 100 ms 内各提交一笔到同一 `WriteLaneKey`（交易协议下 = (账户, 子账户)，§6.4）。
-   - 两笔各自走 W1 步 2–3，进入 `AwaitingDecision`。
+   - 两笔各自经解释层代开的会话 `draft(intent)` + `submit_for_decision`（§8.5），以各自会话 principal 为 `responsible`，进入 `AwaitingDecision`；之后同 W1 步 3 的 STS 链。
    - STS 链的 lane 步按 append 顺序放行第一笔（W1 步 4，得 `Prepared`）。
    - 第二笔因 lane 已有未终结 Attempt 停在 lane 步（`RuleState` 的 lane 阻塞头，§6.4），单据保持 `AwaitingDecision`，不产生 `Prepared`。
    - 行动者：STS 规则链（lane 规则），身份 = `WriteLaneKey`。
@@ -378,9 +379,9 @@
 **失败路径（Q8，三种输入）。**
 
 1. 消费方经会话（P13，principal 已认证，§8.5、C11）提交三笔意图：instrument 属他账户、数量非法、只读账户下单。
-   - 写处理器以会话 principal 为 `responsible` 开单 `Draft`（§6.1、§6.2），append 单据记录（执行 J）。
+   - 每笔经 `draft(intent)`（§8.5）以会话 principal 为 `responsible` 开单 `Draft`（§6.2），append 单据记录（执行 J）。消费方开单不经出站写处理器：写处理器只接程序的 `EffectRequest`，以装载 principal 开单（§6.1）。
    - 行动者：单据，身份 = principal。
-2. `SubmitForDecision` 后，STS 链逐步读记录（§6.3）：
+2. 负责人经 `submit_for_decision`（§8.5）送审后，STS 链逐步读记录（§6.3）：
    - 只读账户在**授权**步被拒（`Rejection::Unauthorized`），另 append 安全事件记录（C11）；
    - 他账户 instrument 与非法数量在**输入约束**步被拒（守卫字段处理器，C9/C10）；
    - 每笔否决 = `Close(DecisionRejected)` + 规则 `Outcome` 记录，带 principal、时间、依据位置（执行 J）；
@@ -411,7 +412,7 @@
 1. 未认证连接发起写或控制请求：会话未完成 `handshake`（传输给出 OS 对端凭据，`principal = (os_user, actor)`，§8.5），核心在会话层拒绝，不进入任何处理器。
    - append 安全事件记录（执行 J，P7）。
    - 对外可见：无单据、无 venue 调用、无配置变更。
-2. 已认证会话在请求体里伪造另一 principal：写处理器只取**会话绑定的 principal**（C11 “每个 P13 会话绑定一个 principal”），请求体身份字段不参与授权。
+2. 已认证会话在请求体里伪造另一 principal：单据操作（`draft` 等，§8.5）只取**会话绑定的 principal**（C11 “每个 P13 会话绑定一个 principal”），请求体身份字段不参与授权。
    - 以会话 principal 开单后，授权步按 (principal, `WriteLaneKey`, `OperationKind`) 判定；越权则 `Close(DecisionRejected)` + 安全事件。
    - 对外可见：安全事件可读；无 `Prepared`。
 3. 已认证但无 scope 的控制请求（`load_program`/`rotate_credential`/`restart_integration`/`request_snapshot` 等，§8.5）：控制动作按 (principal, 动作种类) 授权。策略文件（§7.6）的 scope 不含该动作 → 控制记录 `Rejected(Unauthorized)`，无副作用。

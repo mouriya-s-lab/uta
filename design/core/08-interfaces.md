@@ -76,7 +76,7 @@
 
 握手一次交换一个**投影**：集成对若干组合子的可解释性声明，带来源与观察时间，随握手变化。`Projection`、`WriteScope`、`Capability`、`Verdict` 的类型与语义见 §2.2。
 
-- 消费方按投影与核心通信；核心按投影路由。
+- 核心按投影路由；解释层经核心↔解释层契约拿到投影，据此回答下游“此刻能不能”（§8.5；`design/downstream/design.md` 第 4 节）。下游只见解释层的对外概念，不见投影本身。
 - `Verdict::Unknown` 是**能力未知**，约束启动阶段（能不能发）；它与写边界的**结果未知**（`Undetermined`，约束恢复阶段）分开（§6.5）。
 - 写操作的 `CapabilityProof` 含 unknown 证据渠道声明，完备枚举为：
   - 按调用方键回读；
@@ -134,7 +134,7 @@
 
 - **公共 schema**：P2 所列跨 venue 共有的种类（quote、book、bar、余额、持仓、订单状态、成交等）各有一份，随 IDL 由本仓库发布。某种类有公共 schema 时，集成必须以它输出该种类的流。
 - **扩展 schema**：venue 特有、公共 schema 容纳不下的内容，由集成在声明中给出 schema 文本，以单独的流输出；需要与公共流关联时，程序按记录上的身份字段 `Join`（§2.5）。扩展 schema 同样属于契约，不是上游消息格式。
-- 核心不解释 schema 内容，只在 `Projection` 中转发；程序与钩子的解释器按 schema 注册。
+- 核心不解释 schema 内容：程序与钩子的解释器按 schema 注册；schema 身份随 `Projection` 交给解释层（§2.2）。
 - 理由：载荷若是上游形状，程序就成了 UTA 内第二个消费上游的地方，只能按 venue 分别写，B2/B4 要求的跨渠道组合做不成（§0.1）。
 
 **身份与版本** [设计]：`payload_schema = (schema_id, schema_version)`，随 `StreamDecl` 在握手声明，同一 `StreamId` 内不变（§2.2）。
@@ -166,11 +166,12 @@
   - 该集成的每条观察流按 P3 决定是否开新 `StreamId.epoch`：集成能以 venue 游标证明续接，则续用原 epoch、`Seq` 接续；否则新 epoch 首条为 `Gap{origin: Source}`。会话 epoch 与流 epoch 独立。
 - **错误**：
   - 传输失败 → 重连（新 `session_seq`）；
-  - 投影不合法 → 拒绝该集成；
+  - 投影不合法 → 拒绝该集成并记 P14 原因；
   - 契约版本不兼容 → 拒绝该集成并记 P14 原因，不降级运行；
+  - 被拒只影响该集成：核心终止它的进程、不自动重试，等 `restart_integration`（§7.2 第 3 步）；
   - 能力比对缺失 → 引用该字段的树 fail-closed（§2.5）；
   - `session_epoch` 形状与接受条件见 §7.2 第 3 步。
-- **重试**：幂等；可重发。
+- **重试**：传输失败时幂等、可重发；被拒不自动重发。
 
 ### `submit(attempt) → Ack | Reject | NoResponse`
 
@@ -427,7 +428,7 @@
 **读模型**：`read_model(kind, as_of?) → Snapshot{value, as_of: Set<LogPosition>, gaps}`。
 
 - 动作轴：读（核心内 fold）。核心内部结果：无。
-- 错误：`kind` 未定义 → 拒绝；`as_of` 未达 → `NotYetAvailable{frontier}`。读模型非权威（§4.4）。
+- 错误：`kind` 未定义 → 拒绝；`as_of` 未达 → `NotYetAvailable{frontier}`；对只给当前态的种类（`tickets`、`subscriptions`）带历史 `as_of` → 拒绝。读模型非权威（§4.4）；种类与各自的输入见下文“读模型集合”。
 
 **单据组**：`draft(intent) → TicketId`；`revise(ticket, expected_version, diff)`；`submit_for_decision(ticket, expected_version)`；`decide(ticket, expected_version, Approve | Reject(reason))`；`send_back`；`withdraw`；`transfer(ticket, to: principal)`。
 
@@ -440,7 +441,7 @@
   - `Closed` 后任何动作 → `Rejected(Closed)`；
   - 无 `responsible` 的 `revise` → `Rejected(NotResponsible)`。
 
-**控制组（P14）**：`load_program(manifest_ref, cold_start?)`；`unload_program(id)`；`reload_config(kind)`；`rotate_credential(integration)`；`restart_integration(id)`；`request_snapshot`；`advance_retention(to: Set<LogPosition>)`；`rewind_cursor(subscription, to)`；`bypass_lane(ticket)`。
+**控制组（P14）**：`load_program(manifest_ref, cold_start?)`；`unload_program(id)`；`reload_config(kind)`；`rotate_credential(integration)`；`restart_integration(id)`；`request_snapshot`（核心的重启加速快照，§7.4）；`advance_retention(to: Set<LogPosition>)`；`rewind_cursor(subscription, to)`；`bypass_lane(ticket)`。
 
 - 动作轴：写（append 控制记录）。
 - 核心内部结果：
@@ -476,16 +477,20 @@
 
 ### 读模型集合与一致性
 
-核心维护的读模型：
+核心维护的读模型（封闭集合）及各自的输入 [设计]：
 
-- `orders`：按 `WriteScope`，执行事实 + 归因观察的 fold；
-- `positions`；
-- `lanes`：每 lane 的未终结 Attempt 与 `Undetermined` 列表；
-- `tickets`、`subscriptions`、`health`。
+- `orders`：按 `WriteScope`，执行事实（单据记录、链与腿记录）+ 该作用域的订单状态 / 成交观察（带 `attribution`，含 `External`/`Unattributed`）的 fold。
+- `positions`：按 `WriteScope`，只 fold 该作用域的持仓观察：给出每条持仓流在 `as_of` 处最近的观察记录，契约载荷原样给出，不承诺它重建出完整的持仓集合。它不从本地成交或回执推算持仓（那是上游原值的本地拷贝，§0.1、F1），不跨作用域或来源合并，没观察到的不当作零。
+- `lanes`：每 lane 的未终结 Attempt 与 `Undetermined` 列表，执行事实的 fold。
+- `tickets`：单据 fold 的当前态（§6.2）：执行事实 + 其 `basis_validity` 与 `alignment` 的当前评估。评估还取决于完备位置、撤回、保留边界与当时生效的能力证据和策略（§6.2、§6.3），所以这一种只给当前态；`Snapshot` 仍带它实际消费的位置（含 `checked_as_of`）供追溯，但那不是可重建的切面。
+- `subscriptions`：订阅表与 cursor 的当前态（§7.5）。订阅表不是 `Journal`，没有历史切面，所以这一种只给当前态。
+- `health`：健康 / readiness 观察的 fold（§8.3、§8.4）。
 
-每个 `Snapshot` 带 `as_of: Set<LogPosition>`（fold 吃到的位置集）与 `gaps`（该范围内生效的 `Gap` 记录）。消费者把 `as_of` 与自己的 cursor 比对，即知快照含哪些记录。
+理由：持仓、订单状态、健康的原值在上游或来自观察，读模型只能 fold 已观察到的记录；lane 与单据是 UTA 自己的执行事实。读模型读观察记录，是效应侧读观察侧的同一条单向边（§3.2）。
 
-原始记录是消费契约；读模型是对同一 `Journal` 的确定性 fold。消费方自 fold 与核心读模型在同一 `as_of` 下相等（验收 §10.5 #18）。
+`orders`、`positions`、`lanes`、`health` 的每个 `Snapshot` 带 `as_of: Set<LogPosition>`（fold 吃到的位置集，可跨观察与执行事实两个 `Journal`）与 `gaps`（该范围内生效的 `Gap` 记录），可按历史 `as_of` 读取。消费者把 `as_of` 与自己的 cursor 比对，即知快照含哪些记录。
+
+原始记录是消费契约；`orders`、`positions`、`lanes`、`health` 是对 `as_of` 以内原始记录的确定性 fold，与对同一记录集的独立 fold 相等（验收 §10.5 #18）。`tickets` 与 `subscriptions` 只给当前态，不在此等式内。
 
 ### 授权与审批策略的表示
 
@@ -499,8 +504,8 @@
 
 - **独立生命周期**：下游或解释层退出 / 崩溃 / 重启不改变核心的订阅、程序、lane、日志（H5/C5）。
 - **重连语义**：解释层代下游重连后握手，按 `as_of` 读模型取当前状态，从已确认 cursor 之后订阅记录。断连期间的投递损失按 `Gap{origin: Delivery}` 显式标记，不伪造连续性；解释层把它翻成下游的缺失通知。
-- **读模型**：对执行事实 `Journal` 的可重建只读 fold，非权威、不被规则引用；消费方也可直接订阅原始记录自行 fold（S10）。
-- **没有“同步”操作**：核心不提供把自己持有的状态对齐到上游的操作，因为它不持有上游原值（§0.1）。旧入口 A08 `sync`（及 A37 快照捕获前的 best-effort `sync`）在新边界上是一次性 `read`：产生新的观察记录，读模型随之 fold；返回的是这些记录的 `as_of`，不是“更新了几条”。
+- **读模型**：对记录的只读 fold（`tickets`、`subscriptions` 只给当前态），种类与输入见上文“读模型集合”；非权威、不被规则引用；消费方也可直接订阅原始记录自行 fold（S10）。
+- **没有“同步”操作**：核心不提供把自己持有的状态对齐到上游的操作，因为它不持有上游原值（§0.1）。旧入口 A08 `sync`（及 A37 账户快照捕获前的 best-effort `sync`）在新边界上是一次性 `read`：产生新的观察记录，以观察为输入的读模型随之 fold；返回的是这些记录的 `as_of`，不是“更新了几条”。账户快照本身不由 UTA 提供（§10.6）。
 - **控制面**是同一 RPC 的一组操作，由认证 principal 传入，不经进程信号或 flag 文件。
 - 本节消息 schema 的文本形式随 IDL 文件留在本仓库内部，不对下游发布；对下游发布的是解释层的对外面（`design/downstream/design.md` 第 7 节）。本节定义的是操作、返回值与错误语义。
 
