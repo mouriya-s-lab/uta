@@ -135,7 +135,7 @@ stateDiagram-v2
   C --> R0 : 撤单腿终结于 VenueRejected / Absent / Expired（不解释拒绝原因；目标可能仍在时发新腿 = 加仓，H1）
   ATT --> ATT : 目标订单的记录到达（推送 / 回执 / 取证 / IO 壳按目标身份 read / 回填，不论归因），判定仍不成立：最近观察非终态、为 unknown 或 Unmapped(raw)（C13）、为未被选中的较旧序号终态、剩余量口径下缺 cumulative_filled_quantity、已落到保留边界之下；跨流冲突；IdemKey 解析出不止一笔或尚无订单；或读被上游 Refused → 按 pacing 再读
   ATT --> ATT : 读返回 Unavailable → 该观察流上 Gap{Channel}，再读
-  ATT --> N : 目标终态判定成立（目标订单 = VenueRef 的 venue_order_id，或能证明属于记下该键那条腿的记录给出的 venue_order_id；在进入时作用域所挂的订单状态流上按 §8.1 取最近观察，是终态，剩余量口径下还带 cumulative_filled_quantity；在进入的事务或 append 目标订单记录的事务里求值）→ 同事务 append TargetTerminal{(p,2), observation, evidence, quantity}，quantity > 0
+  ATT --> N : 目标终态判定成立（目标订单 = VenueRef 的 venue_order_id，或能证明属于 basis 所记订单键腿的记录给出的 venue_order_id；按 §8.1 在它所在的订单状态流上取最近观察（与 orders 同一范围），是终态，剩余量口径下还带 cumulative_filled_quantity；在进入的事务或 append 目标订单记录的事务里求值）→ 同事务 append TargetTerminal{(p,2), observation, evidence, quantity}，quantity > 0
   ATT --> R0 : 判定成立，同事务 append TargetTerminal 且 quantity ≤ 0（剩余量口径且已成交到意图数量）
   ATT --> EX : 意图 deadline 到期（先于判定：到期后不再 append TargetTerminal）
   N --> R : 新腿终结（VenueAccepted / VenueRejected / Undetermined 后收敛）
