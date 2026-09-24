@@ -43,10 +43,15 @@
 | `Pred<X>` / `Comb<X,Y>` / `Scan` | 输出 `bool` 的树 / 输入 X 输出 Y 的树 / 状态累加节点 | §2.5 |
 | `DecisionStep` | 程序决策侧节点（`On`/`Emit`/`Require`/`Expire`） | §6.1 |
 | `EffectRequest` | 程序的唯一出口：一个副作用请求值，由处理器决定响应 | §6.1 |
-| `EffectResponse` | 每条被处理的 `EffectRequest` 的完成事实（执行事实侧）：`Observed`/`Unavailable`/`Unsupported`/`Drafted` | §6.1 |
+| `EffectResponse` | 每条被处理的 `EffectRequest` 的完成事实（执行事实侧）：读：`Concluded`/`Unavailable`/`NotCalled`；写：`Drafted`/`NotDrafted(Malformed)` | §6.1 |
 | 观察宇宙 / 效应宇宙 | 不可写 / 可写两套独立类型宇宙，不共享类型 | §3.2 |
 | `Ticket` / `TicketAction` | 意图形成期的锁 = 责任持有；`responsible` 字段的存在即锁 | §6.2 |
 | `IntentAlignment` / `Revision` | 意图专属逐项对账 / 意图版本间的结构差 | §6.2 |
+| 交易协议的操作种类 | 预置写侧基本类型“订单”的 `OperationKind` 封闭集合：`Place`（下单）/ `Cancel`（撤单）/ `Replace`（改单）/ `Close`（平仓）；各自的 `target` 与守卫字段 | §6.2 |
+| 意图参数 schema / `parameter_validity` | 写能力 `(scope, OperationKind)` 在 `CapabilityProof` 里声明它接受的意图参数 schema（公共意图 schema 或其只加字段与约束的扩展，JSON Schema）/ 当前版本参数是否合它的单据 fold 状态（`Valid` / `Invalid` / `NotSupported` / `SchemaMismatch`），输入约束步无条件读取 | §6.2、§6.3 |
+| 检查目录 | 交易协议的第二层检查项闭合集合：能力、可交易性、敞口、持仓在、原单仍在；每项的输入、判据与参数由协议写定，规则文件只给取值与必要 / advisory | §6.2、§7.6 |
+| `PositionRef` | 平仓意图的 `target`：从同一条持仓观察记录一次构造的不透明值，含作用域内稳定的持仓身份与 instrument | §6.2 |
+| 冷却 | lane 规则的 `RuleState`：`(WriteLaneKey, instrument)` 上最近一条下单腿的 `SendBarrier` 时间；间隔按 `(WriteLaneKey, OperationKind)` 给出、跨 principal 共享；在 lane 步放行时判定一次，冷却期内否决 | §6.3 |
 | `checked_as_of` | 一次 `alignment` 评估实际消费的位置集，随 Decision/`Outcome`/`Rejection` 记录；与 `basis`（拟单时看到的）互补 | §6.2、§6.3 |
 | `basis` / `basis_validity` | 意图引用观察侧位置的承载：位置集 `Set<LogPosition>`；其有效性 `Fresh`/`Stale`/`Retracted`/`BeyondRetention`。唯一边是效应侧读观察侧这个方向，`basis` 是其上意图的那一份位置集 | §5.1、§5.2 |
 | `Journal` | 记录载体；观察侧 `Journal<RetractableDelta>` 可撤回可压缩，执行事实侧只 append | §4.1、§3.1 |
@@ -111,13 +116,14 @@
 | 三种“对齐” | 锚点对齐：集成把上游账户、市场、身份结构对到锚点契约（判断性设计动作） | 记录映射的字段对齐：上游字段对到契约字段 | 第三种是对账（`IntentAlignment`，见上一行），与前两者无关 | §2.1、§8.1、§6.2 |
 | 修订 / 偏离 | 修订（`Revision<Intent>`）：意图改了，世界没变 | 偏离（`Diverged`）：世界变了，意图没变 | 来源不同（`Revise` vs 观察推进） | §6.2 |
 | 修订 / 撤回 | `Revision<Intent>`：意图版本间结构差，无逆元需求 | `RetractableDelta`：观察侧撤回代数，有逆元 | 前者属效应宇宙，后者属观察宇宙 | §6.2、§4.1 |
-| 三种“无法判断” | `InputMissing`：检查项需要的观察流根本没有 | `Undecidable`：流存在但有 gap | 第三种 `inconclusive`：读渠道穷尽而写结果仍未知，属决议、停人工 | §6.2、§6.6 |
+| 三种“无法判断” | `InputMissing`：检查项需要的观察流根本没有（集成不提供） | `Undecidable`：流存在但有 gap，或没有本项主体（该 instrument / 该持仓）的观察 | 第三种 `inconclusive`：读渠道穷尽而写结果仍未知，属决议、停人工 | §6.2、§6.6 |
 | 能力未知 / 结果未知 | `Verdict::Unknown`：venue 是否支持该操作不知道 | `Undetermined`：发出的写是否生效不知道 | 前者约束启动、是握手结果；后者约束恢复、是链状态 | §2.2、§6.5 |
 | `SendBarrier` / `AwaitingDecision` | IO 壳发送屏障：`Prepared` 之后，外部动作即将发生 | 单据送审：`Prepared` 之前，无外部动作 | 二者相隔整条 STS 链 | §6.5、§6.2 |
 | `basis` / `required_inputs` | 值：这张单据实际引用了哪些 `LogPosition` | 类型：这个检查/处理器要读哪些 `StreamKind` | `required_inputs` 从组合树派生；`basis` 从实际评估记录 | §6.2、§2.5 |
 | `LogPosition` / `Hash` | 日志位置：顺序身份 | 内容寻址：版本身份 | `current_version` 是 `Hash`，`Prepared(position)` 是 `LogPosition` | §4.1、§6.2 |
 | 四种“过期” | `Ticket.Close(Expired)`：负责人失联或审批超时，或 lane 等待期间到期（H6，STS 过期步，在 `Prepared` 之前） | `DecisionStep::Expire(Deadline)`：程序规则时限 | 见表下 | §6.2、§6.1、§6.5 |
-| 两种“拒绝” | `VenueRejected`：写已发出，venue 拒了；执行事实、终态之一 | `DecisionRejected`：审批拒了；单据关闭，从未进入 `Prepared` | 前者在链上，后者在单据上 | §6.5、§6.2 |
+| 两种“拒绝” | `VenueRejected`：写已发出，venue 拒了；执行事实、终态之一 | `DecisionRejected`：审批人否决，或 STS 链否决（参数不合规、允许集合、冷却、放行门等）；单据关闭，从未进入 `Prepared` | 前者在链上，后者在单据上 | §6.5、§6.2、§6.3 |
+| 两种 schema 身份 | `payload_schema`：观察记录的契约载荷按哪份 schema 读，随 `StreamDecl` 声明 | 意图参数 schema：写意图的参数按哪份 schema 校验，随写能力的 `CapabilityProof` 声明，每版意图带它 | 前者标观察的载荷，核心不校验；后者在输入约束步校验意图参数，校验后参数原样交给集成 | §2.2、§6.2、§8.1 |
 | 上游的两种 `Refused` | `handshake` 返回 `Refused`：上游明确拒绝集成的身份或配置，整个集成登记 `Halted`，等运维动作 | `read`/`backfill` 返回 `Refused`：上游拒绝这一次读请求，集成照常运行，不是 gap | 都只在上游给出明确拒绝时返回；不可达、超时一律 `Unavailable` | §8.2、§8.3 |
 | 离线 / 待处理 | `Connecting`：没有会话，会自己恢复（传输失败、上游暂时不可达） | `Halted`：没有会话，不会自己恢复（投影不合法、契约不兼容、身份被拒） | 二者都不发写（发出前门等待）；只有后者要 `restart_integration` 或 `rotate_credential` | §7.2、§6.5 |
 | 读的五种“拿不到” | `Unsupported`：最近声明说该流不支持此读；`Unconfirmed`：最近声明说能力未知；二者都不调用集成 | `Unavailable`：来源此刻无会话（不调用、不记 gap），或调用后渠道失败（记 `Gap{origin: Channel}`） | 第五种 `Refused`：上游明确拒绝这次请求，记读结论记录，不改能力；空回答是 `Answered`，不属这五种 | §8.2、§8.5 |

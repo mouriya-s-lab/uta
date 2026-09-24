@@ -26,14 +26,15 @@ Emit(EffectRequest { effect_kind: EffectKind, payload: Bytes, basis: Basis, key:
 **读处理器：**
 
 - 立即执行一次核心→集成的 `read`（§8.2）。
-- 结果作为观察记录 append：带 `LogPosition`，`provenance: OneShot{origin: Request(该 EffectRequest 记录的 LogPosition)}`（§3.4）。
-- 程序按位置推进看到它：闭环走观察侧。
-- `Unavailable` → 观察侧 `Gap{origin: Channel}`。流未声明或能力不支持 → 不调用集成。
+- 集成作答（含上游明确拒绝）时，该流上同一事务 append 作答的 N 条观察记录与一条读结论记录（§8.2），出处 `OneShot{origins ∋ Request(该 EffectRequest 记录的 LogPosition), request}`（§3.4）。
+- 程序按位置推进看到作答的记录：闭环走观察侧。
+- `Unavailable` → 观察侧 `Gap{origin: Channel}`。核心未调用集成的情形（流未声明、最近有效声明为 `Unsupported` 或 `Unknown`、来源无当前会话、请求不合 schema、来源未登记，判定顺序见 §8.5 一次性读）不调用、不 append 观察记录。
 - 读处理器**不自行重试**：一条请求一次执行，是否再请求由程序看到结果 / gap 后决定。读可重试的主体是发起者（§3.4）。
 
 **写处理器：**
 
 - 请求被当作 Intent，进入单据 → STS → IO 壳的完整效应路径；结果是执行事实与决议记录。
+- **构造**：写处理器从请求载荷构造意图，只要求意图的锚点（§8.1）：`WriteLaneKey`、交易协议的操作种类之一、`basis`，撤单 / 改单 / 平仓还要 `target`（§6.2）。锚点构造不出（缺锚点、操作种类不在交易协议的封闭集合内、平仓所指的持仓观察记录取不出 `PositionRef`，§6.2）即不是意图，不开单，记 `NotDrafted(Malformed{reason})`（见下）。参数（守卫字段与载荷）不在构造时判定：参数是否合规是单据 fold 的状态，送审时由输入约束步否决（§6.2、§6.3），所以程序发出的非法参数与人起的非法参数得到同一对记录（意图 + 否决，Q8）。[设计]
 - **负责人**：写处理器以程序的**装载 principal**（装载该程序的人或服务账户）为 `responsible` 开单（§6.2）。程序本身不是 principal。
 - 该 principal 的授权范围决定单据能否不经人工直接放行（授权步，§6.3）。
 - 开单的 `Draft.basis` 含该 `EffectRequest` 记录的位置：执行事实侧位置作因果依据（§5.1）。
@@ -43,16 +44,19 @@ Emit(EffectRequest { effect_kind: EffectKind, payload: Bytes, basis: Basis, key:
 **完成事实在执行事实侧** [设计]。
 
 - 每条被处理的 `EffectRequest` 恰有一条执行事实记录 `EffectResponse{request: LogPosition, outcome}`。
-- `outcome ∈ {Observed(observation: LogPosition), Unavailable(gap: LogPosition), Unsupported, Drafted(ticket_id)}`。
-- `EffectResponse` 与产生它的观察记录 / `Gap` / `Draft` 同一事务 append。
+- `outcome` 按处理器分：
+  - 读处理器：`Concluded(conclusion: LogPosition)`（读结论记录，含零条结果与上游拒绝）| `Unavailable(gap: LogPosition)` | `NotCalled(reason)`，`reason ∈ {Unsupported, Unconfirmed, NoSession, InvalidRequest, UnknownTarget}`（§8.5 一次性读）；
+  - 写处理器：`Drafted(ticket_id)` | `NotDrafted(Malformed{reason})`。
+- `EffectResponse` 与产生它的读结论记录 / `Gap` / `Draft` 同一事务 append；`NotCalled` 与 `NotDrafted` 没有伴随记录，`EffectResponse` 单独 append。
 - 理由：观察记录可压缩（§2.4），`EffectRequest` 永存（§7.5）；“是否已处理”必须能从与请求同寿命的事实重建。
-- `Observed` 引用的观察记录落到保留边界下后，`EffectResponse` 仍成立，不钉住保留。
+- `Concluded` 引用的读结论记录落到保留边界下后，`EffectResponse` 仍成立，不钉住保留。
 - `Unhandled` 请求没有 `EffectResponse`，也不重派。
+- **程序看得到自己的响应** [设计]：程序解释②可以匹配该程序自己发出的请求的 `EffectResponse`（执行事实，属效应侧；决策半边本就是对日志的 fold）；解释①的节点不消费 `EffectResponse`。理由：未调用、零条结果与 `NotDrafted` 都不产生观察记录，程序只有经响应才看得到它们，而伪造观察记录去承载它们会把效应侧结论放进观察宇宙。
 
 **请求与响应的关联是引用，不是事务。** `EffectRequest` 记录随程序 `Advance` 输出持久化（§8.6），处理器在其后执行。核心重启时 fold 出**无 `EffectResponse`** 的已注册请求（§9.2 #21）：
 
 - 读处理器重新执行一次；
-- 写处理器重新开单。`Drafted` 与 `Draft` 同事务，所以“有 `Draft` 无 `EffectResponse`”不可达。
+- 写处理器重新开单。`Drafted` 与 `Draft` 同事务，所以“有 `Draft` 无 `EffectResponse`”不可达；`NotDrafted` 已是响应，不重派。
 
 核心只保证：写类走两阶段，读类可重试，两类都被记录、都带 `basis`。
 
@@ -108,8 +112,9 @@ struct Ticket<Intent> {
     id: TicketId,
     responsible: Principal,      // 当前负责人；锁 = 这个字段的存在
     current_version: Hash,       // 版本链末端（内容寻址，每版带父 hash）
-    versions: Vec<Version<Intent>>, // 只追加；Intent = 意图类型（下单/改单/撤单…）
+    versions: Vec<Version<Intent>>, // 只追加；Intent = 意图类型（交易协议：下单 / 撤单 / 改单 / 平仓，见“交易协议”）；每版带其参数所依据的意图参数 schema 身份
     basis: Basis,               // §5：位置集，可含派生侧（观察）与执行事实侧位置
+    parameter_validity: ParameterValidity, // 参数合规：当前版本的参数是否合目标来源声明的意图参数 schema（见“参数合规”）；不读观察，不属两层对账；输入约束步读取
     basis_validity: BasisValidity, // 第一层：依据有效性（§5.2 定义 basis_valid / BasisValidity；单据只应用此门）
     alignment: IntentAlignment,   // 第二层：意图专属对账，逐项状态（可能全部 InputMissing）
     latest_revision: Option<Revision<Intent>>,  // 最近一次 Revise 的结构差（派生；见编辑 diff）
@@ -120,9 +125,10 @@ struct Ticket<Intent> {
 /// 由 (意图类型 × 该 venue 当前能力证据) 在评估时解析，不存在单据上；握手变了它就变。
 struct AlignmentCheck<Intent> { name: CheckName, required_inputs: Set<StreamKind>, eval: fn(&Intent, &Observed) -> CheckResult }
 type AlignmentChecks<Intent> = Vec<AlignmentCheck<Intent>>;
-enum CheckResult { Aligned, Diverged(Divergence), Undecidable(Gap) }        // 输入齐全时的三种结果
-type IntentAlignment = Map<CheckName, Aligned | Diverged(Divergence) | Undecidable(Gap) | InputMissing(Set<StreamKind>)>;
-//                                                                   ^ 该项需要的输入观察侧没有
+enum CheckResult { Aligned, Diverged(Divergence), Undecidable(Reason) }     // 输入齐全时的三种结果；Undecidable 的原因：范围内有 gap，或该流没有本项主体（该 instrument / 该持仓）的观察
+type IntentAlignment = Map<CheckName, Aligned | Diverged(Divergence) | Undecidable(Reason) | InputMissing(Set<StreamKind>)>;
+//                                                                   ^ 该项需要的输入观察侧没有（集成不提供该流）
+enum ParameterValidity { Valid, Invalid(NonEmpty<Violation>), NotSupported, SchemaMismatch }  // 含义见“参数合规”
 
 enum TicketAction<Intent> {
     Draft   { by: Principal, initial: Intent, basis: Basis },  // 建立单据 = 取得锁 = 声明负责
@@ -130,7 +136,7 @@ enum TicketAction<Intent> {
     Transfer{ by: Principal, from: Principal, to: Principal },  // 显式移交，记录，不静默；by = from（自愿）或持有控制授权的 principal（强制，§8.5）
     SubmitForDecision { by: Principal, at: Hash },           // 送审：冻结 current_version，Drafting → AwaitingDecision
     SendBack { by: Principal, reason },                      // 审批退回：AwaitingDecision → Drafting，responsible 不变
-    Close   { outcome: Prepared(LogPosition) | Withdrawn | DecisionRejected | Expired },  // 锁消失；Withdrawn 仅 responsible，DecisionRejected 仅决定者，Expired 仅过期规则，Prepared 仅放行链
+    Close   { outcome: Prepared(LogPosition) | Withdrawn | DecisionRejected | Expired },  // 锁消失；Withdrawn 仅 responsible，DecisionRejected 仅决定者或 STS 链的否决，Expired 仅过期规则，Prepared 仅放行链
 }
 ```
 
@@ -173,6 +179,34 @@ enum TicketAction<Intent> {
 
 IO 壳不知道单据的存在。
 
+### 参数合规：意图参数 schema [设计]
+
+每个订单意图，无论来自解释层代开的会话还是程序的写处理器，都按**目标来源为该操作声明的意图参数 schema** 判定参数是否合规，在任何 `Prepared` 之前。
+
+- **schema 从哪来。** 每个 `Supported` 的写能力 `(scope, OperationKind)` 在其 `CapabilityProof` 里声明它接受的意图参数 schema 身份 `(schema_id, schema_version)`（§2.2、§8.1）：交易协议该操作种类的公共意图 schema（随 IDL 发布），或该集成以它为基础只增加字段与约束的扩展 schema，因而合扩展者必合公共者。schema 覆盖意图的全部参数：已注册的守卫字段与载荷（订单类型、time-in-force、来源专有选项等没有处理器读的参数）。
+- **schema 语言。** JSON Schema，与配置文件的 schema 同一语言（§7.6），钉在一个 draft 版本与一个关键字子集上，`format` 只作注解不作断言；schema 与一个参考校验器随 IDL 发布，两个实现对同一参数得出同一结论由此可测（§10.5 #30、#31）。类型相关的必填与互斥（限价单要限价、追踪单的偏移量与百分比二选一、某来源只对市价单接受名义金额、某来源不支持的选项被禁止）写成 schema 自身的条件约束；合规与否只由该语言的校验语义决定，没有第二道由实现各自补写的语义校验。来源相关的限制由该来源的 schema 选定，不是交易协议的全局事实。
+- **意图带身份。** 每版意图带它的参数所依据的 schema 身份，版本 hash 覆盖它。下游的参数在构建期按某个 schema 版本生成（`design/downstream/design.md` 第 4 节），程序按它读到的声明写参数；带身份使“按哪一版写的”不靠猜。
+- **守卫字段的数量规则**（交易协议注册的字段，不随来源变）：下单与改单的新单部分，`quantity` 与 `notional` 恰有一个，有限且为正；平仓只可带 `quantity`（有限且为正），不带 `notional`；撤单两者都不带。C10 的“数量 / 名义有限且为正”即此。
+- **结果是单据 fold 的状态** `parameter_validity`：
+  - `Valid`；
+  - `Invalid(violations)`：参数不合该 schema 或违反数量规则，逐项列出违反之处；
+  - `NotSupported`：该 `(scope, OperationKind)` 此刻不是 `Supported`（该来源不提供这个操作）；
+  - `SchemaMismatch`：`Supported`，但声明的 schema 身份不是意图所带的那个（例如握手后换了版本，按新版重写参数即可）。
+  - 从 `Draft` 起即求值，每次 `Revise` 对完整的新版本重算（不只校验 diff），能力证据变化时重算；负责人与审批人经读模型 `tickets` 看得到（§8.5）。
+- **在哪里否决。** 输入约束步（§6.3）无条件读取它：不是 `Valid` 即 `Rejection`（带违反项，或 `NotSupported` / `SchemaMismatch`）+ `Close(DecisionRejected)`。它不是检查项，策略不能把它降为 advisory。草稿可以带着不合规的参数保存与修改，送审之前没有任何外部写；不合规的版本一经送审必得一对记录：意图与否决（Q8）。放行之后到发送之间 schema 声明若变，发出前门再核对一次（§6.5）。
+- **核心仍不解释载荷。** 这是协议输入边界上的形状校验：核心按 schema 判定合不合规，不读取载荷里的值参与任何计算；没有处理器读的参数校验之后原样交给集成（§2.1）。意图参数 schema 是 UTA 的契约，不是上游请求格式。
+- **构造不出的不是意图。** 缺锚点（`WriteLaneKey`、操作种类、`basis`；撤单 / 改单 / 平仓的 `target`）、操作种类不在交易协议的封闭集合内，或平仓所指的持仓观察记录取不出合规的 `PositionRef`（见“交易协议”），意图构造不出，不开单：会话的 `draft` 得 `Rejected(Malformed)`、不 append 任何记录（与畸形记录在入口被拒同理，§2.1）；程序的请求得 `EffectResponse{NotDrafted(Malformed)}`（§6.1）。
+
+理由：程序不可信、会输出非法值（H2），只在解释层校验就留下程序这条绕过口；而参数到了集成才被发现不合规，集成只能在 `SendBarrier` 之后本地拒绝，按契约记 `NoResponse` → `Undetermined`（§8.3），一笔确未发出的单就占住 lane、要人工决议。参数合规作为单据状态，既让负责人在草稿期就看到问题，又让所有来源在同一步得到同一对记录。
+
+不选：
+
+- **只在解释层按生成的参数校验**：程序发出的意图绕过它（H2）。
+- **作为一项检查（`AlignmentCheck`）**：检查项可被策略设为 advisory，且检查读观察、到放行门才生效，审批人会先批准一张注定不能发的单。
+- **在 `draft` / `revise` 时拒绝参数不合规的版本**：留不下 Q8 要求的意图与否决记录；schema 声明在草稿与放行之间还会随握手变化，构造期的判定本就要重算。
+- **交给集成拒绝**：见理由，`SendBarrier` 之后的本地拒绝只能是 `NoResponse`。
+- **把参数约束写成组合子值树**（与规则、检查同一表示，§2.5）：值树不能同时充当下游在构建期生成参数的来源（`design/downstream/design.md` 第 4 节），同一份约束就要写两遍；JSON Schema 既是生成来源又是校验依据，钉住版本与参考校验器后两实现结论相同。
+
 ### 两层对账：偏离是状态
 
 **偏离是状态，不是动作。** `basis_validity` 与 `alignment` 均为单据 fold 的一部分，在**效应侧**评估。评估用组合子（`AlignmentCheck.eval` 是 `Comb<Observed, CheckResult>`，§2.5）与 `fold_state` 机制（§4.1）。
@@ -193,9 +227,9 @@ IO 壳不知道单据的存在。
 **重算触发**（本身不是 `TicketAction`）：
 
 - `basis` 引用的流或 `required_inputs` 各流推进、被撤回、出现 gap；
-- 能力证据变化；
+- 能力证据变化（也重算参数合规）；
 - 保留边界推进；
-- 策略必要项集 / `Lag` 变化。
+- 策略必要项集、检查参数 / `Lag` 变化。
 
 因此**单据是否偏离是状态字段，不需要外部触发对账**；单据始终知道自己与世界的关系。
 
@@ -206,36 +240,37 @@ IO 壳不知道单据的存在。
 
 ### 门只看必要项
 
-放行策略按 `(WriteLaneKey, OperationKind)` 声明哪些检查项是**必要项**（§7.6）。
+放行策略按 `(WriteLaneKey, OperationKind)` 为交易协议检查目录（见“交易协议”）中的每项声明取 **必要**、**advisory** 或不列，并给出该项的参数（§7.6）。
 
 - 仅必要项的 `Diverged`、`Undecidable` 或 `InputMissing` 触发 fail-closed（C12）。
 - 其余检查项为 **advisory**：结果对审批人可见并写入依据，但不参与门。
 - 不存在“所有 `Undecidable` 均阻断”的总门：那会让 advisory 在语义上重新变成 guard。
+- 策略没有列出的项不求值；列出了需要参数的项却没给参数，或把只能 advisory 的项列为必要，该规则文件不合法（重载 `Rejected`，启动期按读配置失败处理，§7.6）。
 
-**能力项恒为必要项**，是唯一不由策略声明的必要项。
+**能力项恒为必要项**，是唯一不由策略声明、恒求值的必要项。
 
-- `(WriteLaneKey, OperationKind)` 的能力证据为 `Supported` 才 `Aligned`；`Unsupported`/`Unknown` 即 `Diverged`（§2.2）。
+- `(WriteLaneKey, OperationKind)` 的能力证据为 `Supported`，且其声明的意图参数 schema 身份等于意图所带的那个，才 `Aligned`；`Unsupported`/`Unknown`、或声明的 schema 已不是意图所带的那个，即 `Diverged`（§2.2）。
 - 策略不能把它降为 advisory：IO 壳对无能力的操作没有转移可走（§6.5）。
 
 ### 钩子
 
 **钩子不一定存在，不一定能对账。** 第二层是多项独立检查的乘积，而非单一函数。
 
-- 限价买单要对价格（报价流）、资金（余额流）、持仓（持仓流）、可交易性（能力证据）。
+- 限价买单要对价格（报价流）、资金（余额流）、持仓（持仓流）、能力（能力证据）、可交易性（目录流）。
 - venue 给报价不给持仓，就是“价格能对、持仓不能对”，不是整个钩子消失。
 - 因此 `IntentAlignment` 逐项记 `InputMissing(缺哪些输入)`，不用 `Aligned` 冒充，也不设全局 `NoHook`。
 
-**`InputMissing` 是可行动的。** 缺的输入若 venue 有一次性查询能力，发一次只读查询就产生一条观察记录（§3.4），该项随即可算。读是安全的、可批处理的（§2.2）。
+**缺观察是可行动的。** 流在但没有本项主体的观察（`Undecidable`，如从没见过该 instrument 的持仓）时，若该流可一次性读，发一次只读查询就产生一条观察记录（§3.4），该项随即可算。读是安全的、可批处理的（§2.2）。
 
-- 策略可选“先查后判”“无该项对账则人工”“无该项对账则不发”。
-- 真正的“不能对账” = 缺的输入没有任何渠道可得，这由能力证据说了算。
+- 策略可对一项声明“先查后判”：该版本送审时，此项若缺主体的观察，核心为它发一次 `read`（出处 `OneShot{origins ∋ Ticket(TicketId)}`，§8.2），结果到达即重算；每个送审的版本至多一次，不自动重试。
+- 真正的“不能对账” = `InputMissing`：该集成不提供这条流，没有任何渠道可得。
 
 **钩子的输入是观察值及其出处**：派生 `Journal` 的 `fold_state`、能力证据、归因后的订单观察。
 
 - 执行事实记录只作**身份与因果依据**（`basis` 中的 `VenueAccepted`/`SendBarrier` 位置），不进钩子的 `eval`。
 - 归因后的订单观察是**记录**（集成或 IO 壳产出并带出处），不是读模型。“规则不引用读模型”不放宽。
 
-**检查是纯函数、按 `Intent` 分派。** 下单看价格 / 资金 / 持仓 / 能力；撤单看能力（可按目标身份撤）+ advisory 仍在；`Replace` 看撤单项 + 新单项。新意图类型 = 新的检查集，核心不变。
+**检查是纯函数、按 `Intent` 分派。** 每种操作种类的检查集是交易协议检查目录的一部分（见“交易协议”）；撤单的“原单仍在”只能是 advisory。新意图类型 = 新的检查集，核心不变。
 
 ### 编辑 diff 与偏离
 
@@ -253,25 +288,48 @@ IO 壳不知道单据的存在。
 - 它与撤回代数 `RetractableDelta`（§4.1）不是一回事：那是观察侧的撤回代数（有逆元）；这里是意图版本间的结构差，无逆元需求，不会“撤回一次编辑”，只会再编辑一次。
 - 不收束的后果：审批人分不清“我要重看”（意图改了）与“市场跑了”（世界变了）。
 
-### 撤单与改单 [交易协议]
+### 交易协议：操作种类、目标、检查目录 [交易协议]
 
-**目标身份是构造前提，“仍在”是 advisory。**
+> 本节是预置写侧基本类型“订单”的协议内容（§0.1、§2.2），不属于核心代数：核心只按锚点、已注册字段与本节列出的检查求值。阈值、比例、允许集合、间隔等取值是业务，在规则文件（§7.6）。
 
-撤单 / 改单意图类型在构造时**必须**携带目标身份 `target: VenueRef | IdemKey`（parse-don't-validate）。无目标即构造不出意图，不需要事后规则。
+**操作种类是封闭集合** [设计]：`Place`（下单）、`Cancel`（撤单）、`Replace`（改单）、`Close`（平仓）。`OperationKind` 是锚点（§8.1），集合外的值构造不出意图（见“参数合规”）。加一种是轴 B（§8.3）。
 
-身份来源三种。身份进意图的 `target`，其来源记录的位置进 `basis`：
+| 操作种类 | `target` | 守卫字段 | 一次写 |
+|---|---|---|---|
+| `Place` | 无 | `side`、`instrument`、`quantity` 与 `notional` 恰有一个 | `submit` |
+| `Cancel` | 订单身份 `VenueRef \| IdemKey` | 无 | `cancel` |
+| `Replace` | 订单身份 `VenueRef \| IdemKey` | 新单部分同 `Place` | 原子能力时一次 `submit`；否则两腿（见下） |
+| `Close` | 持仓身份 `PositionRef`（含 instrument） | `instrument` 由 `PositionRef` 给出，不单独填；`quantity` 可有可无 | `submit` |
+
+**目标身份是构造前提，“仍在”是 advisory。** 带 `target` 的意图类型在构造时**必须**携带目标身份（parse-don't-validate）。无目标即构造不出意图，不需要事后规则。身份进意图的 `target`，其来源记录的位置进 `basis`（§2.3）。
+
+订单身份来源三种：
 
 1. 本地 `VenueAccepted(venue_order_id)`；
 2. 本地 `SendBarrier` 的幂等键（无回执的提交）；
 3. 归因观察记录中的 venue 身份（外部订单，F9/P11）。
 
-- 构造期只保证“目标存在且与账户作用域匹配”，**不**保证 venue 此刻支持按该身份撤单。那是运行期能力检查项：有幂等键 ≠ 有 cancel-by-key（F6）。
+持仓身份只有一种来源：持仓观察记录里作用域内稳定的持仓身份（公共持仓 schema，§8.1；区分同一 instrument 的多空分仓与 venue 自有的持仓身份）。`PositionRef` 是含持仓身份与 instrument 的不透明值，由核心在构造平仓意图时从那条记录取得：调用方只指出持仓观察记录的位置（它进 `basis`），记录不存在、已落到保留边界之下、不是持仓记录或不属目标作用域，意图即构造不出（`Malformed`）。平仓意图的 `instrument` 就是 `PositionRef` 的 instrument，不另填，所以“目标持仓与 instrument 不一致”构造不出来，这由接纳边界保证，不靠调用方自律。
+
+- 构造期只保证“目标存在且与账户作用域匹配”，**不**保证 venue 此刻支持按该身份撤单或平仓。那是运行期能力检查项：有幂等键 ≠ 有 cancel-by-key（F6）。
 - “原单仍在”来自观察侧 listing，按 F10 只能是 advisory，永不作为撤单放行的必要项。否则最安全的动作在 listing 滞后时被 fail-closed。
+
+**平仓是有 venue 锁的操作种类** [设计]。
+
+- `(scope, Close)` 的 `Supported` 断言的是上游自己给出的保证（§6.8 的 venue 锁）：对该来源意图参数 schema 接受的**每一个**平仓请求，执行它**不会增大目标持仓的绝对数量，也不会开出反方向持仓**，例如上游原生的平仓接口，或上游强制执行的 reduce-only 单。只能用普通反向单模拟的来源声明 `Unsupported`；只对部分品种有此保证的来源，要么以 schema 把接受域收窄到有保证的请求，要么声明 `Unsupported`。
+- 数量口径由该来源的意图参数 schema 定（见“参数合规”）：上游原生支持“按执行时的整个持仓平掉”，schema 才允许省略 `quantity`（全平）；上游只能下有界的 reduce-only 单，schema 要求 `quantity`（至多减少这么多）。在 `submit` 里先读持仓再按读到的数量下 reduce-only 单，保证不增仓但不是“全平”：读与执行之间持仓可能变大。
+- 集成在一次 `submit` 内可以先读后写，改变上游状态的调用至多一次（§8.1）。
+- 下游仍可以自己组装一张反向 `Place`：那是业务，UTA 对它不作不增仓的任何保证。
+- 理由：P6 与既有入口 A31/A34 把平仓列为操作；有的上游按持仓身份平仓，反向单根本不是平仓；而“平仓穿过零变成反向开仓”是与改单新腿加仓（§6.5）同类的伤害。UTA 自己的持仓观察只是对新鲜度的有界赌注（§6.8），不能担保不增仓；担保只能来自上游的锁。
+- 不选：
+  - **不设平仓操作种类，平仓一律是下游组装的反向下单**：按持仓身份平仓的上游从此不可达，不增仓的保证对 UTA 与下游都不可见。
+  - **反向下单 + UTA 发送前重查持仓**：把本地观察当作权威（§0.1），读与执行之间仍可穿过零。
+  - **按 instrument 在目录观察上声明“此处平仓不增仓”**：保证只对部分品种成立的来源因此仍可平那些品种；但不增仓是安全断言，放在观察上就随观察的新鲜度成立，陈旧的观察会把一次普通反向单当成有锁的平仓。保证只对部分品种成立的来源声明 `Unsupported`，代价是那些品种的平仓由下游自己组装。
 
 **改单是单一意图类型 `Replace`，不是两张单据。**
 
 - venue 有原子 cancel/replace 能力，就是一个操作。
-- 没有，IO 壳在**同一条 Attempt 链**里解释为 `SendBarrier(cancel) → 目标订单终态证据 → SendBarrier(new)`。
+- 没有，IO 壳在**同一条 Attempt 链**里解释为 `SendBarrier(cancel) → 目标订单终态证据 → SendBarrier(new)`。两条腿都以 `(scope, Replace)` 的能力证据为准（发出前门，§6.5）。
 - 新单数量按意图声明的口径（剩余量或绝对量），从目标订单的终态观察（含累计成交量）算出。这是 `>>=`：第二腿读第一腿的结果，发生在 IO 壳内，不是单据层的两次起单。
 - 撤单腿 `Undetermined` 时整条链停在对账，新单腿不发。
 - 撤单腿收敛后，链等待目标终态（转移表，§6.5）。新单腿仍要过发出前门；意图的 `deadline` 已过则记 `Expired(deadline)`，新单腿永不发出。
@@ -280,7 +338,39 @@ IO 壳不知道单据的存在。
 
 - 执行侧 `ResolutionEvidence` 的 found/absent 回答“我的提交到达了吗”。
 - 派生侧观察记录反映目标订单的终态与累计成交量。
-- 二者来自同一次 venue 交互：`Found` 时同一事务落两侧各一条记录，`Found` 以位置引用那条观察记录，`Evidence`（契约载荷与原始负载）留在执行侧（记录模型，§6.5）。
+- 二者来自同一次 venue 交互：`Found` 时同一事务落执行侧一条记录与观察侧该回应的观察记录（订单状态，及每笔可识别执行一条成交记录，§6.5、§8.1），`Found` 以位置引用命中的那条观察记录，`Evidence`（契约载荷与原始负载）留在执行侧（记录模型，§6.5）。
+
+**检查目录** [设计]。交易协议的第二层检查项是下表这个闭合集合（`CheckName` 按操作种类闭合，§7.7）。每项对同一组记录与同一组参数给出同一结果；数值一律按精确有理数计算（§2.6），不做舍入。“最近观察”指该流当前流末的 `fold_state` 中该主体最近的记录（见“两层对账”）。
+
+| 检查项 | 适用 | `required_inputs` | `Aligned` / `Diverged` / `Undecidable` | 规则文件参数 |
+|---|---|---|---|---|
+| 能力 | 全部 | ∅（读能力证据，执行事实，不是观察流） | 见“门只看必要项” | 无；恒为必要项 |
+| 可交易性 | `Place`、`Replace`、`Close` | 目录 | 该作用域该 instrument 的最近目录观察声明本操作种类“可写” / 声明“不可写” / 没有该 instrument 的目录观察 | 无；它判断的是最近观察的声明，不承诺上游此刻可写；观察陈旧的后果是上游对一笔真写的回应（通常 `VenueRejected`），不越过写边界的任何安全不变量 |
+| 敞口 | `Place`、`Replace` 的新单部分 | 持仓、余额、目录、报价 | 见下 / 情景值 > `ratio · E` / 见下 | `ratio`（> 0） |
+| 持仓在 | `Close` | 持仓 | 目标持仓的最近观察为未平，且带 `quantity` 时其绝对数量 ≥ `quantity` / 已平或数量不足 / 没有目标持仓的观察 | 无 |
+| 原单仍在 | `Cancel`、`Replace` | 订单状态 | 目标订单的最近观察为非终态 / 为终态 / 没有目标订单的观察 | 无；只能 advisory（F10） |
+
+**敞口的情景值。** 它回答“按声明数量全部成交之后，这个 instrument 在该作用域的名义敞口占权益多少”，是按合约价格的情景估值，不是风险模型：不算 delta、不做换汇、不算保证金。
+
+- `s`：`side` 买为 +1、卖为 −1。
+- `q0`：该作用域该 instrument 的最近持仓观察中的带符号数量；同一 instrument 有多于一个持仓身份（多空分仓）时 `Undecidable`，不净额化。
+- `p`：意图参数带限价（公共意图 schema 的限价字段）时取限价，否则取最近报价观察中公共报价 schema 指定的参考价字段。
+- `m`：最近目录观察中的合约乘数。
+- `V`：意图带 `notional` 时取它，否则 `quantity · p · m`。
+- `E`：该作用域最近余额观察中的权益。
+- 情景值 = `|q0 · p · m + s · V|`；`Aligned` 当且仅当情景值 ≤ `ratio · E`。
+- `Undecidable`：任一所需主体没有观察；`p ≤ 0`、`m ≤ 0` 或 `E ≤ 0`；`p`、`V`、`E` 的币种不全相同。缺值与 gap 都不放行必要项；实际消费的观察进 `checked_as_of`。
+- `Replace` 以意图声明的新单数量作全部成交的情景，不是对实际新腿数量的上界担保：新腿数量取目标终态后才知道，原单在此期间的成交也不在 `q0` 里。
+
+**目录之外的 guard 是下游的决定者。** 目录与 STS 参数（§6.3）之外的任何规则（按策略、按组合、按外部模型的判断）由下游代码实现：一个 principal 订阅待决单据并经 `decide` 作决定（§8.5），或程序在 `Emit` 之前自己把关。其边界：
+
+- 它只在策略要求人工审批的单据上起作用，并占用该 `current_version` 唯一的一条 Decision（§6.3）：它批准后同一版本不能再由另一审批人决定，它否决则单据关闭。要“自动 guard + 人工审批”，它只作否决或 `SendBack`（`SendBack` 不是 Decision，不占这一版的决定），批准留给人工审批人；或由人工审批人参考它的输出作决定。它想改判一个已批准的版本，只能经 `SendBack` 退回草稿、由负责人 `Revise` 出新版本。
+- 它的判断在作出时一次成立，不随世界推进重算；目录检查会重算。
+- 它不能越过核心的否决：放行时依据有效性门与必要项照常生效（§6.3）。
+- 程序在自己 `Emit` 之前的把关只管它自己发出的意图，不是对所有来源的 guard。
+- 加一项目录检查是改交易协议（`CheckName` 加一个变体，编译器指出全部遗漏），不是改规则文件。
+
+理由：放行与否是外部可观测的行为，同一个规则文件在两个实现里必须给出同一个放行 / 否决，所以每项检查的输入、判据与参数都在这里写定；阈值与比例本身仍是业务，由规则文件给出。不选：只在规则文件列检查名、判据留给实现（两实现对同一单给出不同结果）；把所有 guard 都做成下游决定者（它不能对所有来源生效，也不随世界重算）。
 
 ### 意义与产品规则
 
@@ -288,7 +378,8 @@ IO 壳不知道单据的存在。
 - **一份单据只有一种交易意图**：不分叉不合并，订单不能“同时想买又想卖两个价”。版本链线性；`Revise` 在锁内追加，不需要 hash 期望比较。
 - **产品层代价与协作边界**：两个 AI 不能同时处理同一张单据。合理，但不好用。核心有意接受这个代价，不用分叉 / 合并修补。协作在核心之外：`Transfer` 移交；第二个 AI 另起单据，由决定者二选一；或把建议发给负责人。
 - **决定绑定 current_version**：Decision 引用 `AwaitingDecision(current_version)` 的 hash；进入 `Prepared` 要求被决定的版本 = 当前 current_version。`SendBack` 后的 `Revise` 使 current_version 前进，旧 Decision 自然失效。
-- **一张单据至多一次 `Close(Prepared)`**：之后的改动是新单据（改单 / 撤单各自起单），各走各的写边界。
+- **一张单据至多一次 `Close(Prepared)`**：之后的改动是新单据（改单 / 撤单 / 平仓各自起单），各走各的写边界。
+- **单据不记起单理由** [设计]：`Draft`/`Revise` 与批准都不带负责人或审批人撰写的自由文本。单据记录回答“谁、何时、依据哪些位置、哪一版”（S8）；自由文本只出现在对他人意图的判断上：`SendBack` 的原因、否决的原因、规则 `Rejection` 的违反项，读模型 `tickets` 按版本给出它们（§8.5）。“为什么想下这一单”是策略的业务上下文，由下游按它拿到的请求引用自己保存（§10.6）；它不能放进意图参数，意图参数会原样交给集成。不选：`Draft`/`Revise`/每条 Decision 都带备注，没有任何核心代数读它，而批准本就不带原因（P7）。
 
 ### 不变量
 
@@ -296,6 +387,7 @@ IO 壳不知道单据的存在。
 - 一张单据**至多一次** `Close(Prepared)`；`AwaitingDecision` 期间 `Revise` 被拒。由状态机穷尽转移保证。
 - 门只对必要项 fail-closed，advisory 不参与门。由放行策略声明保证。
 - `basis_validity == Fresh` 且必要项 `Aligned` 才进 prepare。由单据应用只读校验门保证（门定义在 §5.2）。
+- 参数不合目标来源声明的意图参数 schema 的版本送审即被否决，不进 prepare；这对所有来源成立。由输入约束步无条件读取 `parameter_validity` 保证（§6.3）。
 
 ### 为什么
 
@@ -365,15 +457,23 @@ trait Rule {
 | 步 | 读什么 / 做什么 | 依据 |
 |---|---|---|
 | 授权 | 以单据 `responsible` 为主体查 `(principal, WriteLaneKey, OperationKind)` scope | §6.8；C11 |
-| 输入约束 | 守卫字段校验：instrument 属目标账户、数量/名义有限为正、子账户已枚举、side/名义金额阈值 | C9/C10；守卫字段处理器（§2.1） |
+| 输入约束 | 读单据 fold 的 `parameter_validity`（§6.2 参数合规）；守卫字段校验：instrument 属目标账户、子账户已枚举、instrument 在策略的允许集合内 | C9/C10；守卫字段处理器（§2.1） |
 | 审批 | 策略要求人工则送审，等待带版本的 Decision；不要求人工则以 `rule_version` 为依据直接通过 | C3；H6；C11 |
-| lane | 读该 `WriteLaneKey` 的阻塞头集合；集合非空则停在本步，集合为空后放行 | H4 |
+| lane | 读该 `WriteLaneKey` 的阻塞头集合；集合非空则停在本步；集合为空时判冷却，冷却期内否决，否则放行 | H4；C12 |
 | 过期 | `deadline` 过期规则，以 `Input::超时` 触发 | H6 |
 
 **授权步。** 查询的是：哪些 principal 的记录足以让写进入 prepare。写处理器的装载 principal 授权范围，决定能否不经人工直接放行。
 
+**输入约束步** [设计]。三项彼此独立，以 `Validated` 累积，一次否决列出全部违反：
+
+- `parameter_validity` 不是 `Valid`：`Invalid` 带逐项违反，`NotSupported` 与 `SchemaMismatch` 各自单列，三者原因可区分（§6.2）。它无条件生效，策略不能关闭。
+- instrument 属目标账户（C9）、目标子账户已枚举（C10）。
+- **允许集合**：策略为该 `(principal, WriteLaneKey, OperationKind)` 给出 instrument 允许集合时，意图的 instrument 不在集合内即否决；不给出即不限制；给出空集即全部否决。
+- 否决 = `Rejection`（带违反项与 `rule_version`）+ `Close(DecisionRejected)`。
+
 **审批步。**
 
+- 是否需人工由策略按 `(principal, WriteLaneKey, OperationKind)` 给出：总是、从不，或“名义超过阈值 N 时”。第三种下，意图带 `notional` 且 ≤ N 则不需人工；带 `notional` 且 > N、或以 `quantity` 定量（不带 `notional`）则需人工。STS 不读观察，不估算以数量定量的单子值多少钱；估算属于敞口检查（§6.2），而不能比较时一律走人工是 fail-closed 的一侧。
 - 决定者按 `(principal, 动作种类)` 授权。
 - 另一笔过期未决独立处理。
 - **一个 `current_version` 至多一条 Decision** [设计]：`decide` 的接受判据是“该 `(ticket, current_version)` 尚无 Decision 记录”（C11 的待决集合版本即此）；已有 → `Conflict(AlreadyDecided)`。
@@ -384,6 +484,16 @@ trait Rule {
 - 集合非空时本笔停在此步，单据保持 `AwaitingDecision`，不产生 `Prepared`。
 - 唯一不等待的写：`target` 为阻塞头 Attempt 幂等键的撤单意图（§6.4）。
 
+**冷却** [设计]。冷却是 lane 规则的 `RuleState`，由执行事实驱动：
+
+- **键与时钟**：`(WriteLaneKey, instrument)` 上最近一条“下单腿”的 `SendBarrier` 记录时间（UTC，§2.6）；instrument 经 `SendBarrier` 的 `AttemptRef` 回连其 `Prepared` 所载的意图取得。下单腿 = `Place` 的腿、`Replace` 的新单腿或原子改单的腿；撤单腿与平仓的腿不设、也不受冷却。
+- **间隔与键同轴**：间隔由策略按 `(WriteLaneKey, OperationKind)` 给出（只对 `Place`、`Replace` 可给），跨 principal 共享，不按 principal 分。理由：时钟本就跨 principal；若间隔按 principal 给，间隔短的 principal 不断刷新共享时钟，间隔长的 principal 永远等不到，结果是“最先用完的那个限制”而不是任何一行声明的限制。
+- **更新点**：`SendBarrier` 持久化之时（可能已发出，§6.5）。`Prepared` 未发即 `Expired` 的不计；因而没有真正发往上游的腿也可能计时（`SendBarrier` 之后、调用之前崩溃），这是有意接受的保守代价。
+- **判定点**：单据在 lane 步放行的那一刻，只判一次。该 `(WriteLaneKey, OperationKind)` 有间隔 `d` 时，当前时刻 < 该键时钟 + `d` 即否决：`Rejection::Cooldown{until}` + `Close(DecisionRejected)`；等于或晚于即通过。正常路径下放行时同 lane 前一条 Attempt 已终结，它的 `SendBarrier` 已在记录里；同一键上若有尚未终结、已 `Prepared` 而尚无 `SendBarrier` 的下单腿（只在绕过时出现），本次判定不放行（否决）；它不设时钟，那条腿越过屏障或 `Expired` 后这一阻碍随之消失。间隔为 0 等同不设冷却。`bypass_lane` 只越过阻塞头等待，不越过冷却；`Replace` 的新单腿不再经过 STS，它的 `SendBarrier` 只设时钟。
+- **恢复**：时钟是对 `SendBarrier` 记录的 fold，重启后由记录重建，没有另存的状态。
+- 理由：在检查通过时计时，放行后未发出也占冷却，且审批等待期间计时已开始（旧实现的缺陷，O11）；以业务回执计时，被拒或结果未知的发送不计冷却，丢掉了“可能已发出”的依据。放在 lane 步而不是输入约束步，因为单据可能在审批与 lane 上等很久，判定必须贴近放行。撤单与平仓是减少风险的动作，不应被冷却挡住。
+- 不选：冷却作为一项检查（`AlignmentCheck`）：检查只读观察值，执行事实不进钩子的 `eval`（§6.2）；冷却让单据等待而不是否决：待决单据会在 lane 上堆积，与 C12 的“规则否决”不符。
+
 **过期步。** `AwaitingDecision` 期间到期 = `Close(Expired)` 否决记录，不补偿。这包括停在审批步或 lane 步时。
 
 ### 放行门
@@ -391,7 +501,7 @@ trait Rule {
 进入 `Prepared` 前，链读取单据 fold 的三项状态：
 
 1. `basis_validity == Fresh`（§5.2）；
-2. 必要项 `alignment` 为 `Aligned`（§6.2）；能力项恒在必要项内，不由策略声明；
+2. 必要项 `alignment` 为 `Aligned`（§6.2）；能力项恒在必要项内，不由策略声明，它同时核对意图所带的参数 schema 身份仍是声明的那个；
 3. `AwaitingDecision(current_version)` 与决定绑定的版本一致。
 
 任一不满足 → `PredicateFailure`（fail-closed，C12），不发出。

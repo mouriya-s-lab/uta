@@ -280,6 +280,7 @@
    - `AwaitingDecision` 期间 `Revise` 被拒（决定绑定 `current_version`，C11）。
    - append 单据记录（执行 J，每条带 principal 与依据）。
 3. **决定版本冲突（Q10 同型）。** 两 principal 对同一 `current_version` 决定，第二个返回 `Conflict(AlreadyDecided)`、不执行、不改状态（C11、§6.3）。即使第一条决定后单据仍停在 lane 步、版本未变，也是如此（审批步，§6.3）。
+   - 下游的自动决定者（检查目录之外的 guard，§6.2）与人工审批人同受此约束：它批准后，人就不能再决定这一版；它否决则单据关闭；它想改判一个已批准的版本，只能经 `SendBack` 退回草稿、由负责人 `Revise` 出新版本。`SendBack` 不是 Decision，不占这一版的决定。退回与否决的原因随版本可读（读模型 `tickets`）。
 4. 负责人失联：由策略层处理（权衡，§6.2）。
    - 过期步在 `deadline` 到期 `Close(Expired)`；
    - 或持有控制授权的 principal 经 `transfer(ticket, to)` 强制转移（§8.5），转移记录带 principal 与依据。
@@ -396,25 +397,28 @@
 
 **走通。**
 
-### W18（Q8+Q9+Q10）创建期否决、人工审批与过期、决定版本冲突
+### W18（Q8+Q9+Q10）送审即否决、人工审批与过期、决定版本冲突、冷却
 
 **失败路径（Q8，三种输入）。**
 
-1. 消费方经会话（P13，principal 已认证，§8.5、C11）提交三笔意图：instrument 属他账户、数量非法、只读账户下单。
+1. 消费方经会话（P13，principal 已认证，§8.5、C11）提交三笔意图：instrument 属他账户、数量非法或参数不合该来源的意图参数 schema（例如限价单缺限价）、只读账户下单。
    - 每笔经 `draft(intent)`（§8.5）以会话 principal 为 `responsible` 开单 `Draft`（§6.2），append 单据记录（执行 J）。消费方开单不经出站写处理器：写处理器只接程序的 `EffectRequest`，以装载 principal 开单（§6.1）。
+   - 参数不合规不挡开单：单据 fold 的 `parameter_validity` 从 `Draft` 起即为 `Invalid(违反项)`，负责人经读模型 `tickets` 看得到，可 `revise` 改正（§6.2 参数合规）。锚点构造不出的请求（如缺 `WriteLaneKey`）才在 `draft` 被拒 `Rejected(Malformed)`，不开单、不 append。
    - 行动者：单据，身份 = principal。
 2. 负责人经 `submit_for_decision`（§8.5）送审后，STS 链逐步读记录（§6.3）：
    - 只读账户在**授权**步被拒（`Rejection::Unauthorized`），另 append 安全事件记录（C11）；
-   - 他账户 instrument 与非法数量在**输入约束**步被拒（守卫字段处理器，C9/C10）；
-   - 每笔否决 = `Close(DecisionRejected)` + 规则 `Outcome` 记录，带 principal、时间、依据位置（执行 J）；
+   - 他账户 instrument 与参数不合规在**输入约束**步被拒：该步读 `parameter_validity`，并校验 instrument 归属与策略的允许集合（C9/C10），一次否决列出全部违反；
+   - 每笔否决 = `Close(DecisionRejected)` + 规则 `Rejection` 记录，带 principal、时间、依据位置、违反项与 `rule_version`（执行 J）；
    - 链在拒绝处停止，后续步不执行。
    - 对外可见：三对意图 / 否决记录；安全事件可读；fixture venue 调用数 = 0，无 `Prepared`。
+   - 程序变体：程序 `Emit` 同样的非法参数，写处理器 `Draft` + `SubmitForDecision` 同一事务（§6.1），输入约束步给出同形的否决；程序经自己请求的 `EffectResponse{Drafted}` 与单据状态看到结果。请求载荷构造不出锚点时得 `EffectResponse{NotDrafted(Malformed)}`，不开单、不重派。
 
 **正常—失败路径（Q9，人工审批与过期）。**
 
 3. 策略要求人工：**审批**步把单据留在 `AwaitingDecision(current_version)`（§6.2），待决集合对审批人可见（读模型，§4.4）。
    - 审批人 principal 提交 Decision，引用 `current_version` 与期望的待决集合版本（C11）。
-   - 批准 → 链继续 lane → 过期 → 放行，append `Prepared` + `Close(Prepared)`（W1 步 4）；否决 → `Close(DecisionRejected)`。
+   - 批准 → 链继续 lane（阻塞头集合为空后判冷却，§6.3）→ 过期 → 放行，append `Prepared` + `Close(Prepared)`（W1 步 4）；否决 → `Close(DecisionRejected)`。
+   - 冷却变体：同 `(WriteLaneKey, instrument)` 上一笔下单腿的 `SendBarrier` 距今不足该 `(WriteLaneKey, OperationKind)` 的冷却间隔 → lane 步 `Rejection::Cooldown{until}` + `Close(DecisionRejected)`；已批准不豁免冷却，`bypass_lane` 也不豁免。
    - 每条 Decision 带谁、何时、依据 `LogPosition`、绑定版本（执行 J）。
 4. 另一笔超过 `deadline` 仍未获决定：**过期**步按 `Input::超时` 触发 → `Close(Expired)`（H6；状态机允许 `AwaitingDecision → Closed`，§6.2），不补偿、不递送。
    - 对外可见：读模型可回答谁、何时、依据什么批准；过期意图无 `Prepared`/`SendBarrier`。
@@ -425,7 +429,7 @@
    - 无论第一条决定之后单据已 `Close(Prepared)`/`Close(DecisionRejected)`，还是仍停在 lane 步、版本未变，结果相同。
    - 对外可见：冲突记录存在；意图状态不变。
 
-**走通**（策略表示在 §8.5：principal → scope 表、是否人工审批、名义阈值，版本 = 内容 hash；验收 §10.5 #11）。
+**走通**（策略表示在 §7.6、§8.5：principal → scope 表、人工审批条件与名义阈值、允许集合、冷却间隔、检查目录的必要项与参数，版本 = 内容 hash；验收 §10.5 #11、#30、#32）。
 
 ### W19（Q19）会话身份与未授权控制
 

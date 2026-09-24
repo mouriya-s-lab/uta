@@ -1,6 +1,6 @@
 # 05 单据与决策代数 STS
 
-对照：§6.2、§6.3、§6.4、§5.2、§6.1 写处理器、§8.5 单据组、W5、W11、W18。索引见 `README.md`。
+对照：§6.2（含参数合规、交易协议）、§6.3（含冷却）、§6.4、§5.2、§6.1 写处理器、§7.6 规则文件、§8.5 单据组、W5、W11、W18。索引见 `README.md`。
 
 ## D5.1 单据状态机
 
@@ -19,7 +19,7 @@ stateDiagram-v2
   AwaitingDecision --> AwaitingDecision : Transfer
   AwaitingDecision --> Drafting : SendBack（responsible 不变）
   AwaitingDecision --> CP : Close(Prepared)，与 Prepared 同事务
-  AwaitingDecision --> CR : Close(DecisionRejected)，由决定者
+  AwaitingDecision --> CR : Close(DecisionRejected)，由决定者或 STS 链
   AwaitingDecision --> CE : Close(Expired)，由 STS 过期步
   Drafting --> CW : Close(Withdrawn)，由 responsible
   AwaitingDecision --> CW : Close(Withdrawn)
@@ -32,9 +32,14 @@ stateDiagram-v2
     basis_validity 与 alignment 照常重算（偏离是状态）
     停在审批步或 lane 步都在此态
   end note
+  note left of CR
+    决定者否决，或 STS 链否决：
+    参数不合规、允许集合、冷却、放行门
+  end note
   note left of Drafting
     没有过期：草稿不占 lane、不在 STS 链上
     失联草稿 = 强制 Transfer 后 Withdrawn
+    参数不合规不挡草稿：parameter_validity 从 Draft 起可见
   end note
 ```
 
@@ -48,7 +53,7 @@ stateDiagram-v2
 
 ## D5.2 意图从哪来、怎么开单
 
-对照：§6.1 写处理器、§8.5 单据组、§7.6 `deadline` 缺省、§8.1 意图锚点。
+对照：§6.1 写处理器、§6.2 参数合规与交易协议、§8.5 单据组、§7.6 `deadline` 缺省、§8.1 意图锚点。
 
 ```mermaid
 flowchart LR
@@ -59,13 +64,15 @@ flowchart LR
   end
   AI -->|"draft(intent) → TicketId<br/>revise / submit_for_decision"| NORM
   PROG -->|"写处理器：装载 principal 为 responsible<br/>Draft + SubmitForDecision 同事务"| NORM
-  NORM["意图规范化（parse-don't-validate）<br/>锚点：principal · WriteLaneKey · OperationKind · basis（可空）<br/>撤/改单必带 target: VenueRef 或 IdemKey<br/>deadline 缺省按 (WriteLaneKey, OperationKind) 策略 → 运行期全局，填入版本"]
-  NORM --> TK[("TicketAction 记录：Draft / SubmitForDecision")]
+  NORM{"意图构造（parse-don't-validate）<br/>锚点：principal · WriteLaneKey · OperationKind ∈ {Place, Cancel, Replace, Close} · basis（可空）<br/>撤/改单必带 target: VenueRef 或 IdemKey；平仓必带 target: PositionRef（含 instrument）<br/>deadline 缺省按 (WriteLaneKey, OperationKind) 策略 → 运行期全局，填入版本"}
+  NORM -->|"锚点构造不出"| MAL["会话：draft → Rejected(Malformed)，不 append<br/>程序：EffectResponse{NotDrafted(Malformed)}，不重派"]
+  NORM -->|"构造成功（参数不在此判定）"| TK[("TicketAction 记录：Draft / SubmitForDecision<br/>每版带意图参数 schema 身份")]
+  TK -.-> PV["单据 fold：parameter_validity<br/>按该来源 CapabilityProof 声明的意图参数 schema：Valid / Invalid(违反项) / NotSupported / SchemaMismatch"]
   TK --> STS["STS 顺序固定链（D5.3）"]
   APPR -.->|"Decision 记录（绑定 current_version）"| STS
 ```
 
-读法：三种来源的记录同形（principal + 依据位置）；差别只在授权规则里"哪些 principal 的记录足以进 prepare"。
+读法：三种来源的记录同形（principal + 依据位置）；差别只在授权规则里"哪些 principal 的记录足以进 prepare"。参数合规对所有来源同一规则：不挡开单，送审时由输入约束步读取（D5.3）。
 
 核出：程序意图无编辑期这一点原文未写——已并入 §6.1（写处理器 `Draft` + `SubmitForDecision` 同事务）。
 
@@ -78,21 +85,24 @@ flowchart TB
   IN[("单据 AwaitingDecision(current_version)")]
   IN --> A{"授权<br/>(responsible, WriteLaneKey, OperationKind) ∈ scope？"}
   A -->|"否"| RJ1["Rejection::Unauthorized + 安全事件<br/>Close(DecisionRejected)"]
-  A -->|"是"| B{"输入约束<br/>守卫字段：instrument 属账户、数量为正、子账户已枚举、阈值<br/>（步内可交换集，Validated 累积）"}
-  B -->|"否"| RJ2["NonEmpty<Rejection>（组合子 kind 包装）<br/>Close(DecisionRejected)"]
-  B -->|"是"| C{"审批<br/>策略要求人工？"}
+  A -->|"是"| B{"输入约束（步内可交换集，Validated 累积）<br/>parameter_validity == Valid（无条件）<br/>instrument 属账户、子账户已枚举、instrument ∈ 策略允许集合"}
+  B -->|"否"| RJ2["NonEmpty<Rejection>：全部违反项（参数违反 / NotSupported / SchemaMismatch 可区分）<br/>Close(DecisionRejected)"]
+  B -->|"是"| C{"审批<br/>策略：总是 / 从不 / 名义 > N（以数量定量 = 需人工）"}
   C -->|"是"| WAITC["等待 decide(Approve / Reject)<br/>待决集合对审批人可见（读模型 tickets）<br/>同 (ticket, current_version) 第二条 decide → Conflict(AlreadyDecided)"]
   WAITC -->|"Reject"| RJ3["Close(DecisionRejected)"]
   WAITC -->|"Approve（绑定版本；决定者按动作种类授权）"| D
   C -->|"否：以 rule_version 为依据通过"| D
   D{"lane<br/>该 WriteLaneKey 阻塞头集合非空？"}
   D -->|"非空，且本笔不是以阻塞头幂等键为 target 的撤单"| WAITD["停在 lane 步，单据仍 AwaitingDecision<br/>期间 alignment 照常重算"]
-  WAITD -->|"集合清空（fold 变化）"| E
-  D -->|"空 / 是撤阻塞头意图 / bypass_lane Decision"| E
+  WAITD -->|"集合清空（fold 变化）"| CD
+  D -->|"空 / 是撤阻塞头意图 / bypass_lane Decision"| CD
+  CD{"冷却（只判一次；bypass 不豁免）<br/>Place / Replace 且 now < (WriteLaneKey, instrument) 最近下单腿 SendBarrier 时间 + 该 (WriteLaneKey, OperationKind) 的间隔？<br/>或同键有绕过产生、尚未越过屏障的下单腿？"}
+  CD -->|"是"| RJ6["Rejection::Cooldown{until}<br/>Close(DecisionRejected)"]
+  CD -->|"否 / 未配置"| E
   E{"过期步<br/>deadline（UTC）已过？"}
   E -->|"是"| RJ5["Close(Expired)：不补偿"]
   E -->|"否"| G
-  G{"依据有效性门<br/>basis_validity == Fresh ∧ 必要项 alignment == Aligned（能力项恒必要）∧ 决定绑定版本 == current_version"}
+  G{"依据有效性门<br/>basis_validity == Fresh ∧ 必要项 alignment == Aligned（能力项恒必要，并核对意图参数 schema 身份仍是声明的）∧ 决定绑定版本 == current_version"}
   G -->|"否"| RJ4["PredicateFailure（fail-closed）<br/>Rejection 带 rule_version + checked_as_of<br/>Close(DecisionRejected)"]
   G -->|"是"| OUT[("同事务 append Prepared + Close(Prepared(position))<br/>+ Outcome（带 rule_version、checked_as_of）+ RuleState")]
   TMR["计时器（Input 超时）"] -.->|"AwaitingDecision 任一等待点到期"| RJ5
@@ -105,7 +115,8 @@ flowchart TB
 - 等待都发生在 `Prepared` 之前：单据在等，不是已放行的记录在等；所以正常路径下同 lane 至多一条未终结 Attempt。
 - 过期步是第五步：等待结束后先看 `deadline` 再进门；计时器只是让等待中的单据也能到期，不是让过期单据仍能 `Prepared` 的旁路。
 - 门读的是单据 fold 已算好的字段，规则自己不算；世界变了单据先变 `Diverged`，审批人看得到，放行时门自然失败。
-- 重启后链从 `RuleState` 续跑：停在审批步的仍等 `decide`；停在 lane 步的等集合清空；计时器按 `deadline`（UTC）重装（D1.2 第 4 步）。
+- 重启后链从 `RuleState` 续跑：停在审批步的仍等 `decide`；停在 lane 步的等集合清空；计时器按 `deadline`（UTC）重装（D1.2 第 4 步）；冷却时钟由 `SendBarrier` 记录重建。
+- 冷却的时钟在 `SendBarrier` 持久化时设（D6.1），不在检查通过时设；撤单与平仓既不设也不受。
 
 核出：授权步的主体（`responsible`）、不要求人工时审批步的依据（`rule_version`）、门失败的去向（`Close(DecisionRejected)`）、一个版本至多一条 Decision（`Conflict(AlreadyDecided)`）、Decision/`Outcome` 携带 `checked_as_of` 原文未写——已并入 §6.3。
 
@@ -145,7 +156,7 @@ stateDiagram-v2
 
 ## D5.5 两层对账状态的重算触发
 
-对照：§6.2 偏离是状态、两层分开的原因、`InputMissing` 可行动；§5.2 `basis_validity`；§8.3 能力变更。
+对照：§6.2 偏离是状态、两层分开的原因、缺观察可行动、参数合规、检查目录；§5.2 `basis_validity`；§8.3 能力变更。
 
 ```mermaid
 flowchart LR
@@ -156,16 +167,16 @@ flowchart LR
     T3["能力变更推送 / CapabilityObserved"]
     T4["保留边界推进"]
     T5a["reload_config(rules)：Lag 变化"]
-    T5b["reload_config(rules)：必要项集变化"]
+    T5b["reload_config(rules)：必要项集或检查参数变化"]
   end
   subgraph L1["第一层 basis_validity（只依赖位置）"]
     V["basis_valid(basis, world, Lag) →<br/>Fresh / Stale(Lag) / Retracted(pos) / BeyondRetention(pos)<br/>比较切面：各流完备位置（D8.3）"]
   end
   subgraph L2["第二层 alignment（按 Intent 分派的检查集）"]
     IM{"该项 required_inputs 各流观察侧都存在？"}
-    CK["每项 AlignmentCheck.eval(intent, 各流当前流末 fold_state) →<br/>CheckResult：Aligned / Diverged(Divergence) / Undecidable(Gap)<br/>记 checked_as_of = 实际消费的位置集"]
+    CK["检查目录中策略列出的每项（可交易性 · 敞口 · 持仓在 · 原单仍在）<br/>AlignmentCheck.eval(intent, 各流当前流末 fold_state, 该项参数) →<br/>CheckResult：Aligned / Diverged(Divergence) / Undecidable（gap 或缺该主体的观察）<br/>记 checked_as_of = 实际消费的位置集"]
     MISS["IntentAlignment 该项 = InputMissing(缺哪些 StreamKind)"]
-    CAP["能力项：(WriteLaneKey, OperationKind) Supported → Aligned，否则 Diverged；恒为必要项"]
+    CAP["能力项：(WriteLaneKey, OperationKind) Supported 且声明的意图参数 schema == 意图所带 → Aligned，否则 Diverged；恒为必要项"]
   end
   T1 --> V
   T4 --> V
@@ -176,12 +187,13 @@ flowchart LR
   IM -->|"否"| MISS
   T3 --> CK
   T3 --> CAP
+  T3 --> PV["参数合规 parameter_validity 重算（不属两层对账；输入约束步读取，D5.3）"]
   T5b --> GATE
   V --> GATE{"门：Fresh ∧ 必要项 Aligned"}
   CK --> GATE
   MISS --> GATE
   CAP --> GATE
-  MISS -->|"venue 有一次性读能力"| RD["策略可选先查后判：read(...) → 观察记录（one_shot，不推进完备进度）→ 该项重算"]
+  CK -->|"Undecidable：缺该主体的观察，且策略对该项声明先查后判"| RD["送审时核心发一次 read（OneShot origins ∋ Ticket）→ 观察记录（one_shot，不推进完备进度）→ 该项重算；每版至多一次"]
   RD --> T2
   GATE -->|"否"| DIV["审批人看到 Diverged 单据；放行时 PredicateFailure"]
   GATE -->|"是"| OK["可进 prepare；Outcome 记 checked_as_of"]
@@ -217,6 +229,7 @@ sequenceDiagram
     S->>S: 停在 lane 步，单据仍 AwaitingDecision(v3)，版本不变；此时任何同版本 decide 同样 Conflict(AlreadyDecided)
     Note over S: 集合清空
   end
+  S->>S: 冷却 ✓（该 instrument 最近下单腿 SendBarrier 已超出间隔，或未配置）
   S->>S: 过期步 ✓ → 门 ✓（checked_as_of）
   S->>T: 同事务 Prepared + Close(Prepared(pos)) + Outcome
   T->>IO: Prepared @pos（D6.1）

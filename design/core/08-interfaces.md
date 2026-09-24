@@ -143,6 +143,7 @@
   - 持仓公共 schema 的每条记录带作用域内稳定的持仓身份（区分同一 instrument 的多空分仓与 venue 自有持仓身份），平仓意图的 `target` 取自它；目录公共 schema 的记录按 (instrument, `OperationKind`) 给出写资格（可写 / 不可写），集成已知的不可写（停牌、退市、该类只读、无权限）以它发布（§6.2）。
   - 成交与订单状态两个种类的语义见下文“成交与订单状态的契约语义”。
 - **公共意图 schema**：交易协议的每种操作种类（下单、撤单、改单、平仓，§6.2）各有一份意图参数 schema，随 IDL 发布，写成 JSON Schema，含类型相关的必填与互斥约束。集成在该 `(scope, OperationKind)` 的 `CapabilityProof` 里声明它接受的 schema 身份：公共意图 schema，或以它为基础只增加字段与约束的扩展 schema（§2.2）；意图按声明的 schema 在输入约束步校验（§6.3）。意图参数 schema 是 UTA 的契约，不是上游请求格式。
+- **交易协议检查读的公共字段**（§6.2 检查目录）：持仓记录的带符号数量与作用域内稳定的持仓身份；报价记录的一个指定参考价字段；目录记录的合约乘数、计价币种与按 (instrument, OperationKind) 的写资格；余额记录的权益及其币种；公共意图 schema 的限价字段。
 - **扩展 schema**：venue 特有、公共 schema 容纳不下的内容，由集成在声明中给出 schema 文本，以单独的流输出；需要与公共流关联时，程序按记录上的身份字段 `Join`（§2.5）。扩展 schema 同样属于契约，不是上游消息格式。
 - 核心不解释 schema 内容：程序与钩子的解释器按 schema 注册；schema 身份随 `Projection` 交给解释层（§2.2）。
 - 理由：载荷若是上游形状，程序就成了 UTA 内第二个消费上游的地方，只能按 venue 分别写，B2/B4 要求的跨渠道组合做不成（§0.1）。
@@ -590,7 +591,10 @@
 
 - 动作轴：写（append `TicketAction`）。
 - 核心内部结果：单据 fold 转移（§6.2）；`Approve` 触发 STS 链放行（§6.3）。
+- `draft` / `revise` 不因参数不合规被拒：参数合规是单据 fold 的状态，读模型 `tickets` 返回它，送审时由输入约束步否决并留下意图与否决记录（§6.2 参数合规、§6.3）。
+- `decide` 由人或下游的自动决定者调用，二者同受一版一条 Decision 的约束；交易协议检查目录之外的 guard 只能以这种身份出现（§6.2）。
 - 错误：
+  - `draft` 的意图构造不出锚点（缺 `WriteLaneKey`、操作种类不在交易协议的封闭集合内、缺 `basis`；撤单 / 改单缺 `target`；平仓所指的持仓观察记录取不出该作用域的 `PositionRef`）→ `Rejected(Malformed)`，不开单、不 append；
   - `expected_version ≠ current_version` → `Conflict`，不执行；
   - `decide` 时该 `(ticket, current_version)` 已有 Decision → `Conflict(AlreadyDecided)`。单据可能仍停在 lane 步而版本未变（§6.3）；
   - 越权 → `Unauthorized`；
@@ -657,6 +661,7 @@
 ### 授权与审批策略的表示
 
 - principal → scope 与控制动作、人工决议授权，写在统一路径的策略 / 审批规则文件（§7.6）。
+- 规则文件只写交易协议定义的词汇与取值：人工审批条件与名义阈值、instrument 允许集合、按 `(WriteLaneKey, OperationKind)` 的冷却间隔（§6.3），检查目录各项的必要 / advisory、参数与“先查后判”（§6.2）。判据由交易协议写定，同一规则文件在任何实现里给出同一个放行 / 否决。
 - 规则版本 = 内容 hash，经 `reload_config` 生效。
 - 规则不冻结进单据；待决单据在放行时按当时规则重过五步（§6.3）。收紧规则可使待决单据在放行时 `Rejection`，记录带 `rule_version`。
 - 负责人失联由规则处理：过期步 `Close(Expired)`，或带 principal 的强制 `transfer`（§6.2）。
