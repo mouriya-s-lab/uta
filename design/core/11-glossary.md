@@ -27,7 +27,15 @@
 | `execution_id` / `execution_revision` | 成交记录的执行身份：上游证明的、在来源 × 作用域内唯一且跨渠道不变的不透明值 / 上游明确给出修正次序时的修订号；按执行计数的 fold 每个身份至多贡献一次，同身份只按修订取值，冲突与无身份照实标出、不计入 | §8.1 |
 | 逐笔增量 / 累计快照 | 成交记录的数量与价格是这一笔执行的 / 订单状态的 `cumulative_filled_quantity` 与平均价是到该次观察为止的累计；二者不互相推算 | §8.1 |
 | 权威（authority） | 值的原件所在处；订单、持仓、余额、行情的权威都在上游，UTA 只对自己的意图及其推进记录有权威 | §0.1 |
-| `Projection` | 集成握手声明的值：作用域、流、能力、扩展载荷 schema、记录映射（`Projection{scopes, streams, capabilities, extension_schemas, mappings}`） | §2.2 |
+| `Projection` | 集成握手声明的值：作用域、流、写能力、订阅配额、扩展 schema、记录映射（`Projection{scopes, streams, capabilities, quotas, extension_schemas, mappings}`） | §2.2 |
+| 声明版本 | 每次握手成功由核心 append 的执行事实：该投影除记录映射外的全部（§8.1 的“声明”）；最新一版加其后的 `CapabilityObserved` 即当前能力 | §7.5、§8.2 |
+| `StreamDecl` | 一条观察流的声明：流名、种类、`payload_schema`、`request_schema`、一次性读与回填的三值能力、名义数据等级、有无游标 / 事件时间 | §2.2 |
+| `request_schema` | 一次性读请求参数的 schema 身份 `(schema_id, schema_version)`；参数含查询主体与领域过滤条件，核心只校验不解释；不与 epoch 绑定 | §2.2、§8.2 |
+| 名义数据等级 | 流声明里的数据等级（时效 × 覆盖）：来源对该流开通情况的声明，不担保逐条记录；记录上报告的实际等级以记录为准 | §2.2 |
+| 配额池（`Quota`） | 属于来源的订阅上限：一组流上同时被路由的不同订阅主体数 | §2.2、§8.5 |
+| `account_ref` | 作用域的对外账户引用：集成给出，集成内唯一、跨握手稳定、不复用；与声明历史矛盾时不可解析；与 `label`、`WriteLaneKey` 都不同 | §2.2 |
+| 读结论记录 | 一次性读或回填被集成作答（含上游拒绝）时，与结果项同一事务 append 在该流上的控制记录：请求身份、发起方、本次项的位置或覆盖边界；不是载荷记录 | §8.2 |
+| 执行事实订阅 | `subscribe` 的一种选择器：某来源（或其一个作用域）的执行事实与声明版本；只能 `ordered`、可从起点、无投递损失 | §8.5 |
 | 记录映射（`RecordMapping`） | 一条上游记录怎样落到对齐点的值：处置表（上游字段名 → 对齐并附换算 / 进扩展 / 丢弃）、枚举映射表、原始负载保留声明；换算是 `Comb<上游值, 契约值>`；随 `Projection.mappings` 交出，集成侧求值，核心握手时静态校验 | §8.1、§2.5 |
 | 对齐点 | 契约里上游数据可落的位置：锚点、已注册字段、公共或扩展载荷 schema 的字段 | §8.1 |
 | 组合子值树 / `DerivationNode` | 一个 `enum`（deep embedding），判断的共同底层表示 | §2.5 |
@@ -43,8 +51,8 @@
 | `basis` / `basis_validity` | 意图引用观察侧位置的承载：位置集 `Set<LogPosition>`；其有效性 `Fresh`/`Stale`/`Retracted`/`BeyondRetention`。唯一边是效应侧读观察侧这个方向，`basis` 是其上意图的那一份位置集 | §5.1、§5.2 |
 | `Journal` | 记录载体；观察侧 `Journal<RetractableDelta>` 可撤回可压缩，执行事实侧只 append | §4.1、§3.1 |
 | STS / lane | 决策代数：顺序固定规则链（授权 → 输入约束 → 审批 → lane → 过期）/ 每 `WriteLaneKey` 的写通道全序 | §6.3、§6.4 |
-| `WriteScope` / `WriteLaneKey` | 可写作用域（多账户在核心里的存在形式）/ 其不透明键 | §2.2、§6.4 |
-| `Capability` / `Verdict` | (scope, operation) → `Supported`/`Unsupported`/`Unknown` 的能力证据 | §2.2 |
+| `WriteScope` / `WriteLaneKey` | 可写作用域（多账户在核心里的存在形式，带 `account_ref`、`label` 与挂在其上的流名）/ 其不透明键，不外露 | §2.2、§6.4 |
+| `Capability` / `Verdict` | 写侧 (scope, operation) → `Supported`/`Unsupported`/`Unknown` 的能力证据；读侧的三值能力按流声明在 `StreamDecl` 上 | §2.2 |
 | IO 壳 | 效应侧的解释器：核心中唯一向集成发出写调用、把集成的返回值变成记录的地方 | §6.5 |
 | `Attempt` / `AttemptRef` | 一条 `Prepared` 记录及其后继阶段链，身份 = `attempt_position`；腿身份 `AttemptRef = (attempt_position, leg)`，所有腿级记录与归因以它关联；正常路径下同 lane 至多一条未终结 | §6.5 |
 | `Prepared` / `SendBarrier` / `Undetermined` / `Expired` | 阶段链的记录：已放行待执行 / 发送屏障（已 fsync，之后才可 `submit`）/ 已发出但结果未知 / 未发出即到期 | §6.5 |
@@ -69,7 +77,8 @@
 | 会话状态 | 核心为每个登记的集成运行的 `Connecting`（无会话，自动重连）/ `Established(SessionEpoch)` / `Halted{cause}`（无会话，需运维动作；`cause ∈ {ProjectionInvalid, ContractIncompatible, Refused}`，跨核心重启保持） | §7.2 |
 | 健康面（`IntegrationHealth`） | 每个集成的会话状态、逐流 readiness、按调用目标（作用域或逻辑流）的连续失败数与最近成功时间；全部是健康观察的 fold，不进写路径 | §8.4 |
 | principal | 会话绑定的身份 `(os_user, actor)`：OS 对端凭据给出 `os_user`，下游自报 `actor`、经解释层带入握手；授权与审计的键 | §8.5 |
-| `Snapshot` / `as_of` | 读模型的一次读取结果，及其吃到的位置集 `Set<LogPosition>` 与范围内生效的 `gaps`；`tickets`、`subscriptions` 只给当前态，没有历史切面 | §8.5 |
+| `Snapshot` / `as_of` | 读模型的一次读取结果，及其吃到的位置集 `Set<LogPosition>` 与范围内生效、未被回填补齐的 `gaps`；`tickets`、`subscriptions` 只给当前态，没有历史切面 | §8.5 |
+| `sources` | 读模型的一种：各来源最近声明版本加其后能力变化的 fold，解释层据此得到账户、流与读写能力；可按历史 `as_of` 读 | §8.5 |
 | 信任边界 = OS 用户 | 写权限来自认证得到的 principal × 策略 scope，不来自连接；同用户进程视为用户本人（H7） | §7.1 |
 | 凭据链 | `统一路径封存文件 → UTA 核心 → 该集成进程`；程序与消费方只见账户身份 | §7.1、§7.6 |
 | 单实例（single instance） | 同一用户状态根（`OPENALICE_HOME`）只允许一个核心实例，由 OS 文件锁 + fence 保证 | §7.1、§7.4 |
@@ -111,8 +120,11 @@
 | 两种“拒绝” | `VenueRejected`：写已发出，venue 拒了；执行事实、终态之一 | `DecisionRejected`：审批拒了；单据关闭，从未进入 `Prepared` | 前者在链上，后者在单据上 | §6.5、§6.2 |
 | 上游的两种 `Refused` | `handshake` 返回 `Refused`：上游明确拒绝集成的身份或配置，整个集成登记 `Halted`，等运维动作 | `read`/`backfill` 返回 `Refused`：上游拒绝这一次读请求，集成照常运行，不是 gap | 都只在上游给出明确拒绝时返回；不可达、超时一律 `Unavailable` | §8.2、§8.3 |
 | 离线 / 待处理 | `Connecting`：没有会话，会自己恢复（传输失败、上游暂时不可达） | `Halted`：没有会话，不会自己恢复（投影不合法、契约不兼容、身份被拒） | 二者都不发写（发出前门等待）；只有后者要 `restart_integration` 或 `rotate_credential` | §7.2、§6.5 |
+| 读的五种“拿不到” | `Unsupported`：最近声明说该流不支持此读；`Unconfirmed`：最近声明说能力未知；二者都不调用集成 | `Unavailable`：来源此刻无会话（不调用、不记 gap），或调用后渠道失败（记 `Gap{origin: Channel}`） | 第五种 `Refused`：上游明确拒绝这次请求，记读结论记录，不改能力；空回答是 `Answered`，不属这五种 | §8.2、§8.5 |
+| 账户的三个名字 | `WriteLaneKey`：核心路由键，不外露 | `account_ref`：对外账户引用，稳定、不复用 | 第三个 `label`：只给人看，可重复、可改 | §2.2 |
+| 名义数据等级 / 记录上的等级 | 流声明的名义等级：读之前告诉下游“通常是什么” | 公共载荷里上游报告的实际等级 | 不一致时以记录为准；声明不担保逐条 | §2.2 |
 | 两种“证据” | `CapabilityProof`：venue 有这个能力（握手结果） | `ResolutionEvidence`：我的尝试发生了没（对账结果） | 前者进 `Projection.capabilities`，后者进链 | §2.2、§6.5 |
-| 形状 / 投影 | 上游形状：上游对象长什么样，只在集成里被消费，从不越过集成 | 投影：有几个作用域、几条流、各支持什么；UTA 定 schema、集成填、核心按它路由，并原样交给解释层翻成对外概念 | 账户只是特例；订单、持仓、流、渠道都如此；外部下游不见投影本身 | §2.2 |
+| 形状 / 投影 | 上游形状：上游对象长什么样，只在集成里被消费，从不越过集成 | 投影：有几个作用域、几条流、各支持什么；UTA 定 schema、集成填、核心按它路由，并把声明部分经读模型 `sources` 交给解释层翻成对外概念 | 账户只是特例；订单、持仓、流、渠道都如此；外部下游不见投影本身 | §2.2 |
 | 载荷 / 原始负载 | 载荷：集成的消费结论，契约 schema，程序与钩子解释 | 原始负载：集成所消费的上游原文，只作证据 | 前者是结论，后者是出处；两者一起进 `Evidence` | §2.1、§6.5 |
 | 读模型 / 归因后的订单观察 | 读模型：核心对记录的非权威 fold（种类与输入见 §8.5），规则不引用 | 集成产出的带出处记录，钩子可读 | 都描述“订单现在什么状态”；一个是解释、一个是记录 | §4.4、§6.2 |
 | 归因字段的归属 | 记录归观察侧：`attribution` 落在订单/成交观察记录上 | 响应归效应侧：读它的处理器（lane 决议匹配、读模型归因）注册在效应侧 | 由谁填：集成填；IO 壳在回执与取证观察上补 `FromAttempt(AttemptRef)`；填不出记 `Unattributed` | §5.3、§2.1 |

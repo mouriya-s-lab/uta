@@ -38,7 +38,7 @@ sequenceDiagram
 
 读法：
 
-- 核心是时间权威：`LogPosition` 按到达顺序分配，venue seq 只是证据；乱序与重复不被核心修正，由派生侧 fold 按 venue seq 处理。
+- 核心是时间权威：`LogPosition` 按到达顺序分配，venue seq 只是证据；乱序与重复不被核心修正，由派生侧 fold 按种类处理：成交按 execution_id 与修订计数（§8.1），其余种类按 venue seq 等证据。
 - 同一条推送可能同时是三件事：订阅者的一条记录、某单据偏离状态的触发、某 `Undetermined` Attempt 的决议证据。
 - 迟到回执走的就是这条路：旧 epoch 的被丢在第二个分支；新会话重送的在 `opt` 分支并入原 Attempt。
 
@@ -84,28 +84,28 @@ stateDiagram-v2
 
 ## D3.3 回填与实时边界
 
-对照：§8.4 回填、实时边界；Q14。
+对照：§8.2 `backfill`、§8.4 回填、实时边界；Q14。
 
 ```mermaid
 flowchart LR
   subgraph EPOCH["同一流 epoch"]
     direction LR
-    G["Seq 1<br/>Gap{Source}"] --- BF1["回填页 1<br/>backfilled"] --- BF2["回填页 2<br/>backfilled"] --- LF["live_from<br/>首条实时记录"] --- L1["实时 …"]
+    G["Seq 1<br/>Gap{Source}"] --- BF1["窗口 1 的记录<br/>backfilled + 读结论（covered_to）"] --- BF2["窗口 2 的记录<br/>backfilled + 读结论（covered_to）"] --- LF["live_from<br/>首条实时记录"] --- L1["实时 …"]
   end
-  CORE["核心按订阅需求与 pacing<br/>backfill(stream, from, page)"] -->|"只请求 < live_from"| BF1
-  BF2 -->|"next_cursor 续页"| BF2
-  BF2 -->|"覆盖到 live_from 之前"| CLOSE["边界闭合：frontier 允许越过"]
-  BF2 -->|"穷尽仍未达"| INC["append Gap{Source, backfill_incomplete}<br/>frontier 跳过该区间（不伪造连续）"]
-  CORE -->|"Unavailable"| CH["Gap{Channel, backfill}<br/>可再发"]
+  CORE["核心按订阅需求切窗口<br/>backfill(stream, window)；上游分页与 pacing 在适配器内"] -->|"只请求 < live_from"| BF1
+  BF1 -->|"下一窗口从 covered_to 续（崩溃重启同样）"| BF2
+  BF2 -->|"covered_to 连到 live_from"| CLOSE["边界闭合：frontier 允许越过"]
+  BF2 -->|"上游历史穷尽（covered_to 未达）或 Refused"| INC["append Gap{Source, backfill_incomplete}<br/>frontier 跳过未覆盖区间（不伪造连续）"]
+  CORE -->|"Unavailable（任一页失败即整体失败）"| CH["Gap{Channel, backfill}<br/>可再发"]
 ```
 
-读法：回填记录与实时记录同形、同 epoch，只多一个 `backfilled` 标记；按范围不重叠，所以不需要逐条去重。
+读法：回填记录与实时记录同形、同 epoch，只多一个 `backfilled` 标记；按范围不重叠，所以不需要逐条去重。续点是读结论记录里的覆盖边界，不需要任何一方保存游标。
 
 核出：无。
 
 ## D3.4 订阅、cursor、ack、慢消费者与重连
 
-对照：§4.2 cursor 与确认、§8.5 订阅组、§7.5 订阅表、W6 步 3–4、W14。
+对照：§4.2 cursor 与确认、§8.5 订阅组（两种 selector、配额、订阅状态）、§7.5 订阅表、W6 步 3–4、W14、W20。
 
 ```mermaid
 sequenceDiagram
@@ -113,15 +113,18 @@ sequenceDiagram
   participant SUB as 持久订阅元素
   participant DL as 投递调度
   participant J as 观察 Journal
-  C->>SUB: subscribe(selector, mode, from?)
-  alt selector 引用未声明流
+  C->>SUB: subscribe(selector, mode, from?)（selector = 观察流 (来源, 流, 主体集?) 或 执行事实 (来源, 作用域?)）
+  alt 来源未登记 / selector 引用最近声明里没有的流
     SUB-->>C: 拒绝
-  else from < 保留边界
+  else 执行事实订阅而 mode ≠ ordered
+    SUB-->>C: 拒绝
+  else 观察流订阅 from < 保留边界
     SUB-->>C: BeyondRetention
-  else 超过投影配额
-    SUB-->>C: QuotaExceeded{scope, limit}（集成不收到该订阅）
+  else 配额池里的流上不带主体集 / 超过配额池上限
+    SUB-->>C: 拒绝 / QuotaExceeded{quota, limit}（集成不收到该订阅）
   else 接受
-    SUB->>SUB: 写订阅表，cursor = from（缺省 = 各选中流当前流末，不补历史）；订阅归属 principal，持久
+    SUB->>SUB: 写订阅表，cursor = from（缺省 = 各选中流当前流末，不补历史；执行事实可从起点）；订阅归属 principal，持久
+    Note over SUB: 状态：来源有声明 → 活（与有无会话无关）；来源从未有声明 → 待接纳，首次握手成功后转活或被拒
     SUB-->>C: Subscription
   end
   loop 记录到达
@@ -148,6 +151,7 @@ sequenceDiagram
 
 - 确认语义唯一：`ack` = 已处理。已投未确认的记录在崩溃后会再见一次；已确认的永不重投（退回只经控制面 `rewind_cursor`）。
 - 程序是同一种订阅者：它的 cursor 与 `Checkpoint` 同事务持久化（D4.1），所以程序永远不会看到已折入状态的记录。
+- 执行事实订阅走同一套 cursor 与 ack，但只能 `ordered`：执行事实不压缩、不合并，所以慢消费者只背压自己，不出现 `Gap{Delivery}`；投递按位置原样搬运记录，不解析。
 
 核出：无。
 

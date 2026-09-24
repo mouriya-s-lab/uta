@@ -198,8 +198,8 @@ flowchart TB
 | 信封解析入口 | 边界处解析并验证信封字段（parse-don't-validate，隐藏构造器）、契约载荷与原始负载直通 | 智能构造器、畸形记录拒绝逻辑 | 锚点闭合必填、入口即验 | §2.1 |
 | 观察 `Journal` | 观察侧记录载体、`RetractableDelta` 撤回代数、按 frontier 压缩、保留边界 | 存储原语、`fold_state` 重建、`compact` 实现 | 派生侧可撤回 | §4.1 |
 | 派生 DAG（程序解释①） | 增量重算、cutoff 截断、节点粒度依赖、派生记录写回观察侧 | 增量引擎（`salsa`/differential）、cutoff 判定 | 无自反馈环；执行状态不进 DAG | §4.3 |
-| 持久订阅 | 订阅需求、selector（来源×instrument×种类）、cursor、消费方式声明、订阅状态 | 匹配与路由细节 | 订阅 owner 是核心，与消费方连接无关 | §4.2 |
-| 投递调度 | 投递、背压、conflation、`Gap{origin: Delivery}` 标记与确认 | 传输层 conflation 实现 | 损失语义由消费者显式声明 | §4.2 |
+| 持久订阅 | 订阅需求、selector（观察流：来源 × 流 × 主体集；执行事实：来源 × 作用域）、cursor、消费方式声明、订阅状态、配额计量 | 匹配与路由细节 | 订阅 owner 是核心，与消费方连接无关 | §4.2、§8.5 |
+| 投递调度 | 投递、背压、conflation、`Gap{origin: Delivery}` 标记与确认；执行事实按位置原样搬运、不解析（§8.5） | 传输层 conflation 实现 | 损失语义由消费者显式声明 | §4.2 |
 | 入站处理器注册表 | 字段→处理器映射（观察侧/效应侧分区）、`required_inputs`、触发效果 | 载荷语义解释 | 字段缺失=不触发，不是错误 | §2.1、§6.1 |
 
 集成进程的两项补充：
@@ -223,7 +223,7 @@ flowchart TB
 | STS 规则链 | 顺序固定链（授权→输入约束→审批→lane→过期）、`RuleState`、`Rejection`、放行判定 | 规则内部守卫（组合子 kind enum） | 规则不引用读模型 | §6.3 |
 | lane 驱动 | 每 `WriteLaneKey` 的阻塞头集合（lane 规则的 `RuleState`）与按 `Prepared` 位置的执行顺序 | 上游账户结构对齐 | 有序与阻塞来自通讯协议，不是 UTA 的锁；等待发生在 `Prepared` 之前 | §6.4 |
 | IO 壳 | 核心内唯一的写调用出口（集成写接口）、`Prepared` 链驱动、两阶段、`SendBarrier`、对账驱动、崩溃恢复 | 转移表、渠道顺序 | 核心内唯一效应处，写在上游的落实由集成完成；不知道单据存在 | §6.5–§6.7 |
-| 读模型 | 对记录的只读 fold（种类、输入与能否按历史 `as_of` 重建见 §8.5；`subscriptions` 为订阅表当前态），非权威，经核心↔解释层契约暴露 | fold 的具体数据结构 | 不被规则引用；消费方也可自行 fold 原始记录 | §4.4、§8.5 |
+| 读模型 | 对记录的只读 fold（种类、输入与能否按历史 `as_of` 重建见 §8.5；`subscriptions` 为订阅表当前态；`sources` 为声明版本与能力变化的 fold），非权威，经核心↔解释层契约暴露；为执行事实订阅提供按位置读取的已提交记录 | fold 的具体数据结构 | 不被规则引用；消费方也可自行 fold 原始记录 | §4.4、§8.5 |
 | 控制面 | 认证 principal 传入的运维动作通道（P14） | 传输 | 只经认证 principal，不经进程信号或 flag 文件 | §6.3、§8.5 |
 
 控制面的补充：
@@ -329,7 +329,7 @@ flowchart TB
 | 规则状态（`RuleState`） | 效应 |
 | 单据记录（`TicketAction`） | 效应 |
 | 订阅表 / cursor | 观察 |
-| 能力证据（握手 `Projection.capabilities`、`CapabilityObserved`） | 效应 |
+| 能力证据（握手的声明版本、`CapabilityObserved`） | 效应 |
 | 程序状态（`Checkpoint`） | 观察（解释①的 `Scan`/`Window` 累加器）与效应（解释②的执行状态：冷却、等待、过期） |
 | 进程表 | 核心 |
 | 保留边界与引用登记 | 观察 |
@@ -341,7 +341,7 @@ flowchart TB
 - **写**：
   - 集成推送，位置由核心分配（§8.3）；
   - 程序解释①（派生记录）；
-  - 一次性读的结果：读处理器、钩子取证、消费方 `read`（§3.4、§8.2）；
+  - 一次性读与回填的结果及其读结论记录：读处理器、钩子取证、IO 壳按目标身份的读、消费方 `read`、订阅侧回填（§3.4、§8.2）；
   - IO 壳：回执与取证观察的副本（记录模型，§6.5）。
 - **读**：订阅者、程序、单据 `basis`/检查项、读模型、IO 壳（复合链读目标终态观察）。
 - **传播**：按 `LogPosition` 推进；`RetractableDelta` 可撤回可压缩；回执 / 取证副本可压缩，`Evidence` 在执行 J。
@@ -374,12 +374,13 @@ flowchart TB
 ### 能力证据
 
 - **写**：
-  - 每次集成握手，由核心 append 一版（执行 J）；
-  - IO 壳在运行期观察到能力变化（含能力变更推送，§8.3）时 append `CapabilityObserved`。
-- **读**：STS `Context`、单据 `AlignmentCheck` 解析、IO 壳取证渠道集、`required_inputs` 比对。
+  - 每次集成握手成功，由核心 append 一个**声明版本**（执行 J）：该握手 `Projection` 的声明部分（除记录映射外的全部，§8.1），含作用域与 `account_ref` 的可解析判定（§2.2）；
+  - IO 壳在运行期观察到能力变化（含能力变更推送，§8.3；写能力与流的读 / 回填能力）时 append `CapabilityObserved`。
+- **读**：STS `Context`、单据 `AlignmentCheck` 解析、IO 壳取证渠道集、`required_inputs` 比对、一次性读与回填的路由（§8.2）、读模型 `sources`、执行事实订阅（§8.5）。
 - **传播**：
-  - 只 append，最新一版生效；重启后由最近握手重建。
+  - 只 append，最新一版生效；重启后由最近的声明版本及其后的 `CapabilityObserved` 重建，集成重新握手时再 append 新版。
   - 取证渠道按**当前**能力证据选：取证是读，按当前能力才可执行。旧 Attempt 不绑定历史版本。
+  - `account_ref` 的可解析判定对照该来源的全部历史声明版本（§2.2）。
 
 ### 程序状态（`Checkpoint`）
 

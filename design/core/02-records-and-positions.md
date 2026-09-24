@@ -70,6 +70,8 @@ UTA 是一个反向代理。经过它的不是上游协议，而是集成消费�
 
 ## 2.2 协议 = 注册单元；形状与投影
 
+> 图：D9.5 声明的取得（`design/diagrams/09-alice-session.md`）；声明版本记录见 D2.5（`design/diagrams/02-record-model.md`）。
+
 ### 协议 = 注册单元
 
 UTA 处理订单、新闻还是期权，只是协议不同的处理对象。协议改变的是 UTA 如何响应内部的值，不透明的部分交给下游。
@@ -82,7 +84,7 @@ UTA 处理订单、新闻还是期权，只是协议不同的处理对象。协�
 |---|---|---|---|
 | 新闻 | 观察链路 | 可能只有 `occurred_at`；无效应半边 | 程序做派生、消费方展示 |
 | 期权 | 观察 + 意图链路 | 与股票同一交易写协议；守卫要读 greeks/到期则注册 | 同交易 |
-| 订单 | 观察 + 意图/尝试链路 | `attribution`、`cumulative_filled_quantity`、`venue_order_id`、`idempotency_key`、守卫字段 | 程序、钩子、读模型 |
+| 订单 | 观察 + 意图/尝试链路 | `attribution`、`cumulative_filled_quantity`、`venue_order_id`、`idempotency_key`、`execution_id`、`execution_revision`、守卫字段 | 程序、钩子、读模型 |
 
 “交给下游”的下游包括程序与钩子。它们解释载荷，但输出仍经过核心（派生记录、Intent、`IntentAlignment`）。不透明是对**核心的路由与存储**不透明；解释权在下游，记录权在核心。
 
@@ -94,7 +96,7 @@ UTA 处理订单、新闻还是期权，只是协议不同的处理对象。协�
 
 - **信封**：锚点与已注册字段（§2.1、§8.1）。
 - **载荷**：集成的消费结论，按契约的载荷 schema 写成（§8.1）。核心不解释它，程序与钩子解释它。
-- **投影**（`Projection`）：由 UTA 定 schema、由集成填内容。核心按它路由；它经核心↔解释层契约原样交给解释层，由解释层翻成对外概念（§8.5；`design/downstream/design.md` 第 2、4 节）。外部下游看不到投影本身。
+- **投影**（`Projection`）：由 UTA 定 schema、由集成填内容。核心按它路由；它的声明部分（除记录映射外的全部，§8.1）作为执行事实落盘，经核心↔解释层契约交给解释层，由解释层翻成对外概念（§8.5 读模型 `sources`；`design/downstream/design.md` 第 2、4 节）。外部下游看不到投影本身。
 
 没有投影，UTA 无法知道、也就无法经解释层告诉下游“你可以和我的哪些作用域通信、每个能做什么、载荷按哪份 schema 读”。同一上游对象可有多种投影，投影随握手变化，UTA 从不持有对象本身。[证据：fp-03 命题 3；域 P1/C2]
 
@@ -103,13 +105,24 @@ UTA 处理订单、新闻还是期权，只是协议不同的处理对象。协�
 ```rust
 struct Projection {
     scopes: Vec<WriteScope>,                     // 可写作用域：多账户在 UTA 里的存在形式；键不透明
-    streams: Vec<StreamDecl>,                    // 观察流：StreamKind + payload_schema + 是否有游标/事件时间
-    capabilities: Vec<Capability>,               // (scope, OperationKind) → Verdict
-    extension_schemas: Vec<SchemaDoc>,           // 该集成声明的扩展载荷 schema 文本（§8.1）；公共 schema 随 IDL 发布，不在此
+    streams: Vec<StreamDecl>,                    // 观察流的声明（见下）
+    capabilities: Vec<Capability>,               // 写侧：(scope, OperationKind) → Verdict
+    quotas: Vec<Quota>,                          // 订阅配额池（见下）
+    extension_schemas: Vec<SchemaDoc>,           // 该集成声明的扩展 schema 文本（载荷、读请求、意图参数，§8.1）；公共 schema 随 IDL 发布，不在此
     mappings: Vec<RecordMapping>,                // 记录映射（§8.1）：集成侧求值；核心只做静态校验并求每条流提供的字段集
     source: Source, observed_at: Instant,
 }
-struct WriteScope { key: WriteLaneKey, label: Text, streams: Vec<StreamId> }   // label 只给人看
+struct WriteScope { key: WriteLaneKey, account_ref: Text, label: Text, streams: Vec<StreamName> }
+    // account_ref：对外账户引用（见下）；label 只给人看；streams：挂在该作用域的流名（epoch 由核心定，§8.2 handshake）
+struct StreamDecl {
+    stream: StreamName, kind: StreamKind,
+    payload_schema: SchemaRef,                   // 记录载荷的 schema；与 epoch 绑定（见下）
+    request_schema: SchemaRef,                   // 一次性读请求参数的 schema；不与 epoch 绑定
+    read: Verdict, backfill: Verdict,            // 读侧能力：一次性读 / 回填，按流
+    quality: NominalQuality,                     // 声明的名义数据等级，不担保逐条记录
+    has_venue_cursor: bool, has_event_time: bool,
+}
+struct Quota { streams: Vec<StreamName>, max_subjects: u32 }   // 这些流上同时被路由的不同订阅主体数上限
 struct Capability { scope: WriteLaneKey, operation: OperationKind, verdict: Verdict }
 enum Verdict { Supported(CapabilityProof), Unsupported, Unknown }
 ```
@@ -117,9 +130,30 @@ enum Verdict { Supported(CapabilityProof), Unsupported, Unknown }
 `WriteScope` 就是“多账户”。核心不知道它是账号、子账号还是跨国独立账户，只知道有几个、各自能做什么、各自挂哪些流。
 
 - F6“部分未文档化”的能力不可能是静态保证。
-- 写操作的 `CapabilityProof` 含 unknown 证据渠道声明：by-key / listing+venue id / fills-positions / 保留期内 replay-by-key / 无。
+- 写操作的 `CapabilityProof` 含两项声明：unknown 证据渠道（by-key / listing+venue id / fills-positions / 保留期内 replay-by-key / 无）；该 `(scope, OperationKind)` 接受的意图参数 schema 身份 `(schema_id, schema_version)`：交易协议该操作种类的公共意图 schema，或以它为基础只增加字段与约束的扩展 schema（§6.2、§8.1）。
 
-UTA 对投影只做两件事：按投影路由（lane 按 `WriteScope`、订阅按 `StreamDecl`、门按 `Capability`）；原样交给解释层，由它翻成对外概念。它不解释形状，也不发明投影。投影含 `WriteLaneKey`、`Verdict` 等核心概念，所以只到解释层为止（§0.1 三段）。
+UTA 对投影只做两件事：按投影路由（lane 按 `WriteScope`、订阅与一次性读按 `StreamDecl`、写门按 `Capability`）；把声明部分交给解释层，由它翻成对外概念。它不解释形状，也不发明投影。投影含 `WriteLaneKey`、`Verdict` 等核心概念，所以只到解释层为止（§0.1 三段）。
+
+**流与作用域的关系** [设计]。流名在一个来源内唯一。一条流的数据依赖某个作用域（该账户的持仓、订单、余额），就声明为只挂在那一个作用域上的流；不依赖作用域的数据（公共行情、目录、新闻）可以挂在多个作用域上，也可以不挂在任何作用域上。一次性读、订阅与读模型都按流寻址，作用域不另作读的地址（§8.5）。
+
+- 理由：地址只有一个时，读的目标不会与作用域互相矛盾；按作用域取数据的需要已由“私有数据是单作用域流”满足。
+- 不选：一次性读同时带作用域与流：同一请求有两个可相互矛盾的目标。不选：为只读来源虚构不可写的 `WriteScope`：`WriteScope` 是 lane 的来源（§6.4），虚构一个会凭空造出账户与写门项。
+- 由此，只读公共来源（无凭据的公共行情等）就是只声明流、不声明作用域的集成：它没有账户，照常可读、可订阅。
+
+**对外账户引用 `account_ref`** [设计]。下游要能在命令里写出一个账户并在下次写出同一个账户；`label` 只给人看，可重复、可改；`WriteLaneKey` 是核心概念，不外露。所以作用域另带一个由集成给出的契约引用：
+
+- 集成义务（§8.3）：在本集成内唯一；同一上游账户跨握手、重启、换凭据不变；一旦用过，不再给另一个账户。它可以由上游账号与子账号组成，不要求等于上游的某个原生字段。
+- 核心校验，只查声明之间的矛盾：一个引用在同一版声明里出现两次，或历史上任一版声明曾把它绑定到另一个键，或同一个键在历史上曾带另一个引用，这个引用就标为**不可解析**，原因记入该版声明；曾经歧义的引用此后一直不可解析。核心仍按键路由，所以标记不影响 lane、门与记录，只使解释层不能用这个引用找到账户。
+- 理由：外部名字若能改绑到另一个键，下游按旧名字发的写就落到另一个账户；拒绝整个集成又会因为一个作用域的问题停掉其余账户（启动隔离）。只让名字失效，最坏结果是“账户引用冲突，需要处理”，不会写错账户。
+- 核心查不出“同一引用、同一键却指向另一个上游账户”：那是集成义务，由一致性测试验证（§10.5 #26）。
+
+**读侧声明** [设计]。一次性读、回填与订阅按 `StreamDecl` 判定，与写侧 `Capability(scope, OperationKind)` 分开：读的对象是流，不是作用域上的操作。
+
+- `read` / `backfill` 各是一个三值 `Verdict`，按流声明；握手后的变化经能力变更推送进入 `CapabilityObserved`（§8.3）。`Unsupported` 与 `Unknown` 都不调用集成，但给发起方的结果不同：前者是“不支持”，后者是“能力未确认”（§8.2 `read`、§8.5 一次性读）。
+- 能力只到流的粒度。上游只对部分主体提供某种读时，集成要么把这部分声明成单独的流，要么在请求时由上游明确拒绝，得到 `Refused`（§8.2）；核心不按主体细分能力。
+- `request_schema`：一次性读的参数（查询主体：已解析的 instrument、目录键或文本；领域过滤条件：到期日、行权价、条数上限等）是按这份 schema 写成的一个值，与意图载荷同理：核心只校验形状并原样交给集成，不解释（§8.2）。有公共 schema 的种类随 IDL 发布公共请求 schema；来源专有的请求参数写在该集成的扩展 schema 里。
+- `quotas`：配额池属于来源；每个池列出共享一个上限的流与上限值，计量单位见 §8.5 订阅组。
+- `quality`：声明该流名义上的数据等级，分两个维度：时效（实时 / 延迟 / 未知）与覆盖（全市场 / 部分场所 / 未知）；词表随公共 schema 发布，核心不解释。它是来源对该流开通情况的声明，**不担保**每条记录：上游在回答里报告实际等级时，那是公共载荷的字段，逐条以记录为准。理由：数据等级常随 instrument 与开通状态变化，只有上游作答时才知道（运行期的量不冒充静态保证）；声明值只用来在读之前告诉下游“这条流通常是什么”。
 
 **能力未知 ≠ 结果未知。**
 
@@ -131,11 +165,12 @@ UTA 对投影只做两件事：按投影路由（lane 按 `WriteScope`、订阅�
 
 - `schema_id` 指向契约里的一份 schema：公共 schema，或该集成声明的扩展 schema（§8.1）。它不指向上游的消息格式。
 - 同一 `StreamId` 内版本不变，版本变化即开新 epoch（§8.1）。
-- 核心不解释 schema 内容，只按身份路由与存储：程序与钩子的解释器按身份精确匹配（§8.1）；身份也随 `Projection` 交给解释层，解释层据此判断该来源专有字段此刻能否使用（来源专有字段本身在构建期从集成发布制品生成，`design/downstream/design.md` 第 4 节）。
+- 核心不解释 schema 内容，只按身份路由与存储：程序与钩子的解释器按身份精确匹配（§8.1）；身份也随声明交给解释层，解释层据此判断该来源专有字段此刻能否使用（来源专有字段本身在构建期从集成发布制品生成，`design/downstream/design.md` 第 4 节）。
+- `request_schema` 同样是 `(schema_id, schema_version)`，但它描述的是请求，不是记录：它变化不开新 epoch，已有记录不受影响。一次性读请求带上它所依据的请求 schema 身份，与当前声明不一致即不执行（§8.5），所以按旧 schema 写成的参数不会被新 schema 当成另一种含义。
 
 **信封解析，载荷直通。** 订单状态（终态 / 非终态）是被路由的少数字段之一。上游状态的映射在集成里做：它是记录映射中的枚举映射表（§8.1），按 venue 列举输入枚举，映射到契约的有限词表（C13）；映射不了的输出**必须是 `Unmapped(raw)`**，不能靠“无 catch-all”伪造穷尽映射。核心入口只验证该字段是契约词表中的一个值（含 `Unmapped`），由信封解析保证。[证据：fp-04 命题 15/16；域 C13/F6]
 
-**只读批处理条件。** 只读请求允许批处理 / 去重，条件是：无可观测副作用 + 稳定 identity + 幂等 + 可接受的批窗口。写操作永不走此路径。[证据：fp-03 命题 4；fp-02 命题 1/2]
+**只读批处理条件。** 只读请求允许批处理 / 去重，条件是：无可观测副作用 + 稳定 identity + 幂等 + 可接受的批窗口。写操作永不走此路径。一次性读的稳定 identity 是 `(来源, 流, 请求 schema 身份, 规范化参数, range)`；合并只发生在同一会话 epoch 内的在途请求之间，不以缓存或旧结果作答，各发起方的 `deadline` 各自生效（§8.2）。[证据：fp-03 命题 4；fp-02 命题 1/2]
 
 venue 词汇不越过集成。[域 B6]
 

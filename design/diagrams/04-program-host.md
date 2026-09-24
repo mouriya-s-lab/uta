@@ -30,14 +30,15 @@ sequenceDiagram
     Note over C,DB: 崩在 COMMIT 前：整批不存在，重启重放同一批（#16）
     C->>O: 逐条分派 EffectRequest（事务之后）
     alt 读处理器（一次执行，不自行重试）
-      alt 流未声明 / 能力不支持
-        O->>DB: EffectResponse{request: pos, Unsupported}（不调用集成）
+      alt 未调用集成（流未声明 / 最近声明 read 为 Unsupported 或 Unknown / 来源无会话 / 请求不合 schema，§8.2 read）
+        O->>DB: EffectResponse{request: pos, NotCalled(reason)}（不调用集成、不 append 观察记录）
+        Note over C: 程序决策半边从自己请求的 EffectResponse 看到它（§6.1）
       else 调用
-        O->>I: read(stream, selector, range)
-        alt Records（含空）
-          I-->>O: Records
-          O->>DB: 同事务：观察记录 provenance OneShot{origin: Request(pos)}, one_shot（观察 J）+ EffectResponse{Observed(obs)}（执行 J）
-          J->>C: 程序按 cursor 看到它 → 下一轮 Advance（闭环走观察侧）
+        O->>I: read(stream, request, range)
+        alt Answered（含空）或 Refused
+          I-->>O: Answered(items) / Refused(reason)
+          O->>DB: 同事务：item 观察记录 × N（one_shot）+ 读结论记录，provenance OneShot{origins ∋ Request(pos), request}（观察 J）+ EffectResponse{Concluded(结论)}（执行 J）
+          J->>C: 程序按 cursor 看到它们 → 下一轮 Advance（闭环走观察侧）
         else Unavailable
           I-->>O: Unavailable
           O->>DB: 同事务：Gap{Channel}（观察 J，该流）+ EffectResponse{Unavailable(gap)}
@@ -58,7 +59,7 @@ sequenceDiagram
 - 事务边界在 `COMMIT`：`Emit` 是否"发生"以 `EffectRequest` 记录是否持久为准；处理器执行在其后，通过位置引用与请求关联（D4.3）。
 - `fetch.bars`（读）与 `trade.place`（写）对程序是同一构造子；差别在注册表。
 
-核出：读处理器的每种完成结果（含空结果、`Unavailable`、`Unsupported`）都需要与请求同寿命的完成事实——已并入 §6.1（`EffectResponse`）。
+核出：读处理器的每种完成结果（含空结果、上游拒绝、`Unavailable`、未调用集成）都需要与请求同寿命的完成事实——已并入 §6.1（`EffectResponse`）；空结果在观察侧由读结论记录表示——已并入 §8.2。
 
 ## D4.2 程序生命周期
 
@@ -99,10 +100,10 @@ flowchart TB
   ER[("EffectRequest 记录 @pos（执行 J，永存）<br/>effect_kind · basis · key · 载荷")]
   REG{"effect_kind 注册为？"}
   ER --> REG
-  REG -->|"读处理器"| RD["一次执行：read(...)"]
-  RD -->|"Records（含空）"| R1["同事务：观察记录 OneShot{origin: Request(pos)}（观察 J，可压缩）<br/>+ EffectResponse{pos, Observed(obs)}（执行 J）"]
+  REG -->|"读处理器"| RD["一次执行：按 §8.2 read 的判定顺序"]
+  RD -->|"Answered（含空）/ Refused"| R1["同事务：item 观察记录 × N + 读结论记录，OneShot{origins ∋ Request(pos), request}（观察 J，可压缩）<br/>+ EffectResponse{pos, Concluded(结论)}（执行 J）"]
   RD -->|"Unavailable"| R2["同事务：Gap{Channel}（观察 J）<br/>+ EffectResponse{pos, Unavailable(gap)}"]
-  RD -->|"流未声明 / 能力不支持"| R3["EffectResponse{pos, Unsupported}（不调用集成）"]
+  RD -->|"未调用集成"| R3["EffectResponse{pos, NotCalled(reason)}（不支持 / 未确认 / 无会话 / 请求不合法 / 来源未登记）"]
   REG -->|"写处理器"| WR["同事务 Draft{responsible = 装载 principal, basis ∋ pos}<br/>+ SubmitForDecision + EffectResponse{pos, Drafted(ticket)}"]
   REG -->|"未注册"| UH["Unhandled：留在日志，无 EffectResponse"]
   subgraph RESTART["重启（§7.2 第 4 步）：fold 出已注册且无 EffectResponse 的 EffectRequest"]

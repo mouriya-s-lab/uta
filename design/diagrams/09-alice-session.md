@@ -1,6 +1,6 @@
 # 09 下游会话（经解释层）、操作集落点、人工决议、控制动作
 
-对照：§8.5、§7.1 信任边界、§7.6、W14、W19、W8；`design/downstream/design.md`。索引见 `README.md`。
+对照：§8.5、§7.1 信任边界、§7.6、W14、W19、W8、W20；`design/downstream/design.md`。索引见 `README.md`。
 
 ## D9.1 会话建立、身份与重连（W14、W19）
 
@@ -27,10 +27,11 @@ sequenceDiagram
   end
   Note over L,C: 未握手的连接发写 / 控制 → 会话层拒绝 + 安全事件（W19 步 1）
   Note over L,C: 请求体伪造 principal 不参与授权：只取会话绑定的 principal（W19 步 2）
+  L->>RM: read_model(sources)（声明：账户、流、能力；D9.5）
   L->>RM: read_model(kind, as_of?)
-  RM-->>L: Snapshot{value, as_of: Set<LogPosition>, gaps}
+  RM-->>L: Snapshot{value, as_of?, gaps?}（观察侧 fold 带 as_of 与 gaps）
   L-->>D: 翻成对外概念（账户、订单、持仓、审批…）
-  L->>C: subscribe(selector, mode, from?)（新订阅；from 缺省 = 当前流末）
+  L->>C: subscribe(selector, mode, from?)（观察流或执行事实；新订阅 from 缺省 = 当前流末）
   C-->>L: cursor 之后记录（未确认区间可能重复，按 LogPosition 去重）
   L-->>D: 推送；附续传令牌；Gap 翻成缺失通知
   Note over D,L: 下游或解释层崩溃 / 重启：核心不变（订阅、程序、lane、日志 owner 是核心）；解释层无状态可丢
@@ -51,8 +52,8 @@ sequenceDiagram
 ```mermaid
 flowchart LR
   subgraph OPS["核心↔解释层操作（同一 JSON-RPC，§8.5）"]
-    S1["subscribe / ack / unsubscribe"]
-    S2["read(scopes, selector, range?, deadline)"]
+    S1["subscribe(观察流 (来源, 流, 主体集?) 或 执行事实 (来源, 作用域?)) / ack / unsubscribe"]
+    S2["read(targets = (来源, 流, request_schema 身份, request, range?), deadline)"]
     S3["read_model(kind, as_of?)"]
     S4["draft / revise / submit_for_decision / decide / send_back / withdraw / transfer"]
     S5["load_program(manifest_ref, cold_start?) · unload_program · reload_config · rotate_credential · restart_integration · request_snapshot · advance_retention · rewind_cursor · bypass_lane"]
@@ -62,8 +63,8 @@ flowchart LR
   end
   subgraph EL["核心元素"]
     SUB["持久订阅 / 投递调度"]
-    RDP["读路径 → 集成 read → 观察记录 OneShot{origin: Session}"]
-    RM["读模型（只读 fold）"]
+    RDP["读路径 → 集成 read → item 观察记录 + 读结论记录，OneShot{origins ∋ Session, request}"]
+    RM["读模型（只读 fold；含 sources：执行 J 声明版本的 fold）"]
     TK["单据（TicketAction）→ STS 链"]
     CTL["控制面（控制记录 Applied / Rejected）"]
     IOR["控制面 append ResolutionEvidence{Manual} → 腿终结 → 链重算（D9.3）"]
@@ -78,7 +79,8 @@ flowchart LR
   S6 --> IOR
   S6b --> RRO
   S7 --> HL
-  S2 -.->|"逐 scope：Records{as_of} / Unavailable / Unsupported"| S2
+  S2 -.->|"逐 target，按序判定：UnknownTarget / Unavailable{source_state}（从未有声明）/ Unsupported / Unconfirmed / InvalidRequest / Unavailable{source_state}（无会话，不调用不记 gap）/ Answered{conclusion, items} / Refused{conclusion, reason} / Unavailable（调用失败记 Gap{Channel}；deadline 内未返回）"| S2
+  S1 -.->|"未声明流 / 执行事实非 ordered → 拒绝；配额池流不带主体集 → 拒绝；超池上限 → QuotaExceeded{quota, limit}"| S1
   S3 -.->|"kind 未定义 → 拒绝；as_of 未达 → NotYetAvailable{frontier}"| S3
   S4 -.->|"expected_version ≠ current_version → Conflict；同版本已有 Decision → Conflict(AlreadyDecided)"| S4
   S5 -.->|"越权 → Unauthorized；配置不合法 → Rejected 并保留上一有效版本；advance_retention 逐流判定 → NotForward / ReferencedBelow / InsideWindow"| S5
@@ -87,7 +89,7 @@ flowchart LR
 
 读法：写类按 `(principal, WriteLaneKey, OperationKind)` 授权，控制与决议按 `(principal, 动作种类)` 授权，同一规则族；三组都留下带 principal 的记录。
 
-核出：`read` 与 `resolve` 两组上一轮已并入 §8.5。
+核出：`read` 与 `resolve` 两组上一轮已并入 §8.5；一次性读按流寻址、读结论记录、`sources` 读模型与执行事实订阅已并入 §2.2、§8.2、§8.5。
 
 ## D9.3 人工决议流程
 
@@ -98,7 +100,7 @@ flowchart TB
   L["读模型 lanes：某 lane 的 Undetermined 腿 r 已渠道穷尽（Inconclusive），停等"]
   L --> OP["运维 principal 判断"]
   OP --> R1{"能从 venue 读到该订单？"}
-  R1 -->|"能"| RD["read(scopes, orders, 按 venue 身份) → 观察记录 @obs"]
+  R1 -->|"能"| RD["read(该作用域的订单流, 按 venue 身份) → 观察记录 @obs"]
   RD --> RS1["resolve(r, Found(obs), note)"]
   R1 -->|"确认未发生"| RS2["resolve(r, Absent, note)"]
   R1 -->|"venue 当时不可达 / 想再自动查一轮"| RT["retry_reconciliation(r) → ReconciliationReopened{r, Manual}（D6.2）"]
@@ -145,5 +147,33 @@ flowchart LR
 ```
 
 读法：控制动作不经进程信号或 flag 文件；每个动作的结果是一条带 principal 与配置版本 hash 的控制记录，生效动作再触发相应记录。
+
+核出：无。
+
+## D9.5 解释层取得声明与执行事实推送（W20）
+
+对照：§2.2 Projection / `StreamDecl` / `account_ref`；§7.5 能力证据；§8.2 `handshake`；§8.5 订阅组、一次性读、`sources`；W20；`design/downstream/design.md` 第 2、3.2、4 节。
+
+```mermaid
+sequenceDiagram
+  participant I as 集成（来源 X）
+  participant C as 核心
+  participant EJ as 执行 J
+  participant RM as 读模型 sources
+  participant L as 解释层
+  participant D as 下游
+  I->>C: handshake → Projection（作用域 + account_ref、流声明、写能力、配额）
+  C->>C: 静态校验（§8.1）；account_ref 与同来源其他作用域重复或与历史绑定不一致 → 该引用标不可解析（不拒绝握手、不影响路由）
+  C->>EJ: append 声明版本（session_epoch）
+  L->>RM: read_model(sources)
+  RM-->>L: 每来源：最近声明版本（账户 = account_ref + label + 挂的流、流的 read/backfill 与名义等级、写能力、配额）
+  L->>C: subscribe(执行事实 (X, 作用域?), ordered, from)
+  EJ-->>L: 新声明版本 / 单据与腿的执行事实（按位置原样搬运）
+  L->>RM: 收到新声明版本 → 重读 sources
+  L-->>D: 账户列表、能力（支持 / 不支持 / 未确认）、待审事项、结果未知；引用冲突的账户显示“需要处理”
+  Note over L,D: 待审事项是否偏离不推送：呈现时读 tickets（§8.5）
+```
+
+读法：声明是执行事实，所以取得它是一次读模型 fold、它的变化随执行事实订阅到达，不依赖当前会话；会话状态另在 `health`（§8.4）。按旧 `account_ref` 发出的命令在引用不可解析时不解析到任何账户。
 
 核出：无。

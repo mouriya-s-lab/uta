@@ -58,7 +58,7 @@ UTA 的类型分成两个宇宙：可撤回的观察，只追加的效应。本�
 
 这条边约束的是**类型依赖与语义消费**，不是不透明的出处元数据 [设计]：
 
-- 观察记录上的 `provenance`（`OneShot{origin}`、`Receipt{attempt}`、`Reconciliation{attempt, channel}`，§8.2）与 `attribution` 字段，只是位置、`AttemptRef`、单据身份、principal 这类不透明值。
+- 观察记录上的 `provenance`（`OneShot{origins, request}`、`Receipt{attempt}`、`Reconciliation{attempt, channel}`，§8.2）与 `attribution` 字段，只是位置、`AttemptRef`、单据身份、principal、请求参数这类不透明值。
 - 观察侧存它、路由它、不解析它，正如载荷字节。
 - 解析它们的处理器注册在效应侧：**记录归观察，响应归效应**。
 
@@ -103,7 +103,7 @@ UTA 的类型分成两个宇宙：可撤回的观察，只追加的效应。本�
 
 ### 读的两条推论
 
-- **读即观察记录**：读本身是一条带 `LogPosition` 的观察记录。一次性查询也写入派生侧 `Journal`，与推送观察同形（§4.1）。操作是核心→集成的 `read`（§8.2），记录带 `provenance: OneShot{origin}` 与质量标记 `one_shot`。
+- **读即观察记录**：读本身是带 `LogPosition` 的观察记录。一次性查询也写入派生侧 `Journal`：每个结果项一条记录，与推送观察同形（§4.1），再加一条读结论记录，使空回答与“还没回答”可区分。操作是核心→集成的 `read`（§8.2），记录带 `provenance: OneShot{origins, request}` 与质量标记 `one_shot`。
 - **发起者是任何人**：集成推送、程序、钩子的 `InputMissing` 取证、消费方、IO 壳的对账取证都可发起读。
 
 ### 两类副作用对照
