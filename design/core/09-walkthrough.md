@@ -42,9 +42,17 @@
    - 行动者：IO 壳，身份 = `attempt_position`（`Prepared` 的 `LogPosition`，锚点，§8.1）+ `WriteLaneKey`。
 6. venue 受理并给出身份 → 集成 `submit` 返回 `Ack(venue_id, receipt)`。同一事务 append：
    - `VenueAccepted{venue_order_id, receipt: Evidence, observation}`（执行 J；`Evidence` = 契约载荷 + 原始负载，§6.5）；
-   - 回执观察记录（观察 J，`provenance: Receipt{AttemptRef}`，`attribution: FromAttempt(AttemptRef)` 由 IO 壳填；记录模型，§6.5）。
-7. 部分成交、成交依次到达 → 集成推送带 `attribution` 的订单状态 / 成交观察记录（观察 J，§8.3、P2、P9）；读模型 fold 出最终成交状态（§4.4、§8.5）。
+   - 回执观察记录（观察 J，`provenance: Receipt{AttemptRef}`，`attribution: FromAttempt(AttemptRef)` 由 IO 壳填；记录模型，§6.5）：订单状态一条；回执已含成交时，每笔可识别的执行另落一条带 `execution_id` 的成交记录（§8.1“成交与订单状态的契约语义”）。
+7. 部分成交、成交依次到达 → 集成推送带 `attribution` 的订单状态 / 成交观察记录（观察 J，§8.3、P2、P9）；成交记录带 `execution_id`，数量与价格是本笔执行的量，订单状态带累计量（§8.1）。读模型 fold 出最终成交状态（§4.4、§8.5）。
    - 对外可见：订阅者依次收到受理、部分成交、成交，字段与原生身份保真（C13）；读模型最终 = 成交。
+
+**扩展路径（同一笔执行经多个渠道，Q1/Q5）。**
+
+- 步 6 的回执已含第一笔执行 x；步 7 的推送再送一次 x；此后运维者经 `read` 读成交，或对账的 `list_fills`、断线后的回填又带回 x。每次都 append 一条观察记录（观察 J，出处与质量标记各异），不在入口去重（§8.3）。
+- 所有这些记录的 `execution_id` 相同，`orders` 读模型与订阅者自行 fold 都只计 x 一次（§8.1 按执行计数的 fold 规则）；两笔价格、数量、时间都相同而 `execution_id` 不同的执行计两次。
+- 订单的累计成交量取自订单状态观察，不由成交相加（§8.1 增量与累计）；`positions` 不读成交（§8.5）。
+- x 之后被上游修正：上游给出修正次序时，修正记录以同一 `execution_id` 与更大的 `execution_revision` 到达，fold 取修正后的内容，先到的是修正还是原记录都一样；上游没给次序而两条内容不同时，x 标为冲突、不贡献数量，两份内容照实给出（§8.1 修订）。
+- 对外可见：成交列表里 x 只出现一次；逐笔之和与订单累计量不一致时照实并列。
 
 **扩展路径（venue 专有 / 未列举状态，Q5 保真）。**
 

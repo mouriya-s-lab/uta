@@ -19,6 +19,7 @@
 |F9|用户可在 venue 自己的 app 里下单、出入金；我们只能事后观察。|`broker.ts:578-586`|
 |F10|订单从 listing 消失不等于终态（listing 可能滞后或不完整）。|`UnifiedTradingAccount.ts:853-877` 二次确认；Longbridge `client_request_id` 仅 10 分钟缓存（`venue-capabilities.md:156`）|
 |F11|推送流有自己的时钟；venue 事件时间与本地收到时间不同源。|域常识；`src/domain/market-data/bars/types.ts:92` 明言 freshness “neither establishes measured feed latency”|
+|F12|venue 对每笔成交给出身份，逐笔量与订单累计量分开报告；成交事后可被修正；同一条回报流里还有不是成交的事件。|IBKR TWS API “Executions and Commissions”（`interactivebrokers.github.io/tws-api/executions_commissions.html`）：修正以另一条 `execDetails` 送达，除 execID 最后一个点之后的数字外参数全同；`reqExecutions` 默认只返回当日零点以来的执行。Alpaca “Websocket Streaming”（`docs.alpaca.markets/us/docs/websocket-streaming`）：`trade_updates` 的 fill 事件带 `execution_id`，`qty`/`price` 是本次成交，`order.filled_qty` 是订单累计。Binance `binance-spot-api-docs` `user-data-stream.md` 的 `executionReport`：`t` Trade ID、`l` 本次成交量、`z` 累计成交量；示例中 `x: NEW`（不是成交）的事件 `t` 为 -1，却同样带 `I` Execution Id|
 
 ### O 既有机器事实
 
@@ -82,7 +83,7 @@
 |P6|意图|程序/消费方→机|意图身份、principal、目标（账户、子账户、instrument）、操作种类（下单 / 改单 / 撤单 / 平仓）、参数、依据（`Set<LogPosition>`）、生产者（程序制品 hash + 版本 + 调用身份，或消费方会话）、过期|B7、C1、C3、A29–A35、Q5、Q7、Q17、Q19、Q25|
 |P7|决定|决策者→机|所指意图、principal、裁决（批准 / 否决 / 过期 / 规则否决）、依据、对待决集合版本的期望；否决带原因，规则否决带 `Rejection`，过期带到期的 `deadline`，批准不带原因（“依据什么”由依据与绑定版本回答）|S8、C3、A26–A28、Q7、Q9、Q10、Q19|
 |P8|尝试|机→集成→venue|所指意图、尝试身份、venue 调用方键（能力允许时）、阶段（已预约未发 / 已发出 / 发出与否不可判定）及各阶段时间|C1、C2、Q1、Q2、Q5|
-|P9|回执|venue→集成→机|所指尝试、venue 结果（原始 + 域词表映射）、venue 订单身份、成交明细|C1、A13、Q1、Q5、Q16|
+|P9|回执|venue→集成→机|所指尝试、venue 结果（原始 + 域词表映射）、venue 订单身份、成交明细（每笔执行一条带执行身份的成交记录，见 P2）|C1、A13、Q1、Q5、Q16|
 |P10|对账|机↔集成；人→机|所指尝试、证据渠道、结论（found / absent / inconclusive），若人工则 principal|C2、Q3、Q6|
 |P11|外部变更|集成→机；机→机|账户、观察到的订单 / 成交 / 余额变动的原始记录、归因结论（某本地尝试 / 外部 / 未定）及其证据|F9、A48、Q6、Q18|
 |P12|程序|作者→机；机→消费方|程序制品身份（hash）、版本、输入声明（instrument 集合 × 消费方式）、预算、状态版本、状态、trap、alert|B3、B5、C4、Q4、Q8、Q25|
@@ -106,6 +107,7 @@
 - 种类：quote / book / bar / clock / 余额 / 持仓 / 订单状态 / 成交 / 目录 / 连接状态 / 健康 / 汇率 / 派生。
 - venue 事件时间（可无）、venue 序号（可无）、venue 续传游标（可无）、本地收到时间、Seq、原始负载（订单状态 / 成交必有，其余种类可无，§8.1）、质量标记。
 - 订单状态 / 成交观察带归因（某尝试 / 外部 / 未定）。
+- 成交观察带执行身份（在来源 × 作用域内唯一，跨渠道不变）与可选的修订号；数量与价格是本笔执行的量；订单状态带该订单的累计量（§8.1，F12）。
 
 **P3 gap / 控制的三类：**
 

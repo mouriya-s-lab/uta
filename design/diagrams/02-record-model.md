@@ -19,11 +19,11 @@ flowchart LR
   POS --> APPEND[("append 观察 Journal")]
   APPEND --> REG["处理器字段注册表<br/>字段出现 → 处理器触发；不出现 → 不触发"]
   REG --> OH["观察侧处理器<br/>occurred_at → 完备进度<br/>payload_schema → 解释器选择"]
-  REG --> EH["效应侧处理器<br/>attribution / idempotency_key → 归因、Attributed 决议<br/>cumulative_filled_quantity → Replace 第二腿<br/>守卫字段 → 输入约束"]
+  REG --> EH["效应侧处理器<br/>attribution / idempotency_key → 归因、Attributed 决议<br/>cumulative_filled_quantity → Replace 第二腿、orders 累计成交量<br/>execution_id / execution_revision → orders 按执行计数<br/>守卫字段 → 输入约束"]
   APPEND --> DAG["派生 DAG（程序解释①）"]
   APPEND --> DELIV["投递调度 → 订阅者"]
   APPEND --> TKT["单据 alignment 重算（世界变了）"]
-  APPEND --> RM["读模型 fold"]
+  APPEND --> RM["读模型 fold<br/>成交：同一 execution_id 至多计一次（§8.1）"]
   ENV -.->|"载荷与原始负载直通，核心不解释"| APPEND
 ```
 

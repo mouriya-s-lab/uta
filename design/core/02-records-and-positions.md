@@ -350,5 +350,5 @@ money/quantity 为 [交易协议] 处理器的值类型（§2.1 推论 4）。�
 | 错误 | 每规则封闭 sum；venue 映射保留 `Unmapped` | fp-04 命题 8；域 C13 |
 | 外部写结果 | `Prepared \| SendBarrier \| VenueAccepted \| VenueRejected \| Undetermined \| Expired` + `ResolutionEvidence` 记录，非 `Option`/字符串 | fp-06 命题 1（MongoDB `UnknownTransactionCommitResult`、Oracle in-doubt）；fp-01 M11 DAML 反例 |
 
-- **身份** 出现在三处：投影里的 `WriteLaneKey`/`StreamId`（§2.2）、意图的 `target`（§6.2）、观察记录的 `attribution`（§5.3）。instrument 只在 venue 作用域内有意义。换名不是安全，隐藏构造器才是。
+- **身份** 出现在四处：投影里的 `WriteLaneKey`/`StreamId`（§2.2）、意图的 `target`（§6.2）、观察记录的 `attribution`（§5.3）、成交记录的 `execution_id`（§8.1）。instrument 只在 venue 作用域内有意义。换名不是安全，隐藏构造器才是。
 - **时间**：`deadline` 以 UTC 时刻持久化，所以发出前门与过期步跨重启仍可比。
