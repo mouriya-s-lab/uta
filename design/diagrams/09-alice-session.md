@@ -31,7 +31,7 @@ sequenceDiagram
   L->>RM: read_model(kind, as_of?)
   RM-->>L: Snapshot{value, as_of?, gaps?}（orders / positions / lanes / health / sources 带 as_of 与 gaps，可按历史 as_of 读；gaps 只含观察输入的缺口，lanes、sources 为空；tickets、subscriptions 只给当前态）
   L-->>D: 翻成对外概念（账户、订单、持仓、审批…）
-  L->>C: subscribe(selector, mode, from?)（观察流或执行事实；新订阅 from 缺省 = 当前流末）
+  L->>C: subscribe(selector, mode, from?)（观察流：一组 (来源, 流, 主体集?) 项，可跨来源；或执行事实；新订阅 from 缺省 = 各流当前流末）
   C-->>L: cursor 之后记录（未确认区间可能重复，按 LogPosition 去重）
   L-->>D: 推送；附续传令牌；Gap 翻成缺失通知
   Note over D,L: 下游或解释层崩溃 / 重启：核心不变（订阅、程序、lane、日志 owner 是核心）；解释层无状态可丢
@@ -52,7 +52,7 @@ sequenceDiagram
 ```mermaid
 flowchart LR
   subgraph OPS["核心↔解释层操作（同一 JSON-RPC，§8.5）"]
-    S1["subscribe(观察流 (来源, 流, 主体集?) 或 执行事实 (来源, 作用域?)) / ack / unsubscribe"]
+    S1["subscribe(观察流 {(来源, 流, 主体集?)} 或 执行事实 (来源, 作用域?)) / ack / unsubscribe"]
     S2["read(targets = (来源, 流, request_schema 身份, request, range?), deadline)"]
     S3["read_model(kind, as_of?)"]
     S4["draft / revise / submit_for_decision / decide / send_back / withdraw / transfer"]
@@ -79,8 +79,8 @@ flowchart LR
   S6 --> IOR
   S6b --> RRO
   S7 --> HL
-  S2 -.->|"逐 target，按序判定：UnknownTarget / Unavailable{source_state}（从未有声明）/ Unsupported / Unconfirmed / InvalidRequest / Unavailable{source_state}（无会话，不调用不记 gap）/ Answered{conclusion, items} / Refused{conclusion, reason} / Unavailable（调用失败记 Gap{Channel}；deadline 内未返回）"| S2
-  S1 -.->|"来源未登记 / 来源已有声明而流不在最近声明里 / 执行事实非 ordered → 拒绝；来源已登记但从未有声明 → 待接纳；配额池流不带主体集 → 拒绝；超池上限 → QuotaExceeded{quota, limit}"| S1
+  S2 -.->|"逐 target，按序判定：UnknownTarget / Unavailable{source_state}（从未有声明）/ Unsupported / Unconfirmed / InvalidRequest / Unavailable{source_state}（无会话，不调用不记 gap）/ Answered{conclusion, items} / Refused{conclusion, reason} / Unavailable{gap}（渠道失败，已记 Gap{Channel}）/ Pending（deadline 到而调用在途；之后照常记结论或 gap）"| S2
+  S1 -.->|"逐项判定，没有任何一项被接纳 → Rejected{items}：来源未登记 / 流不在最近声明里 / 配额池流不带主体集 → 该项拒绝；来源从未有声明 → 该项待接纳；超池上限 → 该项 QuotaExceeded{quota, limit}；执行事实非 ordered 或作用域键不在任何声明版本里 → 拒绝"| S1
   S3 -.->|"kind 未定义 → 拒绝；as_of 有位置尚未提交 → NotYetAvailable{positions}（各流已提交的流末）；tickets / subscriptions 带历史 as_of → 拒绝"| S3
   S4 -.->|"expected_version ≠ current_version → Conflict；同版本已有 Decision → Conflict(AlreadyDecided)"| S4
   S5 -.->|"越权 → Unauthorized；配置不合法 → Rejected 并保留上一有效版本；advance_retention 逐流判定 → NotForward / ReferencedBelow / InsideWindow"| S5

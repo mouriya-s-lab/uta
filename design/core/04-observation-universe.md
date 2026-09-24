@@ -55,7 +55,7 @@ fn compact_below_retention<Record, D: RetractableDelta>(journal: &mut Journal<Re
 | 方式 | 语义 | 损失 |
 |---|---|---|
 | await-all | 待所有指定输入均达到要求位置/完备进度后再行计算 | 无（引入等待） |
-| ordered | 按单条流的顺序依次处理，不跳过中间记录 | 无（引入背压） |
+| ordered | 按单条流的顺序依次处理，不跳过中间记录；一个订阅选多条流时各流各自有序，流与流之间不定投递顺序（§8.5） | 无（引入背压） |
 | latest / conflated | 允许合并中间更新，仅保留最新值 | **有**：`Gap{origin: Delivery}` 原因记录为 `conflated`，或以消费者声明的窗口界作为其可接受丢失界 |
 
 - `await-all` 按**完备进度**触发，而非按消费位置（§2.3）。

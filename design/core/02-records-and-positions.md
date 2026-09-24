@@ -37,7 +37,7 @@ UTA 是一个反向代理。经过它的不是上游协议，而是集成消费�
 
 ### 推论与不变量
 
-1. **“核心看哪些字段”是推导出来的**：`锚点 ∪ ⋃ handler.required_inputs`。没有处理器声明要读的字段自动是载荷。`AlignmentCheck.required_inputs`（§6.2）已是这个形状，推广到所有处理器。
+1. **“核心看哪些字段”是推导出来的**：`锚点 ∪ ⋃ handler.required_inputs`。没有处理器声明要读的字段自动是载荷。`AlignmentCheck.required_inputs`（§6.2）已是这个形状，推广到所有处理器。一个字段可以既是注册字段又是公共 schema 的字段（`cumulative_filled_quantity`、`execution_id`、`execution_revision`、`venue_order_id`，§8.1）：注册决定核心读它，公共 schema 决定程序与下游把它当数据读；值只有一份，集成对齐一次。
 2. **加处理器不改锚点**：轴 A 的 additive 扩展落到协议层，新 venue 带来的新字段只需注册处理器。轴 B（加 `OperationKind`）改实现该协议的所有集成，因为 `OperationKind` 是锚点。
 3. **两类规则组合的物理依据**：
    - 锚点驱动顺序固定链（授权 → 输入约束 → 审批 → lane → 过期），每步读锚点。
@@ -121,8 +121,9 @@ struct StreamDecl {
     read: Verdict, backfill: Verdict,            // 读侧能力：一次性读 / 回填，按流
     quality: NominalQuality,                     // 声明的名义数据等级，不担保逐条记录
     has_venue_cursor: bool, has_event_time: bool,
+    joinable_venue_seq: bool,                    // 推送与回填的记录带本流 epoch 内连续、可衔接的 venue 序号（回填坐标与实时边界，§8.4）
 }
-struct Quota { streams: Vec<StreamName>, max_subjects: u32 }   // 这些流上同时被路由的不同订阅主体数上限
+struct Quota { streams: Vec<StreamName>, max_subjects: u32 }   // 这些流上核心要求集成推送（route，§8.2）的不同订阅主体数上限
 struct Capability { scope: WriteLaneKey, operation: OperationKind, verdict: Verdict<CapabilityProof> }
 enum Verdict<P = ()> { Supported(P), Unsupported, Unknown }   // 写能力的 Supported 带证明；流的读 / 回填能力是 Verdict<()>
 struct CapabilityProof {
@@ -167,6 +168,7 @@ UTA 对投影只做两件事：按投影路由（lane 按 `WriteScope`、订阅�
 - `request_schema`：一次性读的参数（查询主体：已解析的 instrument、目录键或文本；领域过滤条件：到期日、行权价、条数上限等）是按这份 schema 写成的一个值，与意图载荷同理：核心只校验形状并原样交给集成，不解释（§8.2）。有公共 schema 的种类随 IDL 发布公共请求 schema；来源专有的请求参数写在该集成的扩展 schema 里。
 - `quotas`：配额池属于来源；每个池列出共享一个上限的流与上限值，计量单位见 §8.5 订阅组。
 - `quality`：声明该流名义上的数据等级，分两个维度：时效（实时 / 延迟 / 未知）与覆盖（全市场 / 部分场所 / 未知）；词表随公共 schema 发布，核心不解释。它是来源对该流开通情况的声明，**不担保**每条记录：上游在回答里报告实际等级时，那是公共载荷的字段，逐条以记录为准。理由：数据等级常随 instrument 与开通状态变化，只有上游作答时才知道（运行期的量不冒充静态保证）；声明值只用来在读之前告诉下游“这条流通常是什么”。
+- `joinable_venue_seq`：该流推送与回填的记录是否带本流 epoch 内连续、可衔接的 venue 序号。它是集成对上游序号语义的断言（由一致性测试验证），不是“记录上有序号字段”：只有这样的序号能证明回填与实时在边界上既不重叠也不留洞，所以它决定该流的回填坐标与实时边界的证明（§8.4）。不声明它的流以事件时间作回填坐标；两者都没有的流不能回填（§8.1 握手校验）。
 
 **能力未知 ≠ 结果未知。**
 
