@@ -123,14 +123,27 @@ struct StreamDecl {
     has_venue_cursor: bool, has_event_time: bool,
 }
 struct Quota { streams: Vec<StreamName>, max_subjects: u32 }   // 这些流上同时被路由的不同订阅主体数上限
-struct Capability { scope: WriteLaneKey, operation: OperationKind, verdict: Verdict }
-enum Verdict { Supported(CapabilityProof), Unsupported, Unknown }
+struct Capability { scope: WriteLaneKey, operation: OperationKind, verdict: Verdict<CapabilityProof> }
+enum Verdict<P = ()> { Supported(P), Unsupported, Unknown }   // 写能力的 Supported 带证明；流的读 / 回填能力是 Verdict<()>
+struct CapabilityProof {
+    legs: NonEmpty<LegProof>,                    // 腿计划：按序每条腿恰一次上游写；可声明的计划由交易协议按操作种类限定（§6.2）
+    intent_schema: SchemaRef,                    // 接受的意图参数 schema 身份（§6.2 参数合规）
+    target_kinds: Set<OrderTargetKind>,          // 以订单身份为 target 的操作种类（Cancel、Replace）：寻址目标的那条腿接受的目标种类，⊆ {VenueRef, IdemKey} 且非空；其余操作种类为空
+}
+struct LegProof {
+    write: LegWrite,                             // Submit | Cancel：这条腿用哪个 IDL 写操作（§8.2）
+    key: KeyRole,                                // None | OrderKey | RequestKey：这条腿带不带调用方键，键标识它投放（或改后仍在）的订单，还是只标识这次请求
+    channels: Vec<EvidenceChannel>,              // 这条腿 Undetermined 时的取证渠道，按 §6.6 的固定顺序
+}
 ```
 
 `WriteScope` 就是“多账户”。核心不知道它是账号、子账号还是跨国独立账户，只知道有几个、各自能做什么、各自挂哪些流。
 
 - F6“部分未文档化”的能力不可能是静态保证。
-- 写操作的 `CapabilityProof` 含两项声明：unknown 证据渠道（by-key / listing+venue id / fills-positions / 保留期内 replay-by-key / 无）；该 `(scope, OperationKind)` 接受的意图参数 schema 身份 `(schema_id, schema_version)`：交易协议该操作种类的公共意图 schema，或以它为基础只增加字段与约束的扩展 schema（§6.2、§8.1）。
+- 写操作的 `CapabilityProof` 声明三件事（类型见上，语义与理由在所引各节）：
+  - **腿计划**：这个 `(scope, OperationKind)` 在上游按几条腿、各用哪个写操作执行，每条腿的调用方键角色与它自己的 unknown 证据渠道（by-key / listing+venue id / fills-positions / 保留期内 replay-by-key；空表即无渠道）。交易协议为每个操作种类列出可声明的计划（§6.2 操作种类表）；IO 壳只按声明的值选腿，不自行判断上游能否原子执行（§6.5）。
+  - **意图参数 schema 身份** `(schema_id, schema_version)`：交易协议该操作种类的公共意图 schema，或以它为基础只增加字段与约束的扩展 schema（§6.2、§8.1）。
+  - **接受的订单目标种类**：撤单与改单寻址目标的那条腿能按 venue 订单身份（`VenueRef`）还是按调用方键（`IdemKey`）找到目标；有调用方键不等于能按键撤单（F6，§6.2 可执行性）。
 
 UTA 对投影只做两件事：按投影路由（lane 按 `WriteScope`、订阅与一次性读按 `StreamDecl`、写门按 `Capability`）；把声明部分交给解释层，由它翻成对外概念。它不解释形状，也不发明投影。投影含 `WriteLaneKey`、`Verdict` 等核心概念，所以只到解释层为止（§0.1 三段）。
 
@@ -241,6 +254,14 @@ LogPosition = (StreamId, Seq)           // 一条记录的顺序身份
 - `LogPosition` 只在同一 `StreamId` 内有序（§2.3），所以保留边界是每条观察流一个位置。合起来与 `basis`、cursor 同形（`Set<LogPosition>`）。
 - 执行事实侧原始记录不压缩、不删除，没有保留边界；登记只对观察位置起作用。
 
+**健康流按键保留** [设计]。健康观察（§8.4）是状态值：每条带它那个键上的完整当前值，fold 一个键只取该键不高于 `as_of` 的最新一条。键是：一个集成的会话状态；一条流的 readiness；一个逻辑流当前流 epoch 的回填进度；一个调用目标的计数（带计数后的 `consecutive_failures` 与 `last_success_at`）。同键的后一条取代前一条，这就是健康流的 `RetractableDelta`（§4.1），它的压缩因此按键进行：
+
+- 边界之下只删每个键被同键后续记录取代的记录；每个键在边界之下的最新一条作为**基线**留下，位置不变。对任一 `as_of ≥ 边界`，按键 fold 与压缩前相等；`as_of` 低于边界仍得 `BeyondRetention`（§5.2）。
+- 从边界订阅健康流的消费者先收到这些基线（原位置，低于边界），再收到边界起的记录；这是压缩的结果，不是 cursor 退回（§8.5）。
+- 键集有界：登记的集成 × 声明的流 × 调用目标（§8.4）；键不退役，基线至多每键一条。
+- 理由：会话状态、readiness、回填进度与调用计数（含“从未成功过”）都是历史的函数；按位置压缩掉早期记录会改变当前值，新消费者与跨重启的读模型就 fold 出错的健康。`Halted` 跨重启另有执行事实为据（§7.2 第 3 步），不依赖健康流。
+- 不选：**把每键最新位置登记为引用**：登记按位置压住整条流（边界不得越过已登记引用的最早位置），一个久未变化的键就让健康流永远压不动；**健康流免压缩**：每次调用一条记录，无界增长；**另设健康表或存进快照**：第二种持久形状，`as_of` 重建与订阅都拿不到它；**压缩时把当前值重新 append**：改变位置与 `as_of` 语义，订阅者会收到并未发生的变化。
+
 **登记方 = 核心** [设计]。引用在产生时由核心自动登记，随持有者的生命周期自动解除，消费者不手工登记：
 
 | 引用 | 何时登记 | 何时解除 |
@@ -263,7 +284,7 @@ LogPosition = (StreamId, Seq)           // 一条记录的顺序身份
 
 ### 不变量
 
-压缩后所有**已登记引用**的 `LogPosition` 均 **≥ 其所在观察流的保留边界**（执行事实侧不压缩，没有边界）。未登记而落到边界之下的引用不静默失真，而在校验时得 `BeyondRetention`（§5.2）。
+压缩后所有**已登记引用**的 `LogPosition` 均 **≥ 其所在观察流的保留边界**（执行事实侧不压缩，没有边界）。未登记而落到边界之下的引用不静默失真，而在校验时得 `BeyondRetention`（§5.2）。健康流上每个键在边界之下的最新记录保留为基线。
 
 由核心自动登记 + 边界推进前的显式引用处理保证（登记方核心、审批方控制面 principal）。
 

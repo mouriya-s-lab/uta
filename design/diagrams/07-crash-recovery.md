@@ -9,16 +9,16 @@
 ```mermaid
 flowchart TB
   START["第 2 步：对执行 J 每条 Prepared 做链 fold（不接触集成）"]
-  START --> Q0{"链已 Resolved？<br/>任一腿 Expired / VenueRejected；或末腿 VenueAccepted / Found / Absent 且无下一腿"}
+  START --> Q0{"链已 Resolved？<br/>任一腿 Expired / VenueRejected；或末腿 VenueAccepted / Found / Absent 且按首腿 SendBarrier 记录的腿计划无下一腿；或已有 TargetTerminal 且数量 ≤ 0"}
   Q0 -->|"是"| DONE["无动作（已 Expired 的链不再过发出前门）"]
-  Q0 -->|"否"| Q3{"复合链处于 AwaitingTargetTerminal？<br/>撤单腿已终结于 VenueAccepted / Found，且 leg 2 无记录"}
-  Q3 -->|"是"| ATT["第 4 步：继续按目标身份读（D6.4）；目标终态 → 算量 → leg 2 过发出前门；deadline 到 → Expired(leg 2)"]
-  Q3 -->|"否"| LEG["取当前腿 r（单腿：leg 1；复合链：撤单腿未终结则 r = 撤单腿，否则 r = 已有 SendBarrier 的新单腿）"]
+  Q0 -->|"否"| Q3{"两腿计划的链处于 AwaitingTargetTerminal 且尚无 TargetTerminal？<br/>撤单腿已终结于 VenueAccepted / Found，且 leg 2 无记录"}
+  Q3 -->|"是"| ATT["第 4 步：继续按目标身份 read（D6.4）；目标终态 → 同事务 TargetTerminal（算量）→ 数量 > 0 则 leg 2 过发出前门；deadline 到 → Expired(leg 2)"]
+  Q3 -->|"否"| LEG["取当前腿 r（单腿计划：leg 1；两腿计划：撤单腿未终结则 r = 撤单腿，否则 r = 新单腿，其数量取已有的 TargetTerminal，不重算）"]
   LEG --> Q1{"r 有 SendBarrier？"}
   Q1 -->|"无"| SAFE["本腿确未发出（不变量 §6.9-8）"]
-  SAFE --> G{"第 4 步：发出前门<br/>deadline 未过？该集成会话已建立？能力支持该操作及其参数 schema？"}
-  G -->|"三者皆是"| SEND["durable append SendBarrier(r) → submit"]
-  G -->|"deadline 未过，但会话未建立或能力不支持"| WAIT["不 append 记录，腿保持 Prepared；会话建立 / 能力变化 / deadline 到时重新求值"]
+  SAFE --> G{"第 4 步：发出前门<br/>deadline 未过？该集成会话已建立？意图对当前能力可执行（首腿之后声明的腿计划与记录一致）？"}
+  G -->|"三者皆是"| SEND["durable append SendBarrier(r) → 该腿的写调用（submit / cancel）"]
+  G -->|"deadline 未过，但会话未建立或能力不可执行"| WAIT["不 append 记录，腿保持 Prepared；会话建立 / 能力变化 / deadline 到时重新求值"]
   WAIT --> G
   G -->|"deadline 已过"| EXP["append Expired(r, deadline)：终，不误升 Undetermined，不补偿（#2）"]
   Q1 -->|"有"| Q2{"SendBarrier(r) 有后继？"}
@@ -52,12 +52,12 @@ sequenceDiagram
   C->>DB: COMMIT Prepared + Close(Prepared)
   Note over C,DB: ✕2 Prepared 有、SendBarrier 无：确未发出 → 过发出前门后发送（会话未建立则等待），或 deadline 已过 → Expired
   C->>DB: SendBarrier fsync
-  Note over C,I: ✕3 SendBarrier 有、submit 未发：可能已发出 → Undetermined(CrashWindow)
+  Note over C,I: ✕3 SendBarrier 有、写调用未发：可能已发出 → Undetermined(CrashWindow)
   C->>I: submit
-  Note over C,I: ✕4 submit 已发、回执未到：同 ✕3；✕14 集成在此崩溃：NoResponse → Undetermined
+  Note over C,I: ✕4 写调用已发、回执未到：同 ✕3；✕14 集成在此崩溃：会话结束，集成会话恰完成该调用一次 → NoResponse → Undetermined
   I-->>C: Ack
   Note over C,DB: ✕5 回执已到、未 append：同 ✕3，by-key 取证重得同一状态（Evidence 落执行 J）
-  C->>DB: COMMIT VenueAccepted（含 Evidence）+ 该回应的观察记录
+  C->>DB: COMMIT VenueAccepted（含 Evidence）+ 该回应的观察记录 + 计数健康观察
   Note over C,A: ✕6 记录已提交、cursor 未推进：从已确认 cursor 重投，按 LogPosition 去重
   C->>A: 投递
 ```
@@ -131,7 +131,7 @@ flowchart TB
 | #5 | D7.2 ✕5、D6.3 | `Evidence` 在执行 J |
 | #6 | D7.2 ✕6、D3.4 | cursor 语义 |
 | #7 | D7.1 DRV、D6.2 | 下一渠道由 fold 重建 |
-| #8 | D7.1 Q0/Q3、D6.4 | 先判链是否已完，再续 `AwaitingTargetTerminal` |
+| #8 | D7.1 Q0/Q3、D6.4、D1.5 | 先判链是否已完（含 `TargetTerminal` 数量 ≤ 0），再续 `AwaitingTargetTerminal` 或按已记的数量发新单腿 |
 | #9 | D1.5 末行 | 半写不可见 |
 | #10 | D7.4 T5 | 派生重算，未提交贡献重建 |
 | #11 | D7.4 T6 | 半写快照丢弃，fold 重建 |

@@ -28,7 +28,7 @@
 | 逐笔增量 / 累计快照 | 成交记录的数量与价格是这一笔执行的 / 订单状态的 `cumulative_filled_quantity` 与平均价是到该次观察为止的累计；二者不互相推算 | §8.1 |
 | 权威（authority） | 值的原件所在处；订单、持仓、余额、行情的权威都在上游，UTA 只对自己的意图及其推进记录有权威 | §0.1 |
 | `Projection` | 集成握手声明的值：作用域、流、写能力、订阅配额、扩展 schema、记录映射（`Projection{scopes, streams, capabilities, quotas, extension_schemas, mappings}`） | §2.2 |
-| 声明版本 | 每次握手成功由核心 append 的执行事实：该投影除记录映射外的全部（§8.1 的“声明”）；最新一版加引用该版本（同一 `SessionEpoch`）的 `CapabilityObserved` 即当前能力 | §7.5、§8.2 |
+| 声明版本 | 每次握手成功由集成会话 append 的执行事实：该投影除记录映射外的全部（§8.1 的“声明”）；最新一版加引用该版本（同一 `SessionEpoch`）的 `CapabilityObserved` 即当前能力 | §7.5、§8.2 |
 | `StreamDecl` | 一条观察流的声明：流名、种类、`payload_schema`、`request_schema`、一次性读与回填的三值能力、名义数据等级、有无游标 / 事件时间 | §2.2 |
 | `request_schema` | 一次性读请求参数的 schema 身份 `(schema_id, schema_version)`；参数含查询主体与领域过滤条件，核心只校验不解释；不与 epoch 绑定 | §2.2、§8.2 |
 | 名义数据等级 | 流声明里的数据等级（时效 × 覆盖）：来源对该流开通情况的声明，不担保逐条记录；记录上报告的实际等级以记录为准 | §2.2 |
@@ -48,7 +48,7 @@
 | `Ticket` / `TicketAction` | 意图形成期的锁 = 责任持有；`responsible` 字段的存在即锁 | §6.2 |
 | `IntentAlignment` / `Revision` | 意图专属逐项对账 / 意图版本间的结构差 | §6.2 |
 | 交易协议的操作种类 | 预置写侧基本类型“订单”的 `OperationKind` 封闭集合：`Place`（下单）/ `Cancel`（撤单）/ `Replace`（改单）/ `Close`（平仓）；各自的 `target` 与守卫字段 | §6.2 |
-| 意图参数 schema / `parameter_validity` | 写能力 `(scope, OperationKind)` 在 `CapabilityProof` 里声明它接受的意图参数 schema（公共意图 schema 或其只加字段与约束的扩展，JSON Schema）/ 当前版本参数是否合它的单据 fold 状态（`Valid` / `Invalid` / `NotSupported` / `SchemaMismatch`），输入约束步无条件读取 | §6.2、§6.3 |
+| 意图参数 schema / `parameter_validity` | 写能力 `(scope, OperationKind)` 在 `CapabilityProof` 里声明它接受的意图参数 schema（公共意图 schema 或其只加字段与约束的扩展，JSON Schema）/ 当前版本参数是否合它、目标种类是否被接受的单据 fold 状态（`Valid` / `Invalid` / `NotSupported` / `SchemaMismatch` / `TargetNotAccepted`），输入约束步无条件读取 | §6.2、§6.3 |
 | 检查目录 | 交易协议的第二层检查项闭合集合：能力、可交易性、敞口、持仓在、原单仍在；每项的输入、判据与参数由协议写定，规则文件只给取值与必要 / advisory | §6.2、§7.6 |
 | `PositionRef` | 平仓意图的 `target`：从同一条持仓观察记录一次构造的不透明值，含作用域内稳定的持仓身份与 instrument | §6.2 |
 | 冷却 | lane 规则的 `RuleState`：`(WriteLaneKey, instrument)` 上最近一条下单腿的 `SendBarrier` 时间；间隔按 `(WriteLaneKey, OperationKind)` 给出、跨 principal 共享；在 lane 步放行时判定一次，冷却期内否决 | §6.3 |
@@ -58,12 +58,16 @@
 | STS / lane | 决策代数：顺序固定规则链（授权 → 输入约束 → 审批 → lane → 过期）/ 每 `WriteLaneKey` 的写通道全序 | §6.3、§6.4 |
 | `WriteScope` / `WriteLaneKey` | 可写作用域（多账户在核心里的存在形式，带 `account_ref`、`label` 与挂在其上的流名）/ 其不透明键，不外露 | §2.2、§6.4 |
 | `Capability` / `Verdict` | 写侧 (scope, operation) → `Supported`/`Unsupported`/`Unknown` 的能力证据；读侧的三值能力按流声明在 `StreamDecl` 上；两侧握手后的变化都经 `CapabilityObserved`（§8.3、§7.5） | §2.2 |
+| `CapabilityProof` | 写能力 `Supported` 所带的声明：腿计划（按序每条腿的写操作、键角色、取证渠道）、意图参数 schema 身份、接受的订单目标种类 | §2.2、§6.2 |
+| 腿计划 / 键角色 | 一个写意图在上游按几条腿、各用哪个写操作执行，每条腿恰一次上游写；交易协议按操作种类列出可声明的计划（改单：原子 `[submit]` 或两腿 `[cancel, submit]`）/ 一条腿所带调用方键标识订单（订单键）、只标识这次请求（请求键）或无键；二者都随各腿 `SendBarrier` 落盘，之后不按声明重读 | §2.2、§6.2、§6.5 |
+| 可执行性 | 一版意图对当前能力证据可执行：`Supported`、声明接受其参数 schema、`target` 的种类在接受之列；在参数合规（`TargetNotAccepted` 等）、能力项与发出前门三处读同一个谓词 | §6.2 |
 | IO 壳 | 效应侧的解释器：核心中唯一向集成发出写调用、把集成的返回值变成记录的地方 | §6.5 |
 | `Attempt` / `AttemptRef` | 一条 `Prepared` 记录及其后继阶段链，身份 = `attempt_position`；腿身份 `AttemptRef = (attempt_position, leg)`，所有腿级记录与归因以它关联；正常路径下同 lane 至多一条未终结 | §6.5 |
-| `Prepared` / `SendBarrier` / `Undetermined` / `Expired` | 阶段链的记录：已放行待执行 / 发送屏障（已 fsync，之后才可 `submit`）/ 已发出但结果未知 / 未发出即到期 | §6.5 |
-| 发出前门 | IO 壳在 append `SendBarrier` 时对一条腿求值的三个条件：`deadline` 未过、该集成会话已建立、当前能力支持该操作及其参数 schema；结果为发送、等待（腿保持 `Prepared`，不 append 记录）或 `Expired` | §6.5 |
+| `Prepared` / `SendBarrier` / `Undetermined` / `Expired` | 阶段链的记录：已放行待执行 / 发送屏障（已 fsync，之后才可调用该腿的写操作；记下写操作、键与键角色）/ 已发出但结果未知 / 未发出即到期 | §6.5 |
+| `TargetTerminal` | 两腿改单的执行事实：目标订单终态观察到达时同事务 append，引用该观察、带其证据与按意图口径算出的新单数量；数量 ≤ 0 即链 `Resolved`，不发新单腿 | §6.5 |
+| 发出前门 | IO 壳在 append `SendBarrier` 时对一条腿求值的三个条件：`deadline` 未过、该集成会话已建立、意图对当前能力可执行（首腿之后还要求声明的腿计划与记录一致）；结果为发送、等待（腿保持 `Prepared`，不 append 记录）或 `Expired` | §6.5 |
 | `ResolutionEvidence` / `ReconciliationReopened` | 一次取证的执行事实记录（`channel × outcome`，`Found` 含 `Evidence` 并以位置引用命中的那条观察记录）/ 重开一轮取证的标记（`CancelLegTerminal` / `SessionRestored` / `Manual`） | §6.5、§6.6 |
-| `Resolved` / `AwaitingTargetTerminal` | 阶段链的 fold 状态而非记录：链已达终态（各腿终结且无下一腿）/ 复合链撤单腿已终结、等待目标订单终态以决定第二腿（出口：目标终态或 `deadline`） | §6.5 |
+| `Resolved` / `AwaitingTargetTerminal` | 阶段链的 fold 状态而非记录：链已达终态（各腿终结且按记录的腿计划无下一腿，或 `TargetTerminal` 数量 ≤ 0）/ 两腿改单的撤单腿已终结、等待目标订单终态以决定第二腿（按目标身份 `read`；出口：目标终态或 `deadline`） | §6.5 |
 | `Gap{origin}` | 显式标记的缺口记录，`origin ∈ {Source, Delivery, Channel}` | §4.2 |
 | `Pooled` | 值树里的读侧组合子，核心暴露给可选子系统的唯一接口 | §4.5、§8.7 |
 | 段视图 | `Pooled` 物化完整窗口后交给原生 op 的可借用视图（非逐条值） | §4.5、§8.7 |
@@ -79,8 +83,11 @@
 | 程序宿主（program host） | 解释值树程序的受监督子进程，只提供隔离与预算，不进设计中心；协议 = `Load`/`Advance`/`Reset`/`Unload` | §7.1、§8.6 |
 | `Checkpoint` / `state_version` | 程序状态的显式序列化字节及其版本号；与程序 cursor 同事务持久化 | §8.6、§7.5 |
 | `SessionEpoch` / `instance_id` | 会话 epoch `(instance_id, session_seq)`：`instance_id` 随 fence 单调递增，`session_seq` 每次握手加一；推送与回执只在 epoch 相等时接受 | §7.2 |
-| 会话状态 | 核心为每个登记的集成运行的 `Connecting`（无会话，自动重连）/ `Established(SessionEpoch)` / `Halted{cause}`（无会话，需运维动作；`cause ∈ {ProjectionInvalid, ContractIncompatible, Refused}`，跨核心重启保持） | §7.2 |
+| 会话状态 | 集成会话为每个登记的集成运行的 `Connecting`（无会话，自动重连）/ `Established(SessionEpoch)` / `Halted{cause}`（无会话，需运维动作；`cause ∈ {ProjectionInvalid, ContractIncompatible, Refused}`；跨核心重启由执行事实 `IntegrationHalted` 保持） | §7.2 |
+| 集成会话 | 不属任一侧的核心元素：会话状态机、集成进程的拉起与终止、握手与边界接受、核心→集成的调用通道（每个调用恰好完成一次）与调用计数 | §7.3 |
+| `IntegrationHalted` | 集成进入 `Halted` 时由集成会话 append 的执行事实（原因、`SessionEpoch`），与健康观察同事务；解除它的控制记录 `Applied` 以位置引用它 | §7.2 |
 | 健康面（`IntegrationHealth`） | 每个集成的会话状态、逐流 readiness、逐流 epoch 的回填进度、按调用目标（作用域或逻辑流）的连续失败数与最近成功时间；全部是健康观察的 fold，不进写路径 | §8.4 |
+| 健康流按键保留 | 健康观察是按键的状态值，同键后一条取代前一条；压缩时每个键在保留边界之下的最新一条留作基线，fold 对任一不低于边界的 `as_of` 不变 | §2.4、§8.4 |
 | 回填进度 | 核心按流 epoch 判定的回填任务状态 `Backfilling{through}` / `Closed` / `Incomplete{through}`：`through` 由读结论记录证明；任务在 `live_from` 声明之后建立；不属 readiness | §8.4 |
 | principal | 会话绑定的身份 `(os_user, actor)`：OS 对端凭据给出 `os_user`，下游自报 `actor`、经解释层带入握手；授权与审计的键 | §8.5 |
 | `Snapshot` / `as_of` | 读模型的一次读取结果，及其吃到的位置集 `Set<LogPosition>` 与该 fold 所依赖的观察输入中生效、未被回填补齐的 `gaps`（只 fold 执行事实的 `lanes`、`sources` 为空）；`tickets`、`subscriptions` 只给当前态，没有历史切面 | §8.5 |
@@ -91,7 +98,7 @@
 | 传输（transport） | IDL 之下的编码/信道，按 OS 选择（本地回环 + 令牌或命名管道），不改变 IDL | §7.1、§8.1 |
 | 模块指南（module guide） | 每个元素的 拥有 / 隐藏 / 假设 三列，及其对应的 §2–§6 抽象 | §7.3 |
 | uses 图 | 模块间的依赖方向；唯一跨宇宙依赖是效应侧 → 观察侧（以位置引用承载：`basis`、`checked_as_of`、读模型 `as_of` 等），反向不成立 | §7.3 |
-| 操作集（operation set） | 核心 IO 壳对集成的调用与集成对核心的推送，构成跨协议 IDL 契约 | §8.2、§8.3 |
+| 操作集（operation set） | 核心经集成会话对集成的调用与集成对核心的推送，构成跨协议 IDL 契约 | §8.2、§8.3 |
 | 持久化归属表 | 每份状态谁写、谁读、怎么传播 | §7.5 |
 | 配置/凭据归属 | 统一路径下的文件契约：每文件唯一写者、格式版本只前进 | §7.6 |
 

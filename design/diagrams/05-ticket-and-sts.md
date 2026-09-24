@@ -64,7 +64,7 @@ flowchart LR
   end
   AI -->|"draft(intent) → TicketId<br/>revise / submit_for_decision"| NORM
   PROG -->|"写处理器：装载 principal 为 responsible<br/>Draft + SubmitForDecision 同事务"| NORM
-  NORM{"意图构造（parse-don't-validate）<br/>锚点：principal · WriteLaneKey · OperationKind ∈ {Place, Cancel, Replace, Close} · basis（可空）<br/>撤/改单必带 target: VenueRef 或 IdemKey；平仓的 target: PositionRef（含 instrument）由核心从 basis 所指的持仓观察记录构造<br/>deadline 缺省按 (WriteLaneKey, OperationKind) 策略 → 运行期全局，填入版本"}
+  NORM{"意图构造（parse-don't-validate）<br/>锚点：principal · WriteLaneKey · OperationKind ∈ {Place, Cancel, Replace, Close} · basis（可空）<br/>撤/改单必带 target: VenueRef 或 IdemKey（IdemKey 须是某条腿 SendBarrier 记为订单键的键）；平仓的 target: PositionRef（含 instrument）由核心从 basis 所指的持仓观察记录构造<br/>deadline 缺省按 (WriteLaneKey, OperationKind) 策略 → 运行期全局，填入版本"}
   NORM -->|"锚点构造不出"| MAL["会话：draft → Rejected(Malformed)，不 append<br/>程序：EffectResponse{NotDrafted(Malformed)}，不重派"]
   NORM -->|"构造成功（参数不在此判定）"| TK[("TicketAction 记录：Draft / SubmitForDecision<br/>每版带意图参数 schema 身份")]
   TK -.-> PV["单据 fold：parameter_validity<br/>按该来源 CapabilityProof 声明的意图参数 schema：Valid / Invalid(违反项) / NotSupported / SchemaMismatch"]
@@ -85,15 +85,15 @@ flowchart TB
   IN[("单据 AwaitingDecision(current_version)")]
   IN --> A{"授权<br/>(responsible, WriteLaneKey, OperationKind) ∈ scope？"}
   A -->|"否"| RJ1["Rejection::Unauthorized + 安全事件<br/>Close(DecisionRejected)"]
-  A -->|"是"| B{"输入约束（步内可交换集，Validated 累积）<br/>parameter_validity == Valid（无条件）<br/>instrument 属账户、子账户已枚举、instrument ∈ 策略允许集合"}
-  B -->|"否"| RJ2["NonEmpty<Rejection>：全部违反项（参数违反 / NotSupported / SchemaMismatch 可区分）<br/>Close(DecisionRejected)"]
+  A -->|"是"| B{"输入约束（步内可交换集，Validated 累积）<br/>parameter_validity == Valid（无条件；含可执行性：Supported、参数 schema、目标种类）<br/>instrument 属账户、子账户已枚举、instrument ∈ 策略允许集合"}
+  B -->|"否"| RJ2["NonEmpty<Rejection>：全部违反项（参数违反 / NotSupported / SchemaMismatch / TargetNotAccepted 可区分）<br/>Close(DecisionRejected)"]
   B -->|"是"| C{"审批<br/>策略：总是 / 从不 / 名义 > N（以数量定量 = 需人工）"}
   C -->|"是"| WAITC["等待 decide(Approve / Reject)<br/>待决集合对审批人可见（读模型 tickets）<br/>同 (ticket, current_version) 第二条 decide → Conflict(AlreadyDecided)"]
   WAITC -->|"Reject"| RJ3["Close(DecisionRejected)"]
   WAITC -->|"Approve（绑定版本；决定者按动作种类授权）"| D
   C -->|"否：以 rule_version 为依据通过"| D
   D{"lane<br/>该 WriteLaneKey 阻塞头集合非空？"}
-  D -->|"非空，且本笔既不是以阻塞头中投放订单的腿的幂等键为 target 的撤单，也没有覆盖当前全部阻塞头的 bypass_lane 控制记录"| WAITD["停在 lane 步，单据仍 AwaitingDecision<br/>期间 alignment 照常重算"]
+  D -->|"非空，且本笔既不是以阻塞头中某条腿记为订单键的调用方键为 target 的撤单，也没有覆盖当前全部阻塞头的 bypass_lane 控制记录"| WAITD["停在 lane 步，单据仍 AwaitingDecision<br/>期间 alignment 照常重算"]
   WAITD -->|"集合清空，或 bypass_lane Applied 覆盖当前全部阻塞头（fold 变化）"| CD
   D -->|"空 / 是撤阻塞头意图 / bypass_lane 控制记录（本版本、所记阻塞头）覆盖当前全部阻塞头"| CD
   CD{"冷却（只判一次；bypass 不豁免）<br/>Place / Replace 且 now < (WriteLaneKey, instrument) 最近下单腿 SendBarrier 时间 + 该 (WriteLaneKey, OperationKind) 的间隔？<br/>或同键有绕过产生、尚未越过屏障的下单腿？"}
@@ -102,7 +102,7 @@ flowchart TB
   E{"过期步<br/>deadline（UTC）已过？"}
   E -->|"是"| RJ5["Close(Expired)：不补偿"]
   E -->|"否"| G
-  G{"依据有效性门<br/>basis_validity == Fresh ∧ 必要项 alignment == Aligned（能力项恒必要，并核对意图参数 schema 身份仍是声明的）∧ 决定绑定版本 == current_version"}
+  G{"依据有效性门<br/>basis_validity == Fresh ∧ 必要项 alignment == Aligned（能力项恒必要，按同一可执行性谓词核对）∧ 决定绑定版本 == current_version"}
   G -->|"否"| RJ4["PredicateFailure（fail-closed）<br/>Rejection 带 rule_version + checked_as_of<br/>Close(DecisionRejected)"]
   G -->|"是"| OUT[("同事务 append Prepared + Close(Prepared(position))<br/>+ Outcome（带 rule_version、checked_as_of）+ RuleState")]
   TMR["计时器（Input 超时）"] -.->|"AwaitingDecision 任一等待点到期"| RJ5
@@ -132,14 +132,14 @@ stateDiagram-v2
   [*] --> Free
   Free --> B1 : STS 放行一笔 → Prepared（交给 IO 壳，过发出前门即发；门不成立时在门前等待，仍是阻塞头，D6.1）
   B1 --> Free : 该 Attempt 链 Resolved（各腿终结且无下一腿）
-  B1 --> BN : 例外一：以阻塞头中投放订单的腿的幂等键为 target 的撤单意图放行（lane 步不等待；按腿精确匹配）
+  B1 --> BN : 例外一：以阻塞头中某条腿 SendBarrier 记为订单键的调用方键为 target 的撤单意图放行（lane 步不等待；按腿精确匹配；来源不接受 IdemKey 目标时已在输入约束步 TargetNotAccepted）
   B1 --> BN : 例外二：bypass_lane(ticket) 控制记录 Applied（principal 承担协议违反；只对所记版本与所记阻塞头；不是 Decision）
   BN --> BN : 集合内任一链 Resolved 但集合非空（只移出自己）
   BN --> BN : 集合非空时再加入获准的例外（再一笔撤阻塞头 / 再一次绕过）
   BN --> Free : 集合清空
   note right of B1
     未终结 = Prepared 无 SendBarrier / SendBarrier 无后继 /
-    Undetermined 未终结 / 复合链未完（含 AwaitingTargetTerminal）
+    Undetermined 未终结 / 两腿改单链未完（含 AwaitingTargetTerminal）
     后续普通写停在 STS lane 步（AwaitingDecision）
     其他 lane 不受影响
   end note

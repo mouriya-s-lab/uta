@@ -111,7 +111,7 @@ flowchart TB
 
 ### 3. 握手与会话状态
 
-读统一路径配置（§7.6）。每个登记的集成有一个由核心运行的**会话状态** [设计]：
+读统一路径配置（§7.6）。每个登记的集成有一个由集成会话元素（§7.3）运行的**会话状态** [设计]：
 
 | 状态 | 含义 | 核心的行为 |
 |---|---|---|
@@ -121,7 +121,7 @@ flowchart TB
 
 `cause ∈ {ProjectionInvalid, ContractIncompatible, Refused(reason)}`：前两种由核心判定握手交来的投影不合法、契约版本不兼容；`Refused` 是集成报告上游明确拒绝了该登记的身份或配置（§8.2 `handshake`）。
 
-本步各集成独立推进，不等全部集成建立会话。上次持久状态为 `Halted` 的集成保持 `Halted`，不拉起；其余一律以新实例进入 `Connecting`：旧实例的 `Established` 不延续，它的 epoch 已在第 1 步作废。
+本步各集成独立推进，不等全部集成建立会话。持久为 `Halted` 的集成（见下文“`Halted` 的持久化”）保持 `Halted`，不拉起；其余一律以新实例进入 `Connecting`：旧实例的 `Established` 不延续，它的 epoch 已在第 1 步作废。
 
 **转移（穷尽）：**
 
@@ -139,9 +139,16 @@ flowchart TB
 
 - 只有当前在途握手（按其 `SessionEpoch`）的结果能改变状态；其他 epoch 的握手结果丢弃，不转移、不 append 任何记录。
 - 未生效的控制动作（越权、文件不合法，§8.5）不转移。
-- 状态每改变一次（`Connecting → Connecting` 不算），核心 append 一条健康观察（新状态、原因、起始时间，§8.4）。持久的会话状态就是这些观察的 fold，重启时本步据此恢复 `Halted`。
-- 进入 `Halted` 时记 P14 原因，核心终止该集成进程并清除它在进程表中的登记。集成登记配置、该集成已有的流记录与订阅不变。
+- 状态每改变一次（`Connecting → Connecting` 不算），集成会话 append 一条健康观察（新状态、原因、起始时间，§8.4）。
+- 进入 `Halted` 时，集成会话在同一事务 append 执行事实 `IntegrationHalted{integration, cause, session_epoch}`（P14）与该 `Halted` 的健康观察，提交后终止该集成进程并清除它在进程表中的登记。集成登记配置、该集成已有的流记录与订阅不变。
+- 解除 `Halted` 的控制记录 `Applied`（`restart_integration`，或 `Halted{Refused}` 上的 `rotate_credential`）带被解除的那条 `IntegrationHalted` 的位置，与转入 `Connecting` 的健康观察同一事务；这一事务提交之后集成会话才拉起进程、握手。
 - 不在 `Established` 时该集成没有会话：不接受它的新推送；IO 壳不向它发写，也不发取证读（§6.5、§6.6）；已放行未发出的腿在发出前门等待或到期。
+- **会话结束时在途调用恰好完成一次** [设计]：离开 `Established` 时，经调用通道发往该会话、尚未返回的每个调用立即以封闭返回值完成：写（`submit`/`cancel`）为 `NoResponse`（→ `Undetermined`，§6.5），其余为 `Unavailable`，各按 §8.4 计数一次。之后到达的旧 epoch 回应在边界拒绝（§8.3），不再完成任何调用，也不计数。理由：会话一断，旧 epoch 的回音已不可接受；让调用悬着等它，发起方就永远等不到结果，而同一调用若既被会话结束完成、又被迟到回应完成，就会有两条记录与两次计数。
+
+**`Halted` 的持久化** [设计]：持久的 `Halted` 只由执行事实判定。一个集成最近的 `IntegrationHalted` 没有被某条 `Applied` 以位置引用解除，它就是 `Halted`，原因取该记录；重启时本步据此恢复，不读健康观察。
+
+- 理由：`Halted` 是运维者要处理的事实（P14），也是重启不得自动重试的依据，属于执行事实这种不压缩的记录；健康观察是观察侧、供展示的派生记录，按键压缩（§2.4）。解除以位置显式引用被解除的那条记录，不必比较两条记录在各自流里的先后。
+- 不选：**由健康观察 fold 出持久状态**：让重启正确性依赖观察侧记录的保留；**比较 `IntegrationHalted` 与控制记录的先后**：二者可能在不同的流里，执行事实侧没有跨流的全局序（§2.3）。
 
 理由：
 
@@ -167,8 +174,8 @@ flowchart TB
 按恢复判定（先 fold 链是否已 `Resolved`，§6.7）依次：
 
 1. 为每条未终结的 `Undetermined` 启动对账驱动（读，可重试）。渠道已穷尽而停等者，在其集成建立新会话时自动 append `ReconciliationReopened{SessionRestored}`（§6.6），然后重走一轮；该集成尚无会话时，停等只能由 `Manual` 或新证据推进。
-2. 复合链处于 `AwaitingTargetTerminal` 者，继续按目标身份读。
-3. 对当前腿无 `SendBarrier` 者过发出前门（§6.5）：过期则 `Expired`；其集成会话已建立且当前能力支持则 `SendBarrier` → `submit`；否则等待。
+2. 复合链处于 `AwaitingTargetTerminal` 且尚无 `TargetTerminal` 者，继续按目标身份读；已有数量 > 0 的 `TargetTerminal` 者，新腿按下一项处理（§6.7）。
+3. 对当前腿无 `SendBarrier` 者过发出前门（§6.5）：过期则 `Expired`；其集成会话已建立且当前能力可执行则 `SendBarrier` → 该腿的写调用；否则等待。
 4. fold 出无 `EffectResponse` 的 `EffectRequest` 重派（§6.1、§9.2 #21）。
 5. STS 链按 `RuleState` 续跑待决单据；过期计时器按各单据的 `deadline`（UTC，§2.6）重新装上。
 
@@ -176,7 +183,7 @@ flowchart TB
 
 ### 5. 恢复观察侧与消费面
 
-1. 为已建立会话的集成按订阅表重建路由与回填；`Gap{origin: Source}` 标记断代（§4.2）。
+1. 为已建立会话的集成，持久订阅按订阅表合成各流需求、经 `route` 下发（§8.2），并续回填；`Gap{origin: Source}` 标记断代（§4.2）。
 2. 交回程序状态并装载程序（§8.6）。
 3. 最后开放下游会话（经解释层，§8.5）。
 
@@ -198,7 +205,7 @@ flowchart TB
 | 信封解析入口 | 边界处解析并验证信封字段（parse-don't-validate，隐藏构造器）、契约载荷与原始负载直通 | 智能构造器、畸形记录拒绝逻辑 | 锚点闭合必填、入口即验 | §2.1 |
 | 观察 `Journal` | 观察侧记录载体、`RetractableDelta` 撤回代数、按 frontier 压缩、保留边界 | 存储原语、`fold_state` 重建、`compact` 实现 | 派生侧可撤回 | §4.1 |
 | 派生 DAG（程序解释①） | 增量重算、cutoff 截断、节点粒度依赖、派生记录写回观察侧 | 增量引擎（`salsa`/differential）、cutoff 判定 | 无自反馈环；执行状态不进 DAG | §4.3 |
-| 持久订阅 | 订阅需求、selector（观察流：来源 × 流 × 主体集；执行事实：来源 × 作用域）、cursor、消费方式声明、订阅状态、配额计量 | 匹配与路由细节 | 订阅 owner 是核心，与消费方连接无关 | §4.2、§8.5 |
+| 持久订阅 | 订阅需求、selector（观察流：一组来源 × 流 × 主体集的项，可跨流跨来源；执行事实：来源 × 作用域，含此后出现的 lane 流）、cursor（每条选中流一个位置）、消费方式声明、逐项订阅状态、按流合成需求并调用 `route`（§8.2）、配额计量；回填任务及其进度的健康观察（§8.4） | 匹配与路由细节 | 订阅 owner 是核心，与消费方连接无关 | §4.2、§8.5 |
 | 投递调度 | 投递、背压、conflation、`Gap{origin: Delivery}` 标记与确认；执行事实按位置原样搬运、不解析（§8.5） | 传输层 conflation 实现 | 损失语义由消费者显式声明 | §4.2 |
 | 入站处理器注册表 | 字段→处理器映射（观察侧/效应侧分区）、`required_inputs`、触发效果 | 载荷语义解释 | 字段缺失=不触发，不是错误 | §2.1、§6.1 |
 
@@ -222,7 +229,7 @@ flowchart TB
 | 单据 | 意图形成期锁（`responsible`）、线性版本链、`basis`、两层对账状态、编辑 diff | 意图类型解释、`Revision<Intent>` | 单据不驱动 IO 壳，只单向读其记录 | §6.2 |
 | STS 规则链 | 顺序固定链（授权→输入约束→审批→lane→过期）、`RuleState`、`Rejection`、放行判定 | 规则内部守卫（组合子 kind enum） | 规则不引用读模型 | §6.3 |
 | lane 驱动 | 每 `WriteLaneKey` 的阻塞头集合（lane 规则的 `RuleState`）与按 `Prepared` 位置的执行顺序 | 上游账户结构对齐 | 有序与阻塞来自通讯协议，不是 UTA 的锁；lane 阻塞头等待发生在 `Prepared` 之前 | §6.4 |
-| IO 壳 | 核心内唯一的写调用出口（集成写接口）、`Prepared` 链驱动、两阶段、`SendBarrier`、对账驱动、崩溃恢复 | 转移表、渠道顺序 | 核心内唯一效应处，写在上游的落实由集成完成；不知道单据存在 | §6.5–§6.7 |
+| IO 壳 | 核心内唯一的写调用发起者（经集成会话的调用通道）、`Prepared` 链驱动、两阶段、`SendBarrier`、对账驱动、崩溃恢复 | 转移表、渠道顺序 | 核心内唯一效应处，写在上游的落实由集成完成；不知道单据存在 | §6.5–§6.7 |
 | 读模型 | 对记录的只读 fold（种类、输入与能否按历史 `as_of` 重建见 §8.5；`subscriptions` 为订阅表当前态；`sources` 为声明版本与能力变化的 fold），非权威，经核心↔解释层契约暴露 | fold 的具体数据结构 | 不被规则引用；消费方也可自行 fold 原始记录 | §4.4、§8.5 |
 | 控制面 | 认证 principal 传入的运维动作通道（P14） | 传输 | 只经认证 principal，不经进程信号或 flag 文件 | §6.3、§8.5 |
 | 会话入口 | 核心↔解释层会话的建立：由 OS 对端凭据与 `actor` 组成 principal、契约版本检查、启动第 5 步之前返回 `Starting`；拒绝未完成握手的请求并记安全事件 | 传输（UDS / 命名管道） | 信任单位是 OS 用户（H7）；请求体里的身份不参与授权 | §8.5 |
@@ -233,13 +240,25 @@ flowchart TB
 - 控制动作与人工决议按 `(principal, 动作种类)` 授权，与写授权同一规则族（授权步，§6.3）。
 - 结果为控制记录 `Applied | Rejected(reason)` 或决议记录。
 
-### 存储与外部子系统
+### 不属任一侧的元素与外部子系统
 
 | 元素 | 拥有 | 隐藏的决定 | 假设 | 抽象 |
 |---|---|---|---|---|
 | 存储（SQLite 单写者） | 单文件、表主键、事务原子性、append-only 的 Rust 接口保证、快照、格式版本；按位置交出已提交记录的字节（两侧通用，不解析），供投递调度搬运执行事实订阅 | SQL、索引、WAL 细节 | 核心独占；集成/宿主不接触 | §7.4（持久化落点：§4.1、§6.5） |
+| 集成会话 | 每个登记集成的会话状态机与 `SessionEpoch`（§7.2 第 3 步）；集成进程的拉起、终止与它们的进程表登记；握手、投影与契约版本的判定；边界的 epoch 接受判定（§8.3）；核心→集成的调用通道：全部 IDL 操作经它发出，每个调用恰好完成一次；声明版本、`IntegrationHalted` 与会话状态 / readiness `Disconnected` / 调用计数这些健康观察的内容（§8.4） | 传输与重连 pacing、进程监督的 OS 机制 | 只按调用的封闭返回值分“失败 / 非失败”计数，不读 Attempt、单据或订阅记录；发起方在自己的事务里提交它给出的计数观察 | §7.2、§8.2–§8.4 |
 | 行情派生计算子系统（外部，可选） | `Pooled` 段视图的物化与原生 op 的运行；**属子系统，不属核心** | 全部实现：布局、IPC、段生命周期、作者面 | 核心零影响；未安装即拒绝含 `Pooled` 的程序 | §4.5、§8.7（实现归 `hpc-derivation/design.md`） |
 | 解释层（核心之外，下游侧） | 对外概念、状态翻译表、一次性命令与双向长连接、续传令牌的编解码；由类型生成的参数与字段 | 核心概念、核心↔解释层契约、自身落点（CLI 或核心内部） | 不持有状态：订阅、确认进度、单据都在核心；授权全在核心 | §0.1、§8.5（设计归 `design/downstream/design.md`） |
+
+**集成会话** [设计]。它解释的是两个已有的核心代数：会话状态机（闭合 sum，§7.2 第 3 步）与 IDL 操作的封闭返回值（§8.2）；它不拥有新的记录代数，健康观察是观察侧记录的一个种类（§8.4），`IntegrationHalted` 与声明版本是执行事实。
+
+- 为什么不属任一侧：会话状态被两侧共同使用。IO 壳的发出前门读它（§6.5），持久订阅经它发 `route`/`backfill`，读处理器与消费方 `read` 经它发读。放进效应侧，观察侧就要依赖效应侧元素（§3.2 的唯一边反向）；放进观察侧，发出前门就要读观察侧的可变状态。调用通道的接口只以 IDL 消息为参数与返回值，这些是核心↔集成契约的公共值类型，它写的执行事实类型不经这个接口暴露，所以观察侧元素依赖它不引入对效应侧类型的依赖。
+- **计数规则**：每个经调用通道发出、属当前会话的调用恰好得到一个封闭结果，恰好计一次（§8.4）；会话结束时在途调用由本元素完成（§7.2 第 3 步）。计数观察由集成会话给出内容，由发起方在记录该结果的同一事务里提交（IO 壳的 `Undetermined`/回执、持久订阅的读结论记录等），所以崩溃不会留下与结果记录分叉的计数。它只看返回值的标签，不看结果对发起方意味着什么。
+- 只有 IO 壳经它发写（`submit`/`cancel`）；它自己从不发起写。
+- 不选：
+  - **由 IO 壳拥有会话**：观察侧的 `route`/`backfill` 就要经过效应侧元素；
+  - **由持久订阅拥有会话**：写的发出前门依赖观察侧的可变状态；
+  - **各发起方自己计数**：同一目标的计数有多个写者，“连续失败数”这种状态值没有唯一的前一值可接；
+  - **另设健康元素**：它看不到调用结果，只能再从各发起方收一遍，成了没有秘密的转发者。
 
 ### 执行事实 append 链的唯一写入口
 
@@ -249,11 +268,11 @@ flowchart TB
 |---|---|
 | 单据 | `TicketAction`，含 `Close(Prepared)` + 同事务 `Prepared` |
 | STS 规则链 | Decision/`Outcome`/`Rejection`；授权步否决时的安全事件 |
-| IO 壳 | `SendBarrier`/`VenueAccepted`/`VenueRejected`/`Undetermined`/取证 `ResolutionEvidence`/`ReconciliationReopened{CancelLegTerminal \| SessionRestored}`/`Expired`/`CapabilityObserved`/取证 `Gap{Channel}` |
+| IO 壳 | `SendBarrier`/`VenueAccepted`/`VenueRejected`/`Undetermined`/`TargetTerminal`/取证 `ResolutionEvidence`/`ReconciliationReopened{CancelLegTerminal \| SessionRestored}`/`Expired`/`CapabilityObserved`/取证 `Gap{Channel}` |
 | 效应侧归因处理器 | `ResolutionEvidence{Attributed}`（§8.1） |
-| 控制面 | 控制记录、控制动作与人工决议越权时的安全事件、`ResolutionEvidence{Manual}`、`ReconciliationReopened{Manual}`（§8.5） |
+| 控制面 | 控制记录（解除 `Halted` 的 `Applied` 带被解除的 `IntegrationHalted` 位置，§7.2 第 3 步）、控制动作与人工决议越权时的安全事件、`ResolutionEvidence{Manual}`、`ReconciliationReopened{Manual}`（§8.5） |
 | 会话入口 | 未完成握手的连接发起请求时的安全事件（§8.5） |
-| 核心握手处理（§7.2 第 3 步） | 握手成功时的声明版本（§7.5） |
+| 集成会话（§7.2 第 3 步） | 握手成功时的声明版本（§7.5）、`IntegrationHalted`（与 `Halted` 健康观察同事务） |
 | 出站请求处理器 | `EffectRequest`、`EffectResponse`（§6.1） |
 
 - 集成产出的外部变更观察是**观察记录**，落观察 `Journal`（记录归观察，§5.3）。
@@ -266,6 +285,7 @@ flowchart TB
 
 ```mermaid
 flowchart TB
+  SESS["集成会话（不属任一侧）"]
   subgraph EFFECT["效应侧（可写）"]
     TICKET["单据"] --> STS["STS 规则链"] --> LANE["lane 驱动"] --> IOSHELL["IO 壳"]
     OUTH["出站请求处理器"] --> TICKET
@@ -280,8 +300,15 @@ flowchart TB
   end
   INT["集成进程"] --> ENV
   HOST["程序宿主"] --> PROG
-  IOSHELL --> INT
+  SESS --> INT
+  OUTH -->|"读处理器的 read"| SESS
+  IOSHELL -->|"submit / cancel · 取证 · 目标身份 read"| SESS
+  SUB -->|"route（需求全集）· backfill"| SESS
+  SESS -.append 会话状态与 Disconnected 健康观察.-> OJ
   STORE["存储（SQLite 单写者）"]
+  SESS -.append 声明版本 · IntegrationHalted.-> STORE
+  SESS -.调用计数观察的内容（由发起方同事务提交）.-> OJ
+  SUB -.append 路由结论记录 · 读结论与回填进度.-> OJ
   TICKET -.basis 位置 · 钩子读观察值与归因观察.-> OJ
   IOSHELL -.append 回执 / 取证的观察记录 · 读复合链目标终态观察.-> OJ
   IOSHELL -.append 执行事实.-> STORE
@@ -299,7 +326,7 @@ flowchart TB
   class HPC,INT,HOST,IL ext;
 ```
 
-唯一跨边是效应侧读观察侧：`basis` 引用的观察位置、钩子读的观察值与归因观察、IO 壳读的复合链目标终态观察、读模型 fold 的观察记录与读取的订阅表当前态；IO 壳 append 回执与取证的观察记录也沿这个方向（§3.2）。STS 规则链不读观察（§6.3），它读的是单据 fold 已算好的状态。能力证据是执行事实侧记录，属效应侧内部（§7.5）。存储不属任何一侧：投递调度经它按位置读出执行事实订阅所选记录的字节、原样搬运，不经读模型、不解析（§8.5）。观察侧任何元素都不依赖效应侧类型；crate 依赖方向即此，反向不编译（§3.2）。
+唯一跨边是效应侧读观察侧：`basis` 引用的观察位置、钩子读的观察值与归因观察、IO 壳读的复合链目标终态观察、读模型 fold 的观察记录与读取的订阅表当前态；IO 壳 append 回执与取证的观察记录也沿这个方向（§3.2）。STS 规则链不读观察（§6.3），它读的是单据 fold 已算好的状态。能力证据是执行事实侧记录，属效应侧内部（§7.5）。存储与集成会话不属任何一侧：投递调度经存储按位置读出执行事实订阅所选记录的字节、原样搬运，不经读模型、不解析（§8.5）；两侧都经集成会话调用集成，它的接口只是 IDL 消息。观察侧任何元素都不依赖效应侧类型；crate 依赖方向即此，反向不编译（§3.2）。
 
 ## 7.4 存储引擎
 
@@ -336,7 +363,7 @@ flowchart TB
 | 订阅表 / cursor | 观察 |
 | 能力证据（握手的声明版本、`CapabilityObserved`） | 效应 |
 | 程序状态（`Checkpoint`） | 观察（解释①的 `Scan`/`Window` 累加器）与效应（解释②的执行状态：冷却、等待、过期） |
-| 进程表 | 核心 |
+| 进程表 | 核心（集成会话与程序宿主，各写自己拉起的进程） |
 | 保留边界与引用登记 | 观察 |
 | 快照 | 两侧 |
 | 段池（不持久） | 观察（扩展） |
@@ -348,16 +375,17 @@ flowchart TB
   - 程序解释①（派生记录）；
   - 一次性读与回填的结果及其读结论记录：读处理器、钩子取证、IO 壳按目标身份的读、消费方 `read`、订阅侧回填（§3.4、§8.2）；
   - IO 壳：回执与取证的观察记录（该回应的订单状态与每笔可识别执行的成交记录，记录模型，§6.5）；
-  - 核心：健康观察（会话状态、各流 readiness `Disconnected`、各流 epoch 的回填进度、调用结果计数，§8.4）；
+  - 集成会话：健康观察（会话状态、各流 readiness `Disconnected`、调用结果计数，§8.4）；计数观察由调用发起方在记录结果的同一事务里提交（§7.3）；
+  - 持久订阅元素：各逻辑流当前流 epoch 的回填进度健康观察（§8.4）；路由结论记录（`route` 返回 `Routed` 时，§8.2）；
   - 核心按宿主协议：程序观察 `ProgramReset{reason}`、`ProgramFailed{reason}`（§8.6）。
 - **读**：订阅者、程序、单据 `basis`/检查项、读模型、IO 壳（复合链读目标终态观察）。
-- **传播**：按 `LogPosition` 推进；`RetractableDelta` 可撤回可压缩；回执 / 取证的观察记录可压缩，`Evidence` 在执行 J。
+- **传播**：按 `LogPosition` 推进；`RetractableDelta` 可撤回可压缩；回执 / 取证的观察记录可压缩，`Evidence` 在执行 J。健康流按键压缩，每键保留基线（§2.4）。
 
 ### 执行事实 `Journal`
 
 - **写**：见唯一写入口表（§7.3）。补充：STS 规则链的 Decision/`Outcome`/`Rejection` 记录带 `checked_as_of`；IO 壳的 `VenueAccepted` 与取证 `ResolutionEvidence{Found}` 含 `Evidence`（契约载荷与原始负载，§6.5）；控制记录为 `Applied | Rejected`。
 - **读**：读模型、单据 `basis`、lane 规则（阻塞头集合、`bypass_lane` 控制记录）、IO 壳（重启重建链）、对账驱动、出站处理器（重启重派判定）。投递调度经存储按位置搬运执行事实订阅所选的记录，不解析（§8.5）。
-- **传播**：纯 append；位置即顺序。lane 链状态与 `Resolved` 是它的 fold，不另存。
+- **传播**：纯 append；位置即顺序。lane 链状态、链的腿计划（首腿 `SendBarrier`）与 `Resolved` 是它的 fold，不另存；集成的持久 `Halted` 同样是它的 fold（`IntegrationHalted` 与解除它的 `Applied`，§7.2 第 3 步）。
 
 ### 规则状态（`RuleState`）
 
@@ -372,7 +400,7 @@ flowchart TB
 
 ### 订阅表 / cursor
 
-- **写**：物理写者只有核心的“持久订阅”元素（§7.3）。
+- **写**：物理写者只有核心的“持久订阅”元素（§7.3）；按流合成的需求经 `route` 下发给集成，`Routed` 的路由结论记录落观察 `Journal`，不在订阅表里。
   - 订阅需求来自消费方 / 程序的 RPC；cursor 推进来自 `ack`（确认 = 已处理，§4.2）。
   - 两类写在该元素内串行化，同一订阅的需求变更与 cursor 推进不交叠。
 - **读**：集成路由、投递、gap 判定、重连恢复、读模型 `subscriptions`（当前态，§8.5）。
@@ -381,12 +409,12 @@ flowchart TB
 ### 能力证据
 
 - **写**：
-  - 每次集成握手成功，由核心 append 一个**声明版本**（执行 J）：该握手 `Projection` 的声明部分（除记录映射外的全部，§8.1），含作用域与 `account_ref` 的可解析判定（§2.2）；
+  - 每次集成握手成功，由集成会话 append 一个**声明版本**（执行 J）：该握手 `Projection` 的声明部分（除记录映射外的全部，§8.1），含作用域与 `account_ref` 的可解析判定（§2.2）；
   - IO 壳在运行期观察到能力变化（含能力变更推送，§8.3；写能力与流的读 / 回填能力）时 append `CapabilityObserved`。它带所更新的声明版本：该来源（由记录锚点承载）加被接受的那条推送或回应所携的 `SessionEpoch`，不是 append 时另取的当前 epoch。
-- **读**：STS `Context`、单据 `AlignmentCheck` 解析、IO 壳取证渠道集、`required_inputs` 比对、一次性读与回填的路由（§8.2）、读模型 `sources`。执行事实订阅只按位置搬运这些记录，不读其内容（§8.5）。
+- **读**：STS `Context`、单据 `AlignmentCheck` 解析与 `parameter_validity`、IO 壳发出前门的可执行性与取证渠道集、`required_inputs` 比对、一次性读与回填的路由（§8.2）、读模型 `sources`。执行事实订阅只按位置搬运这些记录，不读其内容（§8.5）。
 - **传播**：
   - 只 append，最新一版生效：取该来源最近的声明版本，只 fold 引用这一版本的 `CapabilityObserved`，同一能力目标的多条按其所在流的位置先后；旧会话的更新不覆盖新声明，不需要跨流的全局序（§2.3、§8.5 订阅组）。重启后由持久的声明版本与这些关联的更新重建，历史记录的 epoch 不必等于新的当前 epoch；集成重新握手时再 append 新版。
-  - 取证渠道按**当前**能力证据选：取证是读，按当前能力才可执行。旧 Attempt 不绑定历史版本。
+  - 取证渠道按**当前**能力证据选：取证是读，按当前能力才可执行。旧 Attempt 不绑定历史版本，但只取与链记录的腿计划、键角色一致的那条腿声明（§6.5）：链的形状与键角色来自 `SendBarrier`，不来自声明。
   - `account_ref` 的可解析判定对照该来源的全部历史声明版本（§2.2）。
 
 ### 程序状态（`Checkpoint`）
@@ -397,7 +425,7 @@ flowchart TB
 
 ### 进程表
 
-- **写**：核心拉起集成进程 / 程序宿主时写 `(instance_id, pid, start_time, role)`，退出时清除。
+- **写**：集成会话拉起集成进程、程序宿主元素拉起程序宿主时写 `(instance_id, pid, start_time, role)`，终止或退出时清除；两个写者按 `role` 分行，各写各的行。
 - **读**：新实例启动时回收旧实例进程（§7.2 第 1 步）。
 - **传播**：与 fence 同库；`instance_id` 单调递增。
 
@@ -444,7 +472,7 @@ flowchart TB
 | 运行期参数 | Alice | 快照频率、派生侧留存窗口、`deadline` 全局缺省（仅在策略规则未按 scope 给出时生效）、投递缓冲上限 | `reload_config(runtime)` |
 | 运行期登记 | UTA | 当前 `instance_id`、格式版本、最近快照位置 | 只由核心写；Alice 只读 |
 
-**`rotate_credential` 的重载效果**：重建目标集成会话（进入 `Connecting`，新 `session_seq`），并强制该集成各流开新 epoch（`Gap{origin: Source, reason: credential_rotated}`），不续接。它也解除 `Halted{Refused}`；对因投影不合法或契约版本不兼容而 `Halted` 的集成被拒，那只经 `restart_integration` 解除（§7.2 第 3 步）。
+**`rotate_credential` 的重载效果**：重建目标集成会话（进入 `Connecting`，新 `session_seq`），并强制该集成各流开新 epoch（`Gap{origin: Source, reason: credential_rotated}`），不续接。它也解除 `Halted{Refused}`，其 `Applied` 带被解除的 `IntegrationHalted` 位置；对因投影不合法或契约版本不兼容而 `Halted` 的集成被拒，那只经 `restart_integration` 解除（§7.2 第 3 步）。
 
 **策略 / 审批规则文件的内容：**
 
