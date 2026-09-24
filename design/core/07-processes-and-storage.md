@@ -221,7 +221,7 @@ flowchart TB
 |---|---|---|---|---|
 | 单据 | 意图形成期锁（`responsible`）、线性版本链、`basis`、两层对账状态、编辑 diff | 意图类型解释、`Revision<Intent>` | 单据不驱动 IO 壳，只单向读其记录 | §6.2 |
 | STS 规则链 | 顺序固定链（授权→输入约束→审批→lane→过期）、`RuleState`、`Rejection`、放行判定 | 规则内部守卫（组合子 kind enum） | 规则不引用读模型 | §6.3 |
-| lane 驱动 | 每 `WriteLaneKey` 的阻塞头集合（lane 规则的 `RuleState`）与按 `Prepared` 位置的执行顺序 | 上游账户结构对齐 | 有序与阻塞来自通讯协议，不是 UTA 的锁；等待发生在 `Prepared` 之前 | §6.4 |
+| lane 驱动 | 每 `WriteLaneKey` 的阻塞头集合（lane 规则的 `RuleState`）与按 `Prepared` 位置的执行顺序 | 上游账户结构对齐 | 有序与阻塞来自通讯协议，不是 UTA 的锁；lane 阻塞头等待发生在 `Prepared` 之前 | §6.4 |
 | IO 壳 | 核心内唯一的写调用出口（集成写接口）、`Prepared` 链驱动、两阶段、`SendBarrier`、对账驱动、崩溃恢复 | 转移表、渠道顺序 | 核心内唯一效应处，写在上游的落实由集成完成；不知道单据存在 | §6.5–§6.7 |
 | 读模型 | 对记录的只读 fold（种类、输入与能否按历史 `as_of` 重建见 §8.5；`subscriptions` 为订阅表当前态；`sources` 为声明版本与能力变化的 fold），非权威，经核心↔解释层契约暴露；为执行事实订阅提供按位置读取的已提交记录 | fold 的具体数据结构 | 不被规则引用；消费方也可自行 fold 原始记录 | §4.4、§8.5 |
 | 控制面 | 认证 principal 传入的运维动作通道（P14） | 传输 | 只经认证 principal，不经进程信号或 flag 文件 | §6.3、§8.5 |
@@ -251,6 +251,7 @@ flowchart TB
 | IO 壳 | `SendBarrier`/`VenueAccepted`/`VenueRejected`/`Undetermined`/取证 `ResolutionEvidence`/`ReconciliationReopened{CancelLegTerminal \| SessionRestored}`/`Expired`/`CapabilityObserved`/取证 `Gap{Channel}` |
 | 效应侧归因处理器 | `ResolutionEvidence{Attributed}`（§8.1） |
 | 控制面 | 控制记录、安全事件、`ResolutionEvidence{Manual}`、`ReconciliationReopened{Manual}`（§8.5） |
+| 核心握手处理（§7.2 第 3 步） | 握手成功时的声明版本（§7.5） |
 | 出站请求处理器 | `EffectRequest`、`EffectResponse`（§6.1） |
 
 - 集成产出的外部变更观察是**观察记录**，落观察 `Journal`（记录归观察，§5.3）。
@@ -342,9 +343,10 @@ flowchart TB
   - 集成推送，位置由核心分配（§8.3）；
   - 程序解释①（派生记录）；
   - 一次性读与回填的结果及其读结论记录：读处理器、钩子取证、IO 壳按目标身份的读、消费方 `read`、订阅侧回填（§3.4、§8.2）；
-  - IO 壳：回执与取证观察的副本（记录模型，§6.5）。
+  - IO 壳：回执与取证的观察记录（该回应的订单状态与每笔可识别执行的成交记录，记录模型，§6.5）；
+  - 核心：健康观察（会话状态、各流 readiness `Disconnected`、调用结果计数，§8.4）。
 - **读**：订阅者、程序、单据 `basis`/检查项、读模型、IO 壳（复合链读目标终态观察）。
-- **传播**：按 `LogPosition` 推进；`RetractableDelta` 可撤回可压缩；回执 / 取证副本可压缩，`Evidence` 在执行 J。
+- **传播**：按 `LogPosition` 推进；`RetractableDelta` 可撤回可压缩；回执 / 取证的观察记录可压缩，`Evidence` 在执行 J。
 
 ### 执行事实 `Journal`
 
@@ -375,10 +377,10 @@ flowchart TB
 
 - **写**：
   - 每次集成握手成功，由核心 append 一个**声明版本**（执行 J）：该握手 `Projection` 的声明部分（除记录映射外的全部，§8.1），含作用域与 `account_ref` 的可解析判定（§2.2）；
-  - IO 壳在运行期观察到能力变化（含能力变更推送，§8.3；写能力与流的读 / 回填能力）时 append `CapabilityObserved`。
+  - IO 壳在运行期观察到能力变化（含能力变更推送，§8.3；写能力与流的读 / 回填能力）时 append `CapabilityObserved`。它带所更新的声明版本：该来源（由记录锚点承载）加被接受的那条推送或回应所携的 `SessionEpoch`，不是 append 时另取的当前 epoch。
 - **读**：STS `Context`、单据 `AlignmentCheck` 解析、IO 壳取证渠道集、`required_inputs` 比对、一次性读与回填的路由（§8.2）、读模型 `sources`、执行事实订阅（§8.5）。
 - **传播**：
-  - 只 append，最新一版生效；重启后由最近的声明版本及其后的 `CapabilityObserved` 重建，集成重新握手时再 append 新版。
+  - 只 append，最新一版生效：取该来源最近的声明版本，只 fold 引用这一版本的 `CapabilityObserved`，同一能力目标的多条按其所在流的位置先后；旧会话的更新不覆盖新声明，不需要跨流的全局序（§2.3、§8.5 订阅组）。重启后由持久的声明版本与这些关联的更新重建，历史记录的 epoch 不必等于新的当前 epoch；集成重新握手时再 append 新版。
   - 取证渠道按**当前**能力证据选：取证是读，按当前能力才可执行。旧 Attempt 不绑定历史版本。
   - `account_ref` 的可解析判定对照该来源的全部历史声明版本（§2.2）。
 

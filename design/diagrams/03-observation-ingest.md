@@ -52,12 +52,12 @@ sequenceDiagram
 stateDiagram-v2
   state "Live（非 Degraded）" as LN
   [*] --> Starting : 会话建立（新 session_seq）
-  Starting --> Backfilling : 集成声明 Backfilling{through: Seq}
+  Starting --> Backfilling : 集成声明 Backfilling{through}（through = 已证明的连续覆盖上界，与窗口、live_from 同一流坐标）
   Starting --> Live : 无回填可做：以 venue 游标续接原 epoch / 能力不支持回填
-  Backfilling --> Live : 进入 Live 时集成声明 live_from（首条实时记录的 venue seq）
+  Backfilling --> Live : 进入 Live 时集成声明 live_from（首条实时记录的位置：有 venue 序号用序号，否则用事件时间）
   state Live {
     [*] --> LN
-    LN --> Degraded : 能力收紧 / 配额受限（子态，接受条件不变）
+    LN --> Degraded : 集成上报：上游降级 / 上游限流 / 能力收紧（子态，接受条件不变；与核心配额挂起订阅互相独立）
     Degraded --> LN : 恢复
   }
   note left of Live

@@ -100,6 +100,7 @@
 | 观察记录 | `session_epoch`（边界接受条件，§7.2）、`StreamId(source, stream, epoch)`、`received_at`；`LogPosition` 由核心在接受时分配（§8.3） |
 | 意图 | `principal`、`WriteLaneKey`（不透明，由集成从上游账户结构对齐得出）、`OperationKind`、`basis`（可为空集，但必须存在） |
 | 撤单/改单意图 | 上述 + `target: VenueRef \| IdemKey`（构造前提，§6.2） |
+| 平仓意图 | 上述 + `target: PositionRef`（核心在接纳边界从 `basis` 中所指、属目标作用域的持仓观察记录构造，§6.2） |
 | 尝试/决议 | `AttemptRef = (attempt_position, leg)`（`Prepared` 的 `LogPosition` + 腿序号，§6.5）、`WriteLaneKey` |
 | 订阅 | 选择器（观察流：来源、流、主体集；或执行事实：来源、作用域）、消费方式 |
 
@@ -116,7 +117,7 @@
 | `execution_id` | 效应[交易协议] | `orders` 读模型按执行计数的键（见下文“成交与订单状态的契约语义”） |
 | `execution_revision` | 效应[交易协议] | 同一执行的修订取舍（同上） |
 | `deadline` | 效应 | 过期规则 |
-| 守卫字段（side / instrument / 名义金额） | 效应[交易协议] | 输入约束、审批阈值 |
+| 守卫字段（side / instrument / quantity / notional） | 效应[交易协议] | 输入约束、审批阈值（各操作种类的必填与互斥见 §6.2） |
 | `venue_order_id` | 效应 | 按 id 撤单路径 |
 | `payload_schema` | 观察 | 程序 / 钩子解释器选择 |
 
@@ -220,7 +221,7 @@
 
 ## 8.2 核心→集成操作集
 
-> 图：D6.5 W1 时序、D6.6 W2 时序、D9.2 操作落点、D4.1/D4.3 读处理器、D3.3 回填窗口（`design/diagrams/06-io-shell-attempt.md`、`09-alice-session.md`、`04-program-host.md`、`03-observation-ingest.md`）。
+> 图：D6.5 W1 时序、D6.6 W2 时序、D9.2 操作落点、D4.1/D4.3 读处理器、D3.3 回填窗口；`handshake` 与既有订阅随新声明见 D1.2 启动、D1.3 会话状态（`design/diagrams/06-io-shell-attempt.md`、`09-alice-session.md`、`04-program-host.md`、`03-observation-ingest.md`、`01-process-topology.md`）。
 
 操作集小且闭合。
 
@@ -297,7 +298,7 @@
 ### `list_fills(scope, since) → Fills | Unavailable`
 
 - **语义**：列成交。**动作轴**：**读**。
-- **返回**：`Fills(items, next_cursor?)` / `Unavailable`。`items` 是成交记录，各带 `execution_id`（§8.1）。
+- **返回**：`Fills(items)` / `Unavailable`。`items` 是成交记录，各带 `execution_id`（§8.1）；上游分页在适配器内（§8.1 操作的粒度），任一页失败即整体 `Unavailable`。
 - **核心内部结果**：
   - 命中带归因身份的成交 → 同事务 观察记录 + `ResolutionEvidence{Fills, Found}`；
   - 未命中 → `ResolutionEvidence{Fills, Inconclusive}`（本渠道没有 `Absent`）。
@@ -306,7 +307,7 @@
   - 缺 `since` 游标 → 范围按声明保守取，仍只作 advisory；
   - 能力不支持则跳过；
   - 结果中某笔执行给不出身份时整体返回 `Unavailable`，不交出删掉它的缺项集合；上游那些不是执行的行（如 Binance `t = -1`）由记录映射丢弃，不是错误（§8.1）。
-- **重试**：可重试；分页按 `next_cursor` 续。
+- **重试**：可重试。
 
 ### `cancel(venue_id | key)`
 
@@ -383,7 +384,7 @@
 |---|---|---|
 | 观察记录 | 集成推送观察记录（含 `session_epoch`、venue seq/cursor 证据、`attribution`、契约载荷 + `payload_schema`、原始负载）；`LogPosition` 由核心按到达顺序分配 | append 观察 `Journal`、推进 cursor/frontier、触发处理器与 DAG |
 | `Gap{origin: Source}` | 集成负责的观察流断代 | 记来源 gap（新 epoch 首条记录，含前一范围与最后 `Seq`、原因） |
-| 能力变更 | 握手后能力/配额变化，含某流一次性读与回填能力（§2.2 `StreamDecl`） | IO 壳 append `CapabilityObserved`（执行 J，§7.5）、重算受影响单据的 `alignment` |
+| 能力变更 | 握手后能力变化，含某流一次性读与回填能力（§2.2 `StreamDecl`）；配额只随重新握手变化 | IO 壳 append `CapabilityObserved`（执行 J，§7.5）、重算受影响单据的 `alignment` 与 `parameter_validity` |
 | readiness（P16） | 按集成 × 流：`Starting` / `Backfilling` / `Live`（含 `Degraded` 子态）；回填 readiness 的 `live_from`（§8.4） | 派生健康观察；订阅状态派生（非损失，不需确认） |
 
 错误与 undesired events：
@@ -453,7 +454,7 @@
 
 **时间权威。** `LogPosition` 与完备进度只由核心裁定；集成只提供证据（venue seq/cursor/事件时间）（§2.3）。
 
-**归因由谁填。** 规则见 §5.3：集成填 `attribution`；IO 壳在回执与取证观察记录上填 `FromAttempt(AttemptRef)`；集成填不出的记 `Unattributed`，IO 壳按键回读补。集成 IDL 因此含 `attribution` 字段。
+**归因由谁填。** 规则见 §5.3：集成填 `attribution`；IO 壳在回执与取证的观察记录上，只对由该条自己的关联证据确定属于该腿的记录填 `FromAttempt(AttemptRef)`，同一回应里的其余记录不继承；集成填不出的记 `Unattributed`，IO 壳按键回读补。集成 IDL 因此含 `attribution` 字段。
 
 ### 扩展代价三轴
 
@@ -465,7 +466,7 @@
 
 ## 8.4 回填、实时边界、readiness、健康面
 
-> 图：D3.2 readiness 与流 epoch、D3.3 回填与实时边界（`design/diagrams/03-observation-ingest.md`）。
+> 图：D3.2 readiness 与流 epoch、D3.3 回填与实时边界（`design/diagrams/03-observation-ingest.md`）；健康面的会话状态见 D1.3（`01-process-topology.md`）。
 
 **回填**（P5）是 IDL 读操作 `backfill(stream, window) → Covered{records, covered_to} | Unavailable | Refused`（§8.2）。
 
@@ -483,10 +484,10 @@
 
 **readiness 状态机**（按集成 × 流）：
 
-- `Starting → Backfilling{through: Seq} → Live`。
+- `Starting → Backfilling{through} → Live`。`through` 是本次回填从起点起已由读结论记录证明的连续覆盖上界，用与回填窗口、`live_from` 相同的该流坐标（不是核心分配的 `Seq`）：尚未覆盖时为起点，此后是最近一次成功的 `covered_to`；`Refused` 与 `backfill_incomplete` 标出的缺口不推进它。
 - 该流无回填可做时 `Starting → Live`：握手以 venue 游标证明续接原 epoch（§8.2 `handshake`），或能力不支持回填（断代只能标 gap）。
 - 任一状态可进 `Disconnected{since}`；重连回 `Starting`（新 `session_seq`）。集成离开 `Established` 后自己推不了记录，所以它各流的 `Disconnected` 由核心 append，旧的 `Live` 不会继续显得在线。
-- `Degraded{reason}` 是 `Live` 的子态（能力收紧、配额受限），不改变记录接受条件，也不阻断写：发出前门只看会话与能力（§6.5）。
+- `Degraded{reason}` 是 `Live` 的子态，由集成上报（上游服务降级、上游限流、该流能力收紧），不改变记录接受条件，也不阻断写：发出前门只看会话与能力（§6.5）。它与核心按声明配额把订阅挂起（原因 `QuotaExceeded`，§8.5）互相独立：`Degraded` 不使超配的订阅恢复路由。
 - readiness 变化是派生健康观察，不需确认。
 
 **健康面**（P16）[设计]：每个登记的集成一份 `IntegrationHealth`，只由健康观察 fold 出，经读模型对解释层可见（§8.5）。
@@ -502,7 +503,7 @@
 - **目标**是调用显式寻址的对象：`submit`、`cancel`、`query_by_key`、`list_open`、`list_fills`、`replay_by_key` 的目标是 `WriteScope`（按作用域寻址，或经 `AttemptRef` 所在 lane）；`read`、`backfill` 的目标是逻辑流 `(source, stream)`。不从 `WriteScope.streams` 推定某条流属于哪个作用域。
 - **计入**：核心向集成实际发出、结果属当前会话而被接受的调用；每个最终结果恰推进一次它的目标，并 append 一条健康观察。握手不计（由 `session` 表达）；推送、`Attributed`、`Manual` 与 `CrashWindow` 都不是调用结果；无会话时没有发出的调用不计。
 - **失败** = `Unavailable`、`NoResponse`：`consecutive_failures` 加一。
-- **成功** = 其余每个封闭结果，含空 `Records`、`Reject`、`Refused`、`Absent`、`Inconclusive`：上游给出了回答。`consecutive_failures` 归零，`last_success_at` 取该结果被接受的时刻。它回答“这个目标最近一次得到上游回答是什么时候”，不表示业务成功。
+- **成功** = 其余每个封闭结果，含空 `Answered`、记录集为空的 `Covered`、`Reject`、`Refused`、`Absent`、`Inconclusive`：上游给出了回答。`consecutive_failures` 归零，`last_success_at` 取该结果被接受的时刻。它回答“这个目标最近一次得到上游回答是什么时候”，不表示业务成功，也不表示历史已取全。
 - 从未成功过的目标没有 `last_success_at`。计数跨会话、跨核心重启延续：健康观察是记录，fold 即得。
 
 由此“公共可用、私有失败”可以观察：公共流这一目标最近成功，某个作用域这一目标连续失败；逐流 readiness 另给流一级。它只说各个被调用目标自己的近况，不推断整个账户或鉴权域是否可用。
@@ -545,7 +546,7 @@
 `selector` 有两种，互斥：
 
 - **观察流**：`(来源, 流, 主体集?)`。主体是该流种类的订阅主体（如 instrument 身份）；不带主体集即订整条流。
-- **执行事实**：`(来源, WriteScope?)`：该来源（或其一个作用域）的执行事实，包括单据记录、Decision/`Outcome`/`Rejection`、`Prepared` 起的链与腿记录、`ResolutionEvidence`、`ReconciliationReopened`、取证 `Gap{origin: Channel}`、`CapabilityObserved`，以及该来源的声明版本（§7.5）。执行事实按 `WriteLaneKey` 各成一条流、每个来源的声明版本成一条流，都有 `LogPosition`，所以 cursor 与确认与观察订阅同一套（§4.2）。
+- **执行事实**：`(来源, WriteScope?)`：该来源（或其一个作用域）的执行事实，包括单据记录、Decision/`Outcome`/`Rejection`、`Prepared` 起的链与腿记录、`ResolutionEvidence`、`ReconciliationReopened`、取证 `Gap{origin: Channel}`、`CapabilityObserved`，以及该来源的声明版本（§7.5）。执行事实按 `WriteLaneKey` 各成一条流，针对 `(WriteLaneKey, OperationKind)` 的 `CapabilityObserved` 随该 lane 的流；每个来源的声明版本与针对其逻辑流读 / 回填能力的 `CapabilityObserved` 同成该来源的一条声明流。带 `WriteScope` 的订阅得到该作用域各 lane 的流与该来源的声明流。这些流都有 `LogPosition`，所以 cursor 与确认与观察订阅同一套（§4.2）。
 
 - 动作轴：非动作。
 - 核心内部结果：
@@ -573,10 +574,11 @@
 - 核心内部结果：每个 target 至多一次集成 `read`（同 identity 的在途请求可合并，§2.2），`origins` 含 `Session(principal)`；作答时 item 记录与读结论记录按 §8.2 append。
 - `TargetResult`，各 target 独立，逐项判定顺序即 §8.2 `read` 的“核心不调用集成的情形”：
   - `UnknownTarget`：来源未登记；
-  - `Unavailable{source_state}`：来源从未有过声明版本，或此刻没有已建立的会话。`source_state` 是该来源的会话状态（§7.2），供解释层区分“重连中”与“需要处理”；核心不调用集成、不记 gap；
+  - `Unavailable{source_state}`：来源从未有过声明版本；
   - `Unsupported`：流不在最近的声明版本里，或最近的声明版本对该流的 `read` 为 `Unsupported`；
   - `Unconfirmed`：最近的声明版本对该流的 `read` 为 `Unknown`；
   - `InvalidRequest{reason}`：请求不合 `request_schema`、所依据的 schema 身份与当前声明不一致（解释层应重取 `sources`），或 `range` 用在无事件时间的流上；
+  - `Unavailable{source_state}`：来源此刻没有已建立的会话。`source_state` 是该来源的会话状态（§7.2），供解释层区分“重连中”与“需要处理”；这一项与“从未有过声明版本”都不调用集成、不记 gap；
   - 调用之后：`Answered{conclusion, items}`（`conclusion` 是读结论记录的位置，`items` 是本次 item 记录及其位置，可以为空）、`Refused{conclusion, reason}`、`Unavailable`（该流上已记 `Gap{origin: Channel}`）；`deadline` 内未返回的 target 为 `Unavailable`，迟到的回答照常 append。
 - 一个来源不可用不影响其余 target（Q15）；“不支持”“能力未确认”“没有会话”“上游拒绝”与空回答彼此可区分（Q16）。
 
@@ -585,7 +587,7 @@
 **读模型**：`read_model(kind, as_of?) → Snapshot{value, as_of?, gaps?}`。
 
 - 动作轴：读（核心内 fold）。核心内部结果：无。
-- 错误：`kind` 未定义 → 拒绝；`as_of` 未达 → `NotYetAvailable{frontier}`；对只给当前态的种类（`tickets`、`subscriptions`）带历史 `as_of` → 拒绝。读模型非权威（§4.4）；种类与各自的输入见下文“读模型集合”。
+- 错误：`kind` 未定义 → 拒绝；`as_of` 未达（其中有位置在所涉流上尚未提交）→ `NotYetAvailable{positions}`，带所涉各流当前已提交的流末位置，观察流与执行事实流同一判定；对只给当前态的种类（`tickets`、`subscriptions`）带历史 `as_of` → 拒绝。`as_of` 的位置都已提交而事件时间尚不完备时照常 fold，完备与否由完整界与 `gaps` 表达；观察历史已低于保留边界不属未达（§2.4）。读模型非权威（§4.4）；种类与各自的输入见下文“读模型集合”。
 
 **单据组**：`draft(intent) → TicketId`；`revise(ticket, expected_version, diff)`；`submit_for_decision(ticket, expected_version)`；`decide(ticket, expected_version, Approve | Reject(reason))`；`send_back`；`withdraw`；`transfer(ticket, to: principal)`。
 
@@ -623,7 +625,7 @@
 - 动作轴：写（append `ResolutionEvidence::Manual` / `ReconciliationReopened{Manual}`）。
 - `resolve` 的核心内部结果：
   - append `ResolutionEvidence{attempt, Manual, round, outcome}`，带 principal 与 `note`。
-  - `Found` 的 `evidence` 取被引用观察记录当时的载荷与该记录保留的原始负载（`Evidence`，§6.5）。被引用记录通常先经 `read` 造出；观察副本可压缩，`evidence` 永存。
+  - `Found` 的 `evidence` 取被引用观察记录当时的载荷与该记录保留的原始负载（`Evidence`，§6.5）。被引用记录通常先经 `read` 造出；该观察记录可压缩，`evidence` 永存。
   - 该腿终结后重算整条链：链 `Resolved` 才从 lane 阻塞头集合移出，集合为空才解除（§6.4、§6.5）。撤单腿的 `Manual Found` 使链进入 `AwaitingTargetTerminal`，仍占阻塞头。
 - `retry_reconciliation` 的核心内部结果：重开一轮自动取证（新 `round`，旧轮在途响应不计入，§6.6）。
 - 错误：
@@ -647,12 +649,12 @@
 - `lanes`：每 lane 的未终结 Attempt 与 `Undetermined` 列表，执行事实的 fold。
 - `tickets`：单据 fold 的当前态（§6.2）：执行事实 + 其 `basis_validity` 与 `alignment` 的当前评估。逐版本给出 fold 到的理由（退回原因、否决原因、规则 `Rejection` 及其违反项），以及当前版本的参数有效性（§6.2）。评估还取决于完备位置、撤回、保留边界与当时生效的能力证据和策略（§6.2、§6.3），所以这一种只给当前态；`Snapshot` 仍带它实际消费的位置（含 `checked_as_of`）供追溯，但那不是可重建的切面。
 - `subscriptions`：订阅表与 cursor 的当前态（§7.5）。订阅表不是 `Journal`，没有历史切面，所以这一种只给当前态：它的 `Snapshot` 不带 `as_of`、不带 `gaps`，每个订阅已确认的 cursor 在 `value` 里给出。
-- `sources`：按已有声明版本的来源，其最近声明版本（作用域及 `account_ref`、`label`，流声明，写能力，配额，扩展 schema 身份）再 fold 其后的 `CapabilityObserved`，即写门与读路由此刻使用的能力；每个 `account_ref` 是否可解析及原因（§2.2）。它只 fold 执行事实，可按历史 `as_of` 读取；历史切面只含该切面上已有声明版本的来源。来源的会话状态不在其中，在 `health`。
+- `sources`：按已有声明版本的来源，其最近声明版本（作用域及 `account_ref`、`label`，流声明，写能力，配额，扩展 schema 身份）再 fold 引用该版本的 `CapabilityObserved`（§7.5），即写门与读路由此刻使用的能力；每个 `account_ref` 是否可解析及原因（§2.2）。它只 fold 执行事实，可按历史 `as_of` 读取；历史切面只含该切面上已有声明版本的来源。来源的会话状态不在其中，在 `health`。
 - `health`：健康观察的 fold（§8.3、§8.4）：集成推送的 readiness，与核心 append 的会话状态、`Disconnected` 与调用结果计数。
 
 理由：持仓、订单状态、健康的原值在上游或来自观察，读模型只能 fold 已观察到的记录；lane 与单据是 UTA 自己的执行事实。读模型读观察记录，是效应侧读观察侧的同一条单向边（§3.2）。
 
-`orders`、`positions`、`lanes`、`health`、`sources` 的每个 `Snapshot` 带 `as_of: Set<LogPosition>`（fold 吃到的位置集，可跨观察与执行事实两个 `Journal`）与 `gaps`（该范围内生效、未被回填补齐的 `Gap` 记录），可按历史 `as_of` 读取。消费者把 `as_of` 与自己的 cursor 比对，即知快照含哪些记录。
+`orders`、`positions`、`lanes`、`health`、`sources` 的每个 `Snapshot` 带 `as_of: Set<LogPosition>`（fold 吃到的位置集，可跨观察与执行事实两个 `Journal`）与 `gaps`（该 fold 所依赖的观察输入在该范围内生效、未被回填补齐的 `Gap` 记录），可按历史 `as_of` 读取。只 fold 执行事实的 `lanes`、`sources` 没有观察输入，`gaps` 为空；取证渠道的 `Gap{origin: Channel}` 仍是执行事实，经执行事实订阅可见。消费者把 `as_of` 与自己的 cursor 比对，即知快照含哪些记录。
 
 原始记录是消费契约：观察记录与执行事实都可订阅（订阅组），消费方可以自行 fold。`orders`、`positions`、`lanes`、`health` 是对 `as_of` 以内原始记录的确定性 fold，与对同一记录集的独立 fold 相等（验收 §10.5 #18）；`sources` 同样是对执行事实的确定性 fold，验收见 §10.5 #25。`tickets` 与 `subscriptions` 只给当前态，不在此等式内。
 

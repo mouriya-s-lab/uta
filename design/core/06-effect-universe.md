@@ -28,13 +28,13 @@ Emit(EffectRequest { effect_kind: EffectKind, payload: Bytes, basis: Basis, key:
 - 立即执行一次核心→集成的 `read`（§8.2）。
 - 集成作答（含上游明确拒绝）时，该流上同一事务 append 作答的 N 条观察记录与一条读结论记录（§8.2），出处 `OneShot{origins ∋ Request(该 EffectRequest 记录的 LogPosition), request}`（§3.4）。
 - 程序按位置推进看到作答的记录：闭环走观察侧。
-- `Unavailable` → 观察侧 `Gap{origin: Channel}`。核心未调用集成的情形（流未声明、最近有效声明为 `Unsupported` 或 `Unknown`、来源无当前会话、请求不合 schema、来源未登记，判定顺序见 §8.5 一次性读）不调用、不 append 观察记录。
+- `Unavailable` → 观察侧 `Gap{origin: Channel}`。核心未调用集成的情形（来源未登记、来源从未有过声明版本、流未声明、最近有效声明为 `Unsupported` 或 `Unknown`、请求不合 schema、来源无当前会话，判定顺序见 §8.2 `read`、§8.5 一次性读）不调用、不 append 观察记录。
 - 读处理器**不自行重试**：一条请求一次执行，是否再请求由程序看到结果 / gap 后决定。读可重试的主体是发起者（§3.4）。
 
 **写处理器：**
 
 - 请求被当作 Intent，进入单据 → STS → IO 壳的完整效应路径；结果是执行事实与决议记录。
-- **构造**：写处理器从请求载荷构造意图，只要求意图的锚点（§8.1）：`WriteLaneKey`、交易协议的操作种类之一、`basis`，撤单 / 改单 / 平仓还要 `target`（§6.2）。锚点构造不出（缺锚点、操作种类不在交易协议的封闭集合内、平仓所指的持仓观察记录取不出 `PositionRef`，§6.2）即不是意图，不开单，记 `NotDrafted(Malformed{reason})`（见下）。参数（守卫字段与载荷）不在构造时判定：参数是否合规是单据 fold 的状态，送审时由输入约束步否决（§6.2、§6.3），所以程序发出的非法参数与人起的非法参数得到同一对记录（意图 + 否决，Q8）。[设计]
+- **构造**：写处理器从请求载荷构造意图，只要求意图的锚点（§8.1）：`WriteLaneKey`、交易协议的操作种类之一、`basis`，撤单 / 改单还要 `target: VenueRef | IdemKey`；平仓的 `target: PositionRef` 由核心从 `basis` 所指的持仓观察记录构造（§6.2）。锚点构造不出（缺锚点、操作种类不在交易协议的封闭集合内、平仓所指的持仓观察记录取不出 `PositionRef`，§6.2）即不是意图，不开单，记 `NotDrafted(Malformed{reason})`（见下）。参数（守卫字段与载荷）不在构造时判定：参数是否合规是单据 fold 的状态，送审时由输入约束步否决（§6.2、§6.3），所以程序发出的非法参数与人起的非法参数得到同一对记录（意图 + 否决，Q8）。[设计]
 - **负责人**：写处理器以程序的**装载 principal**（装载该程序的人或服务账户）为 `responsible` 开单（§6.2）。程序本身不是 principal。
 - 该 principal 的授权范围决定单据能否不经人工直接放行（授权步，§6.3）。
 - 开单的 `Draft.basis` 含该 `EffectRequest` 记录的位置：执行事实侧位置作因果依据（§5.1）。
@@ -45,13 +45,13 @@ Emit(EffectRequest { effect_kind: EffectKind, payload: Bytes, basis: Basis, key:
 
 - 每条被处理的 `EffectRequest` 恰有一条执行事实记录 `EffectResponse{request: LogPosition, outcome}`。
 - `outcome` 按处理器分：
-  - 读处理器：`Concluded(conclusion: LogPosition)`（读结论记录，含零条结果与上游拒绝）| `Unavailable(gap: LogPosition)` | `NotCalled(reason)`，`reason ∈ {Unsupported, Unconfirmed, NoSession, InvalidRequest, UnknownTarget}`（§8.5 一次性读）；
+  - 读处理器：`Concluded(conclusion: LogPosition)`（读结论记录，含零条结果与上游拒绝）| `Unavailable(gap: LogPosition)` | `NotCalled(reason)`，`reason ∈ {Unsupported, Unconfirmed, NoSession, InvalidRequest, UnknownTarget}`（§8.5 一次性读；来源从未有过声明版本与此刻无已建立会话同为 `NoSession`，对应 §8.5 的 `Unavailable{source_state}`）；
   - 写处理器：`Drafted(ticket_id)` | `NotDrafted(Malformed{reason})`。
 - `EffectResponse` 与产生它的读结论记录 / `Gap` / `Draft` 同一事务 append；`NotCalled` 与 `NotDrafted` 没有伴随记录，`EffectResponse` 单独 append。
 - 理由：观察记录可压缩（§2.4），`EffectRequest` 永存（§7.5）；“是否已处理”必须能从与请求同寿命的事实重建。
 - `Concluded` 引用的读结论记录落到保留边界下后，`EffectResponse` 仍成立，不钉住保留。
 - `Unhandled` 请求没有 `EffectResponse`，也不重派。
-- **程序看得到自己的响应** [设计]：程序解释②可以匹配该程序自己发出的请求的 `EffectResponse`（执行事实，属效应侧；决策半边本就是对日志的 fold）；解释①的节点不消费 `EffectResponse`。理由：未调用、零条结果与 `NotDrafted` 都不产生观察记录，程序只有经响应才看得到它们，而伪造观察记录去承载它们会把效应侧结论放进观察宇宙。
+- **程序看得到自己的响应** [设计]：程序解释②可以匹配该程序自己发出的请求的 `EffectResponse`（执行事实，属效应侧；决策半边本就是对日志的 fold）；解释①的节点不消费 `EffectResponse`。理由：未调用与 `NotDrafted` 都不产生观察记录，程序只有经响应才看得到它们，而伪造观察记录去承载它们会把效应侧结论放进观察宇宙。
 
 **请求与响应的关联是引用，不是事务。** `EffectRequest` 记录随程序 `Advance` 输出持久化（§8.6），处理器在其后执行。核心重启时 fold 出**无 `EffectResponse`** 的已注册请求（§9.2 #21）：
 
@@ -93,7 +93,7 @@ Emit(EffectRequest { effect_kind: EffectKind, payload: Bytes, basis: Basis, key:
 
 ## 6.2 单据 `Ticket`
 
-> 图：D5.1 单据状态机、D5.5 两层对账重算（`design/diagrams/05-ticket-and-sts.md`）。
+> 图：D5.1 单据状态机、D5.2 意图构造与参数合规、D5.5 两层对账与检查目录重算（`design/diagrams/05-ticket-and-sts.md`）。
 
 单据是意图形成期的抽象，它的锁 = 责任持有。
 
@@ -195,7 +195,7 @@ IO 壳不知道单据的存在。
   - 从 `Draft` 起即求值，每次 `Revise` 对完整的新版本重算（不只校验 diff），能力证据变化时重算；负责人与审批人经读模型 `tickets` 看得到（§8.5）。
 - **在哪里否决。** 输入约束步（§6.3）无条件读取它：不是 `Valid` 即 `Rejection`（带违反项，或 `NotSupported` / `SchemaMismatch`）+ `Close(DecisionRejected)`。它不是检查项，策略不能把它降为 advisory。草稿可以带着不合规的参数保存与修改，送审之前没有任何外部写；不合规的版本一经送审必得一对记录：意图与否决（Q8）。放行之后到发送之间 schema 声明若变，发出前门再核对一次（§6.5）。
 - **核心仍不解释载荷。** 这是协议输入边界上的形状校验：核心按 schema 判定合不合规，不读取载荷里的值参与任何计算；没有处理器读的参数校验之后原样交给集成（§2.1）。意图参数 schema 是 UTA 的契约，不是上游请求格式。
-- **构造不出的不是意图。** 缺锚点（`WriteLaneKey`、操作种类、`basis`；撤单 / 改单 / 平仓的 `target`）、操作种类不在交易协议的封闭集合内，或平仓所指的持仓观察记录取不出合规的 `PositionRef`（见“交易协议”），意图构造不出，不开单：会话的 `draft` 得 `Rejected(Malformed)`、不 append 任何记录（与畸形记录在入口被拒同理，§2.1）；程序的请求得 `EffectResponse{NotDrafted(Malformed)}`（§6.1）。
+- **构造不出的不是意图。** 缺锚点（`WriteLaneKey`、操作种类、`basis`；撤单 / 改单的 `target`）、操作种类不在交易协议的封闭集合内，或平仓所指的持仓观察记录取不出合规的 `PositionRef`（平仓的 `target` 由核心从该记录构造，见“交易协议”），意图构造不出，不开单：会话的 `draft` 得 `Rejected(Malformed)`、不 append 任何记录（与畸形记录在入口被拒同理，§2.1）；程序的请求得 `EffectResponse{NotDrafted(Malformed)}`（§6.1）。
 
 理由：程序不可信、会输出非法值（H2），只在解释层校验就留下程序这条绕过口；而参数到了集成才被发现不合规，集成只能在 `SendBarrier` 之后本地拒绝，按契约记 `NoResponse` → `Undetermined`（§8.3），一笔确未发出的单就占住 lane、要人工决议。参数合规作为单据状态，既让负责人在草稿期就看到问题，又让所有来源在同一步得到同一对记录。
 
@@ -324,7 +324,7 @@ IO 壳不知道单据的存在。
 - 不选：
   - **不设平仓操作种类，平仓一律是下游组装的反向下单**：按持仓身份平仓的上游从此不可达，不增仓的保证对 UTA 与下游都不可见。
   - **反向下单 + UTA 发送前重查持仓**：把本地观察当作权威（§0.1），读与执行之间仍可穿过零。
-  - **按 instrument 在目录观察上声明“此处平仓不增仓”**：保证只对部分品种成立的来源因此仍可平那些品种；但不增仓是安全断言，放在观察上就随观察的新鲜度成立，陈旧的观察会把一次普通反向单当成有锁的平仓。保证只对部分品种成立的来源声明 `Unsupported`，代价是那些品种的平仓由下游自己组装。
+  - **按 instrument 在目录观察上声明“此处平仓不增仓”**：保证只对部分品种成立的来源因此仍可平那些品种；但不增仓是安全断言，放在观察上就随观察的新鲜度成立，陈旧的观察会把一次普通反向单当成有锁的平仓。保证只对部分品种成立的来源以 schema 把接受域收窄到有上游保证的请求，否则声明 `Unsupported`；接受域之外的品种由下游自己组装平仓。
 
 **改单是单一意图类型 `Replace`，不是两张单据。**
 
@@ -338,7 +338,7 @@ IO 壳不知道单据的存在。
 
 - 执行侧 `ResolutionEvidence` 的 found/absent 回答“我的提交到达了吗”。
 - 派生侧观察记录反映目标订单的终态与累计成交量。
-- 二者来自同一次 venue 交互：`Found` 时同一事务落执行侧一条记录与观察侧该回应的观察记录（订单状态，及每笔可识别执行一条成交记录，§6.5、§8.1），`Found` 以位置引用命中的那条观察记录，`Evidence`（契约载荷与原始负载）留在执行侧（记录模型，§6.5）。
+- 二者来自同一次 venue 交互：`Found` 时同一事务落执行侧一条记录与观察侧该回应的观察记录（回应含订单状态时订单状态一条，及每笔可识别执行一条成交记录，§6.5、§8.1），`Found` 以位置引用命中的那条观察记录，`Evidence`（契约载荷与原始负载）留在执行侧（记录模型，§6.5）。
 
 **检查目录** [设计]。交易协议的第二层检查项是下表这个闭合集合（`CheckName` 按操作种类闭合，§7.7）。每项对同一组记录与同一组参数给出同一结果；数值一律按精确有理数计算（§2.6），不做舍入。“最近观察”指该流当前流末的 `fold_state` 中该主体最近的记录（见“两层对账”）。
 
@@ -559,7 +559,7 @@ lane 是对 venue 写入通道的有序队列，= unknown 阻塞半径。
 **等待机理。** lane 上有未终结 Attempt（最长的情形是队首 `Undetermined`）时，后续意图必须等待。
 
 - 原因：**后续写入的语义依赖队首结果**，即同账户 buying power、待撤订单是否存在、venue 侧顺序。这是与 venue 的通讯协议语义，而非数据库层面的并发互斥。
-- **等待发生在 `Prepared` 之前**：等待者是 `AwaitingDecision` 的单据，不是已放行的记录。因此正常路径下同 lane 至多一条未终结 Attempt；`Prepared` 一旦 append 即由 IO 壳紧接执行。
+- **lane 阻塞头等待发生在 `Prepared` 之前**：等待者是 `AwaitingDecision` 的单据，不是已放行的记录。因此正常路径下同 lane 至多一条未终结 Attempt；`Prepared` 一旦 append 即交给 IO 壳，过发出前门即发；门的会话或能力条件不成立时，腿在门前等待，仍是阻塞头（§6.5）。
 - 等待期间单据的 `basis_validity`/`alignment` 照常重算（偏离是状态，§6.2）。放行时链先过过期步，再过依据有效性门。
 - 等待超过 `deadline` 由过期步 `Close(Expired)` 终结。
 
@@ -613,7 +613,7 @@ lane 的键取自握手 `WriteScope`，因为核心不知道也不该知道上�
 
 ## 6.5 IO 壳：两阶段、腿与链、转移表
 
-> 图：D6.1 腿的状态机、D6.3 一次交互的记录矩阵、D6.4 `Replace` 复合链（`design/diagrams/06-io-shell-attempt.md`）。
+> 图：D6.1 腿的状态机、D6.3 一次交互的记录矩阵、D6.4 `Replace` 复合链（`design/diagrams/06-io-shell-attempt.md`）；D7.1 恢复时的发出前门（`07-crash-recovery.md`）。
 
 ### 两阶段协议与它的位置
 
@@ -681,7 +681,7 @@ IO 壳不是“调用 venue 的那个函数”，而是效应侧的解释器：`
 关联身份：
 
 - 腿级记录与取证渠道的 `Gap{origin: Channel}` 都带 `AttemptRef`（见下“代数”）。
-- `CapabilityObserved` 是能力证据，带 `(WriteLaneKey, OperationKind)`，不属于任何 Attempt（§7.5）。
+- `CapabilityObserved` 是能力证据，带 `(WriteLaneKey, OperationKind)` 或逻辑流 `(source, stream)` 的读 / 回填能力，以及它所更新的声明版本（被接受的推送或回应所携的 `SessionEpoch`），不属于任何 Attempt（§7.5）。
 
 `Undetermined` 的 `reason` 封闭为两种，二者进入同一对账驱动，只是审计出处不同：
 
@@ -727,7 +727,7 @@ venue 对我方写的响应是执行事实：C13 原始负载完整保留，执�
 
 **`round`** 是该次取证**发起时**所属的轮次：最近一条 `ReconciliationReopened` 的位置，首轮为空。`Attributed`/`Manual` 取 append 时的当前轮。
 
-观察侧那条记录落到保留边界下后，执行侧的 `Evidence` 仍在。审计读执行事实，不依赖观察副本。
+观察侧那些记录落到保留边界下后，执行侧的 `Evidence` 仍在。审计读执行事实，不依赖可压缩的观察记录。
 
 ### 代数：Attempt、腿、`AttemptRef`
 
@@ -832,11 +832,11 @@ venue 对我方写的响应是执行事实：C13 原始负载完整保留，执�
 | # | 事件 | 结果 |
 |---|---|---|
 | (i) | 目标订单终态观察到达 | 按意图口径算新腿数量：> 0 → 新腿（`leg = 2`）过发出前门，之后同单腿；= 0（口径为剩余量且目标已全部成交）→ 链 `Resolved`，无新腿记录 |
-| (ii) | 读返回目标存在但非终态；状态映射为 `unknown`/`Unmapped(raw)`；或未见目标 | 保持等待，按 pacing 再读 |
+| (ii) | 读返回目标存在但非终态；状态映射为 `unknown`/`Unmapped(raw)`；未见目标；或上游拒绝这次读（`Refused`，已记读结论记录） | 保持等待，按 pacing 再读 |
 | (iii) | 读返回 `Unavailable` | `Gap{origin: Channel}`，再读 |
 | (iv) | 意图 `deadline` 到期 | append `Expired(deadline)`（`leg = 2`），链 `Resolved`；新腿永不发、不补偿（H6） |
 
-- (i) 的目标终态观察有三种来源：撤单腿回执 / 取证观察本身已含目标终态（`cumulative_filled_quantity`）；带 `attribution` 指向目标的推送观察；IO 壳按目标身份的一次性读。一次性读在 `target` 为 `IdemKey` 时用 `query_by_key`，为 `VenueRef` 时用 `read(orders, venue_order_id)`；均为读、可重试、有 pacing。
+- (i) 的目标终态观察有三种来源：撤单腿回执 / 取证观察本身已含目标终态（`cumulative_filled_quantity`）；带 `attribution` 指向目标的推送观察；IO 壳按目标身份的一次性读。一次性读在 `target` 为 `IdemKey` 时用 `query_by_key`；为 `VenueRef` 时对候选流发 `read`（§8.2），请求带该 `venue_order_id` 与当前 `request_schema` 身份。候选是目标作用域所挂（`WriteScope.streams`）、种类为订单状态、当前能力证据中 `read` 为 `Supported` 且请求 schema 能表达 `venue_order_id` 的流，不限一条；每轮按声明顺序各读一次，某条空答、非终态、`Refused` 或 `Unavailable`（记 `Gap{origin: Channel}`）不妨碍读其余候选，本轮无命中则按 pacing 再读。命中须是同一作用域下该目标订单、带 `cumulative_filled_quantity` 的终态观察。没有候选流时只等回执与推送。均为读、可重试、有 pacing；出口仍只有目标终态与 `deadline`。
 - (ii) 中 `unknown`/`Unmapped(raw)` 不冒充终态（C13）；listing / 一次性读未命中不证明不存在（F10）。
 - (iv) 的到期在等待期间由发出前门的同一时钟检查。
 - 集成无已建立会话时，IO 壳不发 (i) 的一次性读、也不记 (iii) 的 gap（同 §6.6 无会话不取证）；链照常等待，`deadline` 照常生效。

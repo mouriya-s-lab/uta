@@ -94,7 +94,7 @@
 - 选中：成交记录带上游证明的执行身份 `execution_id`（来源 × 作用域内唯一、跨渠道不变）与可选修订号；按执行计数的 fold 每个身份至多贡献一次，同身份内容只按修订取值，冲突与无身份照实标出、不计入；成交是逐笔增量，订单状态是累计快照，二者不互相推算；无合格身份的来源不声明成交种类。
 - Q 场景后果：Q1/Q5：同一笔执行经推送、回执、`list_fills`、`read`、回填到达，读模型与自行 fold 的消费者都只计一次；Q16：无身份来源对成交的读得 `Unsupported`，不是空结果。
 - 不选：
-  - 按 venue seq 去重：venue seq 可无（P2），也不跨渠道；一次性读、回执、取证副本本就是同一执行的另一条记录；
+  - 按 venue seq 去重：venue seq 可无（P2），也不跨渠道；一次性读、回执、取证得到的成交本就是同一执行的另一条记录；
   - 以时间、价格、数量的散列合成身份：同一毫秒两笔相同成交被并掉，不同渠道的时间精度把一笔拆成两笔；
   - 同身份内容不同时按到达先后取值：迟到的旧读结果会覆盖新推送，两个实现得出两种结果；
   - 从成交累加订单或持仓数量：那是上游原值的本地拷贝（§0.1），`positions` 只 fold 持仓观察（§8.5）。
@@ -511,13 +511,13 @@
     - 带状态程序在若干次 `Advance` 后重启，`Load` 最近已提交的 `Checkpoint`，并从与之同事务持久化的 cursor 续读，不重复 `Emit`；
     - 在 `Advance` 输出持久化前崩溃，则该批记录整批重放，且无重复 `Emit`；
     - 在 `EffectRequest` 提交后、`EffectResponse` 持久化前崩溃，重启后每条请求恰得一条 `EffectResponse`，写请求至多一张 `Draft`；
-    - 读响应的观察副本被压缩后重启，不重派（§9.2 #21）；
+    - 读结论记录被压缩后重启，不重派（§9.2 #21）；
     - `state_version` 不兼容时显式 `Reset` 记录，而非静默丢失。
 17. **取证记录矩阵**（§6.5、§6.6）：任一取证渠道的一次 venue 交互，按结果恰产生：（对应 Q3/Q27）
-    - `Found` → 该回应的观察记录（观察 J：订单状态，及每笔可识别执行一条成交记录，§8.1；带 `attribution`/`provenance: Reconciliation{AttemptRef, channel}`）+ 一条 `ResolutionEvidence{Found{observation, evidence}}`（执行 J，含 `Evidence`：契约载荷与原始负载），同一事务；
+    - `Found` → 该回应的观察记录（观察 J：回应含订单状态时订单状态一条，及每笔可识别执行一条成交记录，§8.1；带 `provenance: Reconciliation{AttemptRef, channel}`，`attribution` 按各条自己的关联证据）+ 一条 `ResolutionEvidence{Found{observation, evidence}}`（执行 J，含 `Evidence`：契约载荷与原始负载），同一事务；
     - `Absent`/`Inconclusive` → 仅一条 `ResolutionEvidence`；
     - `Unavailable` → 仅一条 `Gap{Channel}`，不推进渠道；
-    - 观察副本落到保留边界下后，执行 J 的 `Evidence` 仍可读。
+    - 该回应的观察记录落到保留边界下后，执行 J 的 `Evidence` 仍可读。
 18. **读模型可重建**（§4.4、§8.5）：`orders`、`positions`、`lanes`、`health` 的任一 `Snapshot{value, as_of, gaps}` 与对同一原始记录集（≤ `as_of`）的独立 fold 结果相等；`positions` 不含从成交推算的值；`tickets`、`subscriptions` 带历史 `as_of` 的请求被拒；`as_of` 与订阅 cursor 可比对；断连重连后重复只出现在未确认区间，且按 `LogPosition` 去重后与不断连时结果相同。（对应 Q29/Q31）
 19. **秒级负载不落后**（§4.3、§7.4、§7.1）：以 Q24 沟通场景规模（约 1500 流选 15、24 h 逐秒）构造 Q22 负载：（对应 Q22、B1）
     - 秒级 bar 的清洗 + 增量指标在下一根 bar 到达前完成，积压不随时间增长，分发不阻塞清洗；
@@ -560,12 +560,13 @@
 27. **一次性读的形状与结果**（§8.2、§8.5）：（对应 Q15/Q16）
     - 参数不合流的 `request_schema`、所依据的 schema 身份与当前声明不符、`range` 用在无事件时间的流上：得 `InvalidRequest`，集成未被调用；
     - 空回答得 `Answered` 且只有一条读结论记录；非空回答的 item 记录与读结论记录同一事务 append，结论引用的恰是本次 item 的位置；另一个订阅该流的消费者在 cursor 流里看到同一条结论；
-    - 来源未登记、从未有声明、流未声明、`read` 为 `Unsupported`、为 `Unknown`、无已建立会话、上游明确拒绝、调用后 `Unavailable`，八种情形的结果两两可区分；前六种与“无会话”都不调用集成、不 append 观察记录，“无会话”不计入健康的连续失败；
+    - 分别触发来源未登记、从未有声明、流未声明、`read` 为 `Unsupported`、为 `Unknown`、无已建立会话、上游明确拒绝、调用后 `Unavailable`：结果依次为 `UnknownTarget`、`Unavailable{source_state}`、`Unsupported`、`Unsupported`、`Unconfirmed`、`Unavailable{source_state}`、`Refused`、`Unavailable`，不同结果之间可区分；前六种都不调用集成、不 append 观察记录，“无会话”不计入健康的连续失败；
     - 无作用域的公共来源可按流读取与订阅，不出现在账户列表里；
     - 同一 identity 的两个在途请求可合并为一次集成调用，读结论的 `origins` 含两者，较短的 `deadline` 照常到期；跨会话 epoch 的请求不合并。
 28. **读侧声明：配额、回填、数据等级**（§2.2、§8.2、§8.4、§8.5）：（对应 Q13/Q14）
     - 同一流同一主体被两个 principal 订阅，配额用量只计一次；配额池里的流上的整流订阅被拒；重新握手使上限变小后，按创建先后保留、超出者转挂起（原因 `QuotaExceeded`），集成不收到超限主体，有余量时按同一顺序恢复；
-    - 回填：注入任一页失败得 `Unavailable` 且无记录 append；上游历史穷尽时 `covered_to` 为连续前缀，未覆盖区间以 `Gap{Source, backfill_incomplete}` 标出；崩溃重启后从最近的读结论接着请求，同 epoch 无重复记录；
+    - 回填：注入任一页失败得 `Unavailable`：不 append 部分页的记录，也不 append 读结论记录，按失败契约记 `Gap{origin: Channel}` 与健康观察；上游历史穷尽时 `covered_to` 为连续前缀，未覆盖区间以 `Gap{Source, backfill_incomplete}` 标出；崩溃重启后从最近的读结论接着请求，同 epoch 无重复记录；
+    - 回填：fixture 上游明确拒绝一个未覆盖到 `live_from` 的窗口（`Refused`）：该流上只有一条拒绝的读结论记录、没有结果项、不记 `Gap{origin: Channel}`，未覆盖区间以 `Gap{Source, backfill_incomplete}` 标出，readiness 的 `through` 不前进；健康把这次 `Refused` 计为成功回答；
     - 声明的名义数据等级与记录上报告的实际等级不同时，下游对该记录显示记录上的等级。
 29. **执行事实订阅**（§8.5）：（对应 Q9/Q29）
     - 从起点订阅某来源的执行事实，fold 得到的 `lanes` 与 `read_model(lanes)` 相等；
@@ -600,7 +601,7 @@
     - B 再被声明：订阅者收到恢复通知；能以游标证明续接则同 epoch 续投，否则先收到 `Gap{origin: Source}`；
     - 集成断开或 `Halted` 时订阅不挂起，只见 readiness `Disconnected`。
 38. **健康面**（§8.4）：（对应 Q32）
-    - 一串注入的调用结果（`Unavailable`、`NoResponse`、空 `Records`、`Reject`、`Refused`、`Absent`、`Inconclusive`）使对应目标的连续失败数按“失败加一、其余归零”变化，每个结果恰一条健康观察；握手、推送、`Attributed`、`Manual`、`CrashWindow` 与无会话时未发出的调用不改变计数；
+    - 一串注入的调用结果（`Unavailable`、`NoResponse`、空 `Answered`、记录集为空的 `Covered`、`Reject`、`Refused`、`Absent`、`Inconclusive`）使对应目标的连续失败数按“失败加一、其余归零”变化，每个结果恰一条健康观察；握手、推送、`Attributed`、`Manual`、`CrashWindow` 与无会话时未发出的调用不改变计数；
     - 公共流的读成功、某作用域的调用连续失败时，健康同时给出二者；
     - 会话断开后该集成各流 readiness 为 `Disconnected`；`Halted` 与 `Connecting` 在健康中可区分，且跨核心重启不变；
     - 健康中没有 `reach` 与 `tier`；`read_model(health)` 按任一历史 `as_of` 与对同一健康观察集的独立 fold 相等（同 #18）。

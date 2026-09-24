@@ -108,7 +108,7 @@ enum BasisValidity { Fresh, Stale(Lag), Retracted(LogPositions), BeyondRetention
 - **响应归效应**：读它的处理器（lane 决议匹配、读模型归因）注册在效应侧。
 - **由谁填**：
   - 集成填 `attribution`，因为它持有 venue 回执与 `idempotency_key` 的对应。
-  - IO 壳在回执与取证观察记录上填 `FromAttempt(AttemptRef)`（记录模型，§6.5）。
+  - IO 壳在回执与取证的观察记录上，只对由该条自己的关联证据确定属于该腿的记录填 `FromAttempt(AttemptRef)`；同一回应里的其余记录保留各自的归因，不因同在一个回应、指向同一目标订单或共享 `provenance` 而继承（记录模型，§6.5）。
   - 集成填不出的记 `Unattributed`，由 IO 壳按键回读补。
 
 ### 不变量

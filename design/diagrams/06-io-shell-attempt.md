@@ -87,12 +87,12 @@ flowchart TB
 
 对照：§6.5 回执与取证的记录模型；§10.5 #17；§5.3 归因由谁填；§8.3。
 
-| 交互 | 执行事实侧（永存，含 `Evidence` = 契约载荷 + 原始负载） | 观察侧（可压缩副本） | 同事务 |
+| 交互 | 执行事实侧（永存，含 `Evidence` = 契约载荷 + 原始负载） | 观察侧（该回应的观察记录，可压缩） | 同事务 |
 |---|---|---|---|
-| `submit` → `Ack` | `VenueAccepted{venue_order_id, receipt: Evidence, observation}` | `provenance: Receipt{r}`、`attribution: FromAttempt(r)` | 是 |
+| `submit` → `Ack` | `VenueAccepted{venue_order_id, receipt: Evidence, observation}`（`observation` 指订单状态记录） | 订单状态一条（`FromAttempt(r)`）+ 每笔可识别执行一条成交记录（归因按各自的关联证据）；同为 `provenance: Receipt{r}` | 是 |
 | `submit` → `Reject` | `VenueRejected(reason)`（`Unmapped(raw)` 保留） | 无（venue 侧无订单） | — |
 | `submit` → `NoResponse` | `Undetermined(r, NoResponse)` | 无 | — |
-| 取证命中 | `ResolutionEvidence{r, channel, Found{observation, evidence: Evidence}}` | `provenance: Reconciliation{r, channel}`、`attribution: FromAttempt(r)` | 是 |
+| 取证命中 | `ResolutionEvidence{r, channel, Found{observation, evidence: Evidence}}`（`observation` 指命中的那条；`list_fills` 取同一成交流上 `Seq` 最小者） | 回应含订单状态时订单状态一条 + 每笔可识别执行一条成交记录；同为 `provenance: Reconciliation{r, channel}`；只对由自己的关联证据属于 r 的记录填 `FromAttempt(r)` | 是 |
 | ByKey 否定 | `ResolutionEvidence{r, ByKey, Absent}` | 无 | — |
 | 未命中 | `ResolutionEvidence{r, channel, Inconclusive}` | 无 | — |
 | 渠道不可用 | `Gap{origin: Channel, channel}`（属 r） | 无 | — |
@@ -104,11 +104,11 @@ flowchart LR
   V["venue 响应，经集成消费（submit / query_by_key / list_open / list_fills / replay_by_key）<br/>= 契约载荷 + 原始负载"] --> TX
   subgraph TX["同一 SQLite 事务（Ack / 取证命中）"]
     E[("执行 J：VenueAccepted{…, receipt: Evidence, observation}<br/>或 ResolutionEvidence{r, channel, Found{observation, evidence: Evidence}}")]
-    O[("观察 J：该回应的观察记录（订单状态；每笔可识别执行一条成交记录，带 execution_id）<br/>provenance: Receipt{r} 或 Reconciliation{r, channel}<br/>attribution: FromAttempt(r)（IO 壳填）")]
+    O[("观察 J：该回应的观察记录（订单状态；每笔可识别执行一条成交记录，带 execution_id）<br/>provenance: Receipt{r} 或 Reconciliation{r, channel}（同一回应相同，IO 壳填）<br/>attribution：各条按自己的关联证据，属于 r 的才是 FromAttempt(r)，不因同一回应继承")]
     E -->|"observation 位置引用（效应 → 观察）"| O
     O -.->|"provenance：不透明出处值，观察侧不解析（§3.2）"| E
   end
-  E --> AUD["审计 / 恢复：读执行 J 的 Evidence，不依赖副本是否被压缩"]
+  E --> AUD["审计 / 恢复：读执行 J 的 Evidence，不依赖观察记录是否被压缩"]
   O --> RM["读模型 orders：fold 执行事实 + 归因观察"]
   O --> HOOK["单据钩子 / 复合链读目标终态（cumulative_filled_quantity）"]
   O --> SUBS["订阅者：与推送观察同形"]
@@ -133,9 +133,9 @@ stateDiagram-v2
   [*] --> C : Prepared(Replace, target)
   C --> ATT : 撤单腿终结于 VenueAccepted 或 Found
   C --> R0 : 撤单腿终结于 VenueRejected / Absent / Expired（不解释拒绝原因；目标可能仍在时发新腿 = 加仓，H1）
-  ATT --> ATT : 读到目标存在但非终态 / 状态映射为 unknown 或 Unmapped(raw)（不冒充终态，C13） / 未见目标（F10）→ 按 pacing 再读
+  ATT --> ATT : 读到目标存在但非终态 / 状态映射为 unknown 或 Unmapped(raw)（不冒充终态，C13） / 未见目标（F10） / 读被上游 Refused（已记读结论记录）→ 按 pacing 再读
   ATT --> ATT : 读返回 Unavailable → Gap{Channel}，再读
-  ATT --> N : 目标终态观察到达（撤单腿回执/取证副本已含终态；attribution 指向目标的推送；IO 壳按 target 读：IdemKey→query_by_key，VenueRef→read(orders, id)）且新腿数量 > 0
+  ATT --> N : 目标终态观察到达（撤单腿回执 / 取证的观察记录已含终态；attribution 指向目标的推送；IO 壳按 target 读：IdemKey→query_by_key，VenueRef→对该作用域所挂、read 为 Supported 的各条订单状态流逐条 read（请求带 venue_order_id））且新腿数量 > 0
   ATT --> R0 : 目标终态到达且数量 = 0（口径为剩余量且已全部成交）
   ATT --> EX : 意图 deadline 到期
   N --> R : 新腿终结（VenueAccepted / VenueRejected / Undetermined 后收敛）
@@ -185,7 +185,7 @@ sequenceDiagram
   V-->>I: 业务回执（受理，venue_order_id）
   I-->>IO: Ack(venue_id, receipt)
   IO->>EJ: 同事务：VenueAccepted{venue_order_id, receipt: Evidence, observation}
-  IO->>OJ: 同事务：该回应的观察记录（Receipt{(p,1)}, FromAttempt((p,1))）：订单状态；回执已含执行则每笔一条成交记录（带 execution_id）
+  IO->>OJ: 同事务：该回应的观察记录（Receipt{(p,1)}）：订单状态（FromAttempt((p,1))）；回执已含执行则每笔一条成交记录（带 execution_id，归因按各自的关联证据）
   Note over IO: 腿终结 → 链 Resolved → 移出阻塞头集合（集合空 → lane 解除）；basis 引用登记解除
   V-->>I: 部分成交 / 成交推送
   I->>OJ: 观察记录（attribution FromAttempt((p,1))，cumulative_filled_quantity；成交记录带 execution_id）

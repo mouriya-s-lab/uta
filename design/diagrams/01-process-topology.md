@@ -164,8 +164,9 @@ flowchart LR
   subgraph W["写者（都在核心进程内）"]
     PUSH["集成推送入口<br/>（位置由核心分配）"]
     DAG["派生 DAG 解释①"]
-    RD["一次性读：读处理器 · 钩子取证 · 消费方 read"]
-    IOR["IO 壳：回执 / 取证观察"]
+    RD["一次性读与回填：读处理器 · 钩子取证 · IO 壳按目标身份的读 · 消费方 read · 订阅侧 backfill<br/>（结果项 + 读结论记录）"]
+    IOR["IO 壳：回执 / 取证的观察记录（订单状态；每笔可识别执行一条成交记录）"]
+    HLT["核心：健康观察（会话状态 · readiness Disconnected · 调用结果计数）"]
     TK["单据（TicketAction）"]
     STS["STS 规则链"]
     IOE["IO 壳：SendBarrier / VenueAccepted / VenueRejected / Undetermined / Expired /<br/>ResolutionEvidence / ReconciliationReopened{CancelLegTerminal|SessionRestored} / CapabilityObserved / 取证 Gap{Channel}"]
@@ -173,7 +174,7 @@ flowchart LR
     CTL["控制面：控制记录 · 安全事件 · ResolutionEvidence{Manual} · ReconciliationReopened{Manual}"]
     OUT["出站请求处理器：EffectRequest · EffectResponse"]
     SUBEL["持久订阅元素"]
-    HS["握手"]
+    HS["核心握手处理"]
     HOSTP["宿主协议"]
     FENCE["fence / 进程登记"]
     RET["保留协议"]
@@ -197,6 +198,7 @@ flowchart LR
   DAG --> OJ
   RD --> OJ
   IOR --> OJ
+  HLT --> OJ
   TK --> EJ
   STS --> EJ
   STS --> RS
@@ -206,7 +208,7 @@ flowchart LR
   OUT --> EJ
   SUBEL --> SUB
   HS --> CAP
-  HS -->|"握手版能力证据"| EJ
+  HS -->|"声明版本"| EJ
   IOE --> CAP
   HOSTP --> CK
   FENCE --> PT
@@ -222,7 +224,7 @@ flowchart LR
 
 读法：
 
-- 观察 J 有四类写者，执行 J 有七类；两侧共享存储原语但类型宇宙不共享（§4.1）。
+- 观察 J 有五类写者，执行 J 有七类；两侧共享存储原语但类型宇宙不共享（§4.1）。
 - 读模型不写任何表：它是按种类对执行 J、观察 J 的只读 fold（`subscriptions` 读订阅表当前态，§8.5），供 `read_model` 读取。
 - 引用登记不是独立写者动作：随 `Prepared`/`Checkpoint`/`ResolutionEvidence` 的 append 自动写入，随 `Resolved`/下一 checkpoint 自动解除（D8.1）。
 
@@ -237,7 +239,7 @@ flowchart LR
 | `Close(Prepared(position))` + `Prepared` | §6.2、§7.4 | #1：二者皆无，单据仍 `AwaitingDecision` |
 | Decision / `Outcome` / `Rejection` 记录 + `RuleState` 更新 | §7.4 | 链步未发生，重启按 `RuleState` 重跑该步 |
 | 程序写处理器的 `Draft` + `SubmitForDecision` + `EffectResponse{Drafted}` | §6.1 | #21：无 `EffectResponse` → 重派开单 |
-| 读处理器的观察记录 / `Gap{Channel}` + `EffectResponse{Observed / Unavailable}` | §6.1 | #21：无 `EffectResponse` → 重新执行一次 |
+| 读处理器的结果项与读结论记录 / `Gap{Channel}` + `EffectResponse{Concluded / Unavailable}` | §6.1 | #21：无 `EffectResponse` → 重新执行一次 |
 | `submit` 的 `Ack`：`VenueAccepted`（含 `Evidence`）+ 该回应的观察记录（订单状态；每笔可识别执行一条成交记录） | §6.5 记录模型 | #5：视为无后继 → `Undetermined` → by-key 取证重得同一状态 |
 | 一次取证命中：`ResolutionEvidence{Found}`（含 `Evidence`）+ `provenance: Reconciliation` 的该回应观察记录 | §6.5 | #7：该次取证不存在；fold 显示本轮该渠道未取证，重做（读可重试） |
 | 推送归因命中：观察记录 + `ResolutionEvidence{Attributed}` | §6.6、§8.1 | 推送未 append：核心崩溃即集成成孤儿被回收，重启握手后该流续接（集成以 venue 游标证明）或新 epoch + `Gap{Source}`；续接则记录重到，仍处 `Undetermined` 的腿照常归因 |

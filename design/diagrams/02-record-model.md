@@ -130,7 +130,7 @@ flowchart LR
   TK -->|"① basis：Set&lt;LogPosition&gt;（位置，不拷值）"| OJ
   TK -->|"② 钩子读观察值：required_inputs 各流当前 fold_state"| OJ
   IO -->|"③ 决议读归因观察：Found{observation} · 复合链读目标终态"| OJ
-  IO -->|"④ 效应侧产生观察记录：回执 / 取证副本落观察 J（provenance: Receipt / Reconciliation，不透明出处值）"| OJ
+  IO -->|"④ 效应侧产生观察记录：回执 / 取证的观察记录落观察 J（provenance: Receipt / Reconciliation，不透明出处值）"| OJ
   EH -->|"读 attribution 字段（记录归观察，响应归效应）"| OJ
   RM -->|"⑤ 读模型 fold 观察记录：orders 的订单/成交观察 · positions 的持仓观察 · health 的健康观察（位置集 = as_of）"| OJ
   OJ x--x|"反向：观察侧不引用效应侧类型、不按效应侧状态求值（crate 依赖方向，不编译）；只存不解析的出处值"| EJ
@@ -155,8 +155,8 @@ flowchart LR
 | 观察 | `Gap{origin: Delivery, reason}` | 投递调度 | 订阅、from/to `Seq`、`reason` | — |
 | 观察 | 一次性读 / 回填的结果项 | 读处理器 / 钩子取证 / IO 壳按目标身份的读 / 消费方 `read` / 订阅侧回填 | 与该流推送记录同形；`provenance: OneShot{origins, request}`（`origins ⊆ {Request(pos), Ticket(id), Attempt(AttemptRef), Session(principal)}`）、`one_shot` 或 `backfilled` | 出处值（不解析）；`Request` → `EffectRequest` 位置 |
 | 观察 | 读结论记录 | 同上（集成作答或上游 `Refused` 时） | 请求身份、`origins`、本次结果项的位置（一次性读）或窗口与 `covered_to`（回填）、或拒绝原因；控制记录，不是载荷 | → 本次结果项 |
-| 观察 | 回执观察副本 | IO 壳 | `provenance: Receipt{AttemptRef}`、`attribution: FromAttempt(AttemptRef)`；内容同执行侧 `Evidence`；可压缩 | 出处值（不解析）|
-| 观察 | 取证观察副本 | IO 壳 | `provenance: Reconciliation{AttemptRef, channel}`、`attribution: FromAttempt(AttemptRef)`；可压缩 | 出处值（不解析）|
+| 观察 | 回执的观察记录 | IO 壳 | 该回应的观察记录：回应含订单状态时订单状态一条，加回应所含每笔可识别执行一条成交记录（带 `execution_id`）；同一回应的各条 `provenance: Receipt{AttemptRef}` 相同；`attribution` 按各条自己的关联证据填写，不因同在一个回应而继承（订单状态一条为 `FromAttempt(AttemptRef)`）；可压缩；契约载荷与原始负载永存于执行侧 `Evidence` | 出处值（不解析）|
+| 观察 | 取证的观察记录 | IO 壳 | 同上，`provenance: Reconciliation{AttemptRef, channel}`；只对由自己的关联证据属于该腿的记录填 `FromAttempt(AttemptRef)`；`list_fills` 命中只有成交记录，不造订单状态记录；可压缩 | 出处值（不解析）|
 | 观察 | 派生记录（含 alert） | 派生 DAG | 程序流 `StreamId`、`RetractableDelta` | — |
 | 观察 | `ProgramReset{reason}` / `ProgramFailed{reason}` | 宿主协议 | 程序 id、`reason` | — |
 | 观察 | 健康观察 | readiness 由集成推送入口；会话状态、readiness `Disconnected`、调用结果由核心（§8.4） | 集成；`session` 状态，或流与 readiness，或调用目标与结果（失败 / 成功） | — |
@@ -164,18 +164,18 @@ flowchart LR
 | 执行 | Decision / `Outcome` / `Rejection` | STS 规则链 | `ticket_id`、绑定 `current_version`、`principal`、`rule_version`、`checked_as_of` | → 单据记录；`checked_as_of` → 观察位置 |
 | 执行 | `Prepared` | 单据（放行事务） | `attempt_position` 即自身位置、`WriteLaneKey`、`OperationKind`、`deadline`、`target?`、意图载荷 | → `Close(Prepared)` 同事务 |
 | 执行 | `SendBarrier` | IO 壳（fsync） | `AttemptRef = (attempt_position, leg)`、该腿的 `idempotency_key` | → `Prepared` |
-| 执行 | `VenueAccepted{venue_order_id, receipt, observation}` | IO 壳 | `AttemptRef`、`venue_order_id`、`receipt: Evidence`（契约载荷 + 原始负载，永存） | `observation` → 回执观察副本 |
+| 执行 | `VenueAccepted{venue_order_id, receipt, observation}` | IO 壳 | `AttemptRef`、`venue_order_id`、`receipt: Evidence`（契约载荷 + 原始负载，永存） | `observation` → 该回应的订单状态记录 |
 | 执行 | `VenueRejected(reason)` | IO 壳 | `AttemptRef`、`reason`（含 `Unmapped(raw)`） | → `Prepared` |
 | 执行 | `Undetermined(reason)` | IO 壳 | `AttemptRef`、`NoResponse` 或 `CrashWindow` | → `Prepared` |
 | 执行 | `Expired(deadline)` | IO 壳（发出前门 / `AwaitingTargetTerminal` 到期） | `AttemptRef` | → `Prepared` |
-| 执行 | `ResolutionEvidence{AttemptRef, channel, round, outcome}` | IO 壳 / 归因处理器 / 控制面 | `channel ∈ {ByKey, Listing, Fills, Replay, Attributed, Manual}`、`round`（发起时所属轮次）、`outcome ∈ {Found{observation, evidence: Evidence}, Absent, Inconclusive}`；每条 `Found` 都带 `evidence`（六渠道一视同仁）；`Manual` 带 principal 与 note | `Found` → 观察副本；`round` → `ReconciliationReopened` |
+| 执行 | `ResolutionEvidence{AttemptRef, channel, round, outcome}` | IO 壳 / 归因处理器 / 控制面 | `channel ∈ {ByKey, Listing, Fills, Replay, Attributed, Manual}`、`round`（发起时所属轮次）、`outcome ∈ {Found{observation, evidence: Evidence}, Absent, Inconclusive}`；每条 `Found` 都带 `evidence`（六渠道一视同仁）；`Manual` 带 principal 与 note | `Found` → 命中的那条观察记录（`list_fills` 命中多笔归因到该腿的成交时，取同一成交流上 `Seq` 最小者）；`round` → `ReconciliationReopened` |
 | 执行 | `ReconciliationReopened{AttemptRef, cause}` | IO 壳 / 控制面 | `cause ∈ {CancelLegTerminal(AttemptRef), SessionRestored, Manual(principal)}` | → `Undetermined` |
-| 执行 | `CapabilityObserved` | IO 壳 | `(WriteLaneKey, OperationKind)` 或 (流, 读 / 回填)、新 `Verdict` | — |
-| 执行 | 声明版本 | 握手 | 该握手 `Projection` 除记录映射外的全部（作用域与 `account_ref` 可解析判定、流声明、写能力、配额、扩展 schema）、`session_epoch` | — |
+| 执行 | `CapabilityObserved` | IO 壳 | `(WriteLaneKey, OperationKind)` 或逻辑流 `(source, stream)` 的读 / 回填、新 `Verdict`、所更新声明版本的 `session_epoch`（取自被接受的推送 / 回应）；不属于任何 Attempt | → 同来源同 `session_epoch` 的声明版本 |
+| 执行 | 声明版本 | 核心握手处理 | 该握手 `Projection` 除记录映射外的全部（作用域与 `account_ref` 可解析判定、流声明、写能力、配额、扩展 schema）、`session_epoch` | — |
 | 执行 | `Gap{origin: Channel, channel}`（取证渠道） | IO 壳 | `AttemptRef`、渠道 | → `Prepared` |
 | 观察 | `Gap{origin: Channel, channel}`（回填 / 一次性读） | 回填 / 一次性读（调用后 `Unavailable`；无会话不记） | 流、渠道 | — |
 | 执行 | `EffectRequest` | 出站请求处理器 | 程序 id、`effect_kind`、`basis`、`key?`、载荷 | `basis` → 观察位置 |
-| 执行 | `EffectResponse{request, outcome}` | 出站请求处理器 | 读：`Concluded(读结论记录位置)` / `Unavailable(gap)` / `NotCalled(reason)`；写：`Drafted(ticket)` / `NotDrafted(reason)`（§6.1） | → `EffectRequest` |
+| 执行 | `EffectResponse{request, outcome}` | 出站请求处理器 | 读：`Concluded(读结论记录位置)` / `Unavailable(gap)` / `NotCalled(reason)`；写：`Drafted(ticket)` / `NotDrafted(Malformed{reason})`（§6.1） | → `EffectRequest` |
 | 执行 | 控制记录 `Applied(position)` / `Rejected(reason)` | 控制面 | principal、动作、配置版本 hash | — |
 | 执行 | 安全事件 | 控制面 / 会话层 / 授权步 | principal（或未认证连接标识）、请求种类 | — |
 | 执行 | `bypass_lane` Decision | 控制面 | principal、被绕过的阻塞头位置集 | → `Prepared` 集合 |
@@ -185,4 +185,4 @@ flowchart LR
 - 两个 `Journal` 的记录种类就是上表。lane 的阻塞头、`Resolved`、"下一取证渠道"是执行 J 的 fold（阻塞头集合由 lane 规则存在 `RuleState`，§6.4）；单据状态是执行 J 与其评估所读观察、当前能力证据和策略的 fold（§6.2）。它们都不是记录。
 - 观察 J 的记录可被压缩到其所在流的保留边界之下；执行 J 的记录永不删除，没有保留边界（§2.4）。
 
-核出：回执与取证的 `Evidence`（契约载荷与原始负载，C13）归执行事实、观察侧只是可压缩副本；腿身份 `AttemptRef`；`EffectResponse`；`ReconciliationReopened`；`checked_as_of`——均在画图/复核时并入正文（§6.1、§6.2、§6.3、§6.5）。
+核出：回执与取证的 `Evidence`（契约载荷与原始负载，C13）归执行事实、观察侧的记录可压缩；腿身份 `AttemptRef`；`EffectResponse`；`ReconciliationReopened`；`checked_as_of`——均在画图/复核时并入正文（§6.1、§6.2、§6.3、§6.5）。

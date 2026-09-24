@@ -64,7 +64,7 @@ flowchart LR
   end
   AI -->|"draft(intent) → TicketId<br/>revise / submit_for_decision"| NORM
   PROG -->|"写处理器：装载 principal 为 responsible<br/>Draft + SubmitForDecision 同事务"| NORM
-  NORM{"意图构造（parse-don't-validate）<br/>锚点：principal · WriteLaneKey · OperationKind ∈ {Place, Cancel, Replace, Close} · basis（可空）<br/>撤/改单必带 target: VenueRef 或 IdemKey；平仓必带 target: PositionRef（含 instrument）<br/>deadline 缺省按 (WriteLaneKey, OperationKind) 策略 → 运行期全局，填入版本"}
+  NORM{"意图构造（parse-don't-validate）<br/>锚点：principal · WriteLaneKey · OperationKind ∈ {Place, Cancel, Replace, Close} · basis（可空）<br/>撤/改单必带 target: VenueRef 或 IdemKey；平仓的 target: PositionRef（含 instrument）由核心从 basis 所指的持仓观察记录构造<br/>deadline 缺省按 (WriteLaneKey, OperationKind) 策略 → 运行期全局，填入版本"}
   NORM -->|"锚点构造不出"| MAL["会话：draft → Rejected(Malformed)，不 append<br/>程序：EffectResponse{NotDrafted(Malformed)}，不重派"]
   NORM -->|"构造成功（参数不在此判定）"| TK[("TicketAction 记录：Draft / SubmitForDecision<br/>每版带意图参数 schema 身份")]
   TK -.-> PV["单据 fold：parameter_validity<br/>按该来源 CapabilityProof 声明的意图参数 schema：Valid / Invalid(违反项) / NotSupported / SchemaMismatch"]
@@ -112,7 +112,7 @@ flowchart TB
 读法（假想运行时）：
 
 - 链是事件驱动的：`SubmitForDecision` 跑到第一个等待点；`decide`、阻塞头集合清空、超时各自把它往下推一步；每推一步把该步产生的记录（`Vec<Outcome>` 或 `NonEmpty<Rejection>`）与 `RuleState` 同事务持久化。
-- 等待都发生在 `Prepared` 之前：单据在等，不是已放行的记录在等；所以正常路径下同 lane 至多一条未终结 Attempt。
+- 审批与 lane 的等待都发生在 `Prepared` 之前：单据在等，不是已放行的记录在等；所以正常路径下同 lane 至多一条未终结 Attempt。已放行的腿只会在发出前门等会话或能力（D6.1）。
 - 过期步是第五步：等待结束后先看 `deadline` 再进门；计时器只是让等待中的单据也能到期，不是让过期单据仍能 `Prepared` 的旁路。
 - 门读的是单据 fold 已算好的字段，规则自己不算；世界变了单据先变 `Diverged`，审批人看得到，放行时门自然失败。
 - 重启后链从 `RuleState` 续跑：停在审批步的仍等 `decide`；停在 lane 步的等集合清空；计时器按 `deadline`（UTC）重装（D1.2 第 4 步）；冷却时钟由 `SendBarrier` 记录重建。
@@ -130,7 +130,7 @@ stateDiagram-v2
   state "Blocked{p}：正常路径，一条未终结 Attempt" as B1
   state "Blocked{p, q, …}：例外扩大的集合" as BN
   [*] --> Free
-  Free --> B1 : STS 放行一笔 → Prepared（IO 壳紧接执行）
+  Free --> B1 : STS 放行一笔 → Prepared（交给 IO 壳，过发出前门即发；门不成立时在门前等待，仍是阻塞头，D6.1）
   B1 --> Free : 该 Attempt 链 Resolved（各腿终结且无下一腿）
   B1 --> BN : 例外一：以阻塞头幂等键为 target 的撤单意图放行（lane 步不等待）
   B1 --> BN : 例外二：bypass_lane(ticket) Decision（principal 承担协议违反）
@@ -163,7 +163,7 @@ flowchart LR
   subgraph TRIG["触发（都不是 TicketAction）"]
     T1["basis 引用的流推进 / 被撤回 / 出现 gap"]
     T1b["required_inputs 流被撤回 / 出现 gap"]
-    T2["required_inputs 流有新观察（推送、回填、一次性读、回执/取证副本）"]
+    T2["required_inputs 流有新观察（推送、回填、一次性读、回执 / 取证的观察记录）"]
     T3["能力变更推送 / CapabilityObserved"]
     T4["保留边界推进"]
     T5a["reload_config(rules)：Lag 变化"]

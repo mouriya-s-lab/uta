@@ -42,7 +42,7 @@
    - 行动者：IO 壳，身份 = `attempt_position`（`Prepared` 的 `LogPosition`，锚点，§8.1）+ `WriteLaneKey`。
 6. venue 受理并给出身份 → 集成 `submit` 返回 `Ack(venue_id, receipt)`。同一事务 append：
    - `VenueAccepted{venue_order_id, receipt: Evidence, observation}`（执行 J；`Evidence` = 契约载荷 + 原始负载，§6.5）；
-   - 回执观察记录（观察 J，`provenance: Receipt{AttemptRef}`，`attribution: FromAttempt(AttemptRef)` 由 IO 壳填；记录模型，§6.5）：订单状态一条；回执已含成交时，每笔可识别的执行另落一条带 `execution_id` 的成交记录（§8.1“成交与订单状态的契约语义”）。
+   - 回执观察记录（观察 J，`provenance: Receipt{AttemptRef}`，记录模型，§6.5）：订单状态一条，由 IO 壳填 `attribution: FromAttempt(AttemptRef)`；回执已含成交时，每笔可识别的执行另落一条带 `execution_id` 的成交记录（§8.1“成交与订单状态的契约语义”），其归因按该条自己的关联证据填写（§5.3）。
 7. 部分成交、成交依次到达 → 集成推送带 `attribution` 的订单状态 / 成交观察记录（观察 J，§8.3、P2、P9）；成交记录带 `execution_id`，数量与价格是本笔执行的量，订单状态带累计量（§8.1）。读模型 fold 出最终成交状态（§4.4、§8.5）。
    - 对外可见：订阅者依次收到受理、部分成交、成交，字段与原生身份保真（C13）；读模型最终 = 成交。
 
@@ -136,7 +136,7 @@
    - 队首阻塞：阻塞头集合非空时同 lane 无新普通写（不变量 §6.9-1），第二笔继续停在 lane 步并告警。
    - 等待期间它的 `basis_validity`/`alignment` 照常重算（偏离是状态，§6.2）；`deadline` 到期则过期步 `Close(Expired)`（H6）。
    - 队首终结、集合清空后 lane 规则放行；链先过过期步，再过依据有效性门（§6.3），再 append `Prepared`。
-   - 理由：后续写语义依赖队首结果（buying power、venue 侧顺序），是通讯协议语义，非 UTA 的锁（§6.4、§6.8）。等待发生在 `Prepared` 之前，所以不存在“已放行却等待”的记录。
+   - 理由：后续写语义依赖队首结果（buying power、venue 侧顺序），是通讯协议语义，非 UTA 的锁（§6.4、§6.8）。lane 等待发生在 `Prepared` 之前，所以不存在因 lane 而等待的已放行记录；已放行的腿只可能在发出前门等会话或能力（§6.5）。
 3. 另一账户（不同 `WriteLaneKey`）的写同时进行，不等待（H4；粒度权衡，§6.4）。
    - 对外可见：fixture 调用不重叠；`Undetermined` 期间无第二次调用；其他账户不受阻。
 
@@ -297,7 +297,7 @@
    - 行动者：IO 壳，身份 = `attempt_position` + `WriteLaneKey`。
 2. 撤单腿（`leg = 1`）`submit` 无回执 → `Undetermined`（§6.5）→ 整条链停在对账，新单腿**不发**（§6.2）。
    - 撤单腿终结于 `VenueAccepted`/`Found` 后，链进入 `AwaitingTargetTerminal`（转移表，§6.5）。
-   - 目标终态若已在撤单腿的回执 / 取证观察里（含 `cumulative_filled_quantity`）即用它；否则 IO 壳按 `target` 身份读（`IdemKey` → `query_by_key`，`VenueRef` → `read(orders, …)`），直到目标终态或 `deadline`。
+   - 目标终态若已在撤单腿的回执 / 取证观察里（含 `cumulative_filled_quantity`）即用它；否则 IO 壳按 `target` 身份读（`IdemKey` → `query_by_key`，`VenueRef` → 对该作用域所挂、`read` 为 `Supported` 的各条订单状态流逐条 `read`，请求带该 `venue_order_id`；没有这样的流时只等回执与推送，§6.5），直到目标终态或 `deadline`。
    - 新单数量按意图口径算出（§6.2、§8.1）。新单腿同样过发出前门（§6.5）：该集成此刻无会话，或当前能力不再支持 `Replace` 或其参数 schema 时，新单腿等待而不发，`deadline` 到时 `Expired(leg = 2)`；会话断开期间 IO 壳也不发目标终态的读。
    - 对外可见：读模型显示原操作与后续操作的关联及未决状态。
 3. 取证记录模型（§6.5）：撤单腿的每次命中取证，同一事务落一条观察记录（`provenance: Reconciliation{AttemptRef}`）与一条 `ResolutionEvidence{Found}`（含 `Evidence`）；`Absent`/`Inconclusive` 只有 `ResolutionEvidence`。
@@ -486,7 +486,7 @@
 | 2 | `Prepared` 已持久、`SendBarrier` 未持久 | `Prepared` 有、无 `SendBarrier` | IO 壳：确未发出 → 过发出前门（§6.5）：`deadline` 未过且该集成会话已建立、当前能力支持，则 durable append `SendBarrier` 后 `submit`；会话或能力条件不成立则等待（不 append 记录）；`deadline` 已过则 append `Expired(deadline)` 终结该链 | 崩溃窗口不产生 venue 调用；不误升 `Undetermined`；末态为“已发”（可能先等待）或 `Expired` | §6.7；不变量 §6.9-8 | §10.5 #8(a)/#14 |
 | 3 | `SendBarrier` 已 fsync、`submit` 未发 | `SendBarrier` 有、无后继 | IO 壳：可能已发出 → append `Undetermined(CrashWindow)` 进对账 | 尝试 = `Undetermined`；lane 阻塞；无第二 `SendBarrier` | §6.7；不变量 §6.9-1/8 | §10.5 #8(b)(c) |
 | 4 | `submit` 已发、回执未到 | `SendBarrier` 有、无回执 | IO 壳：同 #3，对账驱动按渠道取证收敛 | `Undetermined` → found/absent/人工 | §6.6；C1/C2 | §10.5 #3/#17 |
-| 5 | 回执已到、未 append | `SendBarrier` 有、回执丢在内存 | IO 壳：视为无后继 → `Undetermined` → 对账（按键回读会重得同一状态） | `Undetermined` 经 `ResolutionEvidence{ByKey, Found}` 收敛；`Evidence` 在执行 J，观察副本在观察 J | §6.6；§3.4（读可重试） | §10.5 #3/#17 |
+| 5 | 回执已到、未 append | `SendBarrier` 有、回执丢在内存 | IO 壳：视为无后继 → `Undetermined` → 对账（按键回读会重得同一状态） | `Undetermined` 经 `ResolutionEvidence{ByKey, Found}` 收敛；`Evidence` 在执行 J，该回应的观察记录在观察 J | §6.6；§3.4（读可重试） | §10.5 #3/#17 |
 | 6 | 记录已 append 提交，投递/cursor 推进前崩溃 | 记录已提交、cursor 未推进 | 核心：`fold_state` 重建；订阅者从已确认 cursor 之后重收，未确认的记录可重复可见，按 `LogPosition` 去重 | 记录不丢；重复只出现在未确认区间 | §4.2；§7.4 | — |
 | 7 | 对账取证中途 | 部分 `ResolutionEvidence` 已 append | IO 壳：取证是读副作用、可重放；未收敛者继续按渠道取证（下一渠道由 fold 重建） | 收敛进度不丢；渠道穷尽仍 `inconclusive` 停人工 | §6.5；§6.6 | §10.5 #17 |
 | 8 | `Replace`：cancel 腿（`leg = 1`）终态已持久、new 腿（`leg = 2`）未过 `SendBarrier` 时崩溃 | cancel 腿终态有、无 `leg = 2` 的 `SendBarrier` | IO 壳：见表下 | 复合操作按链续；new 腿未重复；已完的链不被再驱动 | §6.5；§6.7；不变量 §6.9-8 | §10.5 #8(c)/#14 |
@@ -502,7 +502,7 @@
 | 18 | 可选子系统 op 已产生结果、核心在结果持久化前崩溃/断连 | 输出段在段池、未接入派生流持久点 | 核心：段池不持久，重启由 `Pooled` 重洗重算；未发布结果不半接入下游 | 结果重算；下游只见成功发布的派生流 | §8.7；hpc-derivation/design.md §1.5/§5.3 | hpc §10 #7/#13 |
 | 19 | 核心崩溃时可选子系统 op 孤儿 | op 进程存活、核心死 | 新核心 + fence：op 为孤儿由 H10 fence 回收；重连后重新握手 | 无双写；孤儿被回收 | §7.2；hpc-derivation/design.md §6.5 | hpc §10 #3 |
 | 20 | Alice（或其他下游）或解释层崩溃 | 核心订阅/程序/lane 完整；解释层无持久状态 | 核心：独立存活；下游凭续传令牌重连，解释层代它握手取 principal，读模型取 `as_of`，从已确认 cursor 之后订阅原始记录（§8.5） | 断连损失以缺失通知给出，不伪造补发 | §7.1；§8.5；H5/C5；`design/downstream/design.md` 3.3 | §10.5 #23 |
-| 21 | `EffectRequest` 记录已随 `Advance` 输出提交，处理器未执行或其 `EffectResponse` 未持久化 | `EffectRequest` 有、无 `EffectResponse` | 核心：见表下 | 每条请求最终恰一条 `EffectResponse`；写至多一张单据；`Unhandled` 不重派；观察副本被压缩不影响判定 | §6.1；§8.6；§3.4 | §10.5 #16 |
+| 21 | `EffectRequest` 记录已随 `Advance` 输出提交，处理器未执行或其 `EffectResponse` 未持久化 | `EffectRequest` 有、无 `EffectResponse` | 核心：见表下 | 每条请求最终恰一条 `EffectResponse`；写至多一张单据；`Unhandled` 不重派；读结论等观察记录被压缩不影响判定 | §6.1；§8.6；§3.4 | §10.5 #16 |
 
 **#8 的恢复动作（IO 壳）：**
 

@@ -30,7 +30,7 @@ sequenceDiagram
     Note over C,DB: 崩在 COMMIT 前：整批不存在，重启重放同一批（#16）
     C->>O: 逐条分派 EffectRequest（事务之后）
     alt 读处理器（一次执行，不自行重试）
-      alt 未调用集成（流未声明 / 最近声明 read 为 Unsupported 或 Unknown / 来源无会话 / 请求不合 schema，§8.2 read）
+      alt 未调用集成（按 §8.2 read 的判定顺序：来源未登记 / 从未有声明 / 流未声明 / 最近声明 read 为 Unsupported 或 Unknown / 请求不合 schema / 来源无会话）
         O->>DB: EffectResponse{request: pos, NotCalled(reason)}（不调用集成、不 append 观察记录）
         Note over C: 程序决策半边从自己请求的 EffectResponse 看到它（§6.1）
       else 调用
@@ -103,14 +103,14 @@ flowchart TB
   REG -->|"读处理器"| RD["一次执行：按 §8.2 read 的判定顺序"]
   RD -->|"Answered（含空）/ Refused"| R1["同事务：item 观察记录 × N + 读结论记录，OneShot{origins ∋ Request(pos), request}（观察 J，可压缩）<br/>+ EffectResponse{pos, Concluded(结论)}（执行 J）"]
   RD -->|"Unavailable"| R2["同事务：Gap{Channel}（观察 J）<br/>+ EffectResponse{pos, Unavailable(gap)}"]
-  RD -->|"未调用集成"| R3["EffectResponse{pos, NotCalled(reason)}（不支持 / 未确认 / 无会话 / 请求不合法 / 来源未登记）"]
+  RD -->|"未调用集成"| R3["EffectResponse{pos, NotCalled(reason)}（不支持 / 未确认 / 无会话（含从未有声明）/ 请求不合法 / 来源未登记）"]
   REG -->|"写处理器"| WR["同事务 Draft{responsible = 装载 principal, basis ∋ pos}<br/>+ SubmitForDecision + EffectResponse{pos, Drafted(ticket)}"]
   REG -->|"未注册"| UH["Unhandled：留在日志，无 EffectResponse"]
   subgraph RESTART["重启（§7.2 第 4 步）：fold 出已注册且无 EffectResponse 的 EffectRequest"]
     Q1{"有 EffectResponse{request = pos}？"}
     Q1 -->|"无，读处理器"| RD2["重新执行一次"]
     Q1 -->|"无，写处理器"| WR2["重新开单（Draft 与 Drafted 同事务，'有 Draft 无响应'不可达）"]
-    Q1 -->|"有"| SKIP["不重派（观察副本是否已被压缩无关）"]
+    Q1 -->|"有"| SKIP["不重派（读结论等观察记录是否已被压缩无关）"]
   end
   ER -.-> Q1
 ```

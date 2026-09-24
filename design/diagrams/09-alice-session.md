@@ -29,7 +29,7 @@ sequenceDiagram
   Note over L,C: 请求体伪造 principal 不参与授权：只取会话绑定的 principal（W19 步 2）
   L->>RM: read_model(sources)（声明：账户、流、能力；D9.5）
   L->>RM: read_model(kind, as_of?)
-  RM-->>L: Snapshot{value, as_of?, gaps?}（观察侧 fold 带 as_of 与 gaps）
+  RM-->>L: Snapshot{value, as_of?, gaps?}（orders / positions / lanes / health / sources 带 as_of 与 gaps，可按历史 as_of 读；gaps 只含观察输入的缺口，lanes、sources 为空；tickets、subscriptions 只给当前态）
   L-->>D: 翻成对外概念（账户、订单、持仓、审批…）
   L->>C: subscribe(selector, mode, from?)（观察流或执行事实；新订阅 from 缺省 = 当前流末）
   C-->>L: cursor 之后记录（未确认区间可能重复，按 LogPosition 去重）
@@ -81,7 +81,7 @@ flowchart LR
   S7 --> HL
   S2 -.->|"逐 target，按序判定：UnknownTarget / Unavailable{source_state}（从未有声明）/ Unsupported / Unconfirmed / InvalidRequest / Unavailable{source_state}（无会话，不调用不记 gap）/ Answered{conclusion, items} / Refused{conclusion, reason} / Unavailable（调用失败记 Gap{Channel}；deadline 内未返回）"| S2
   S1 -.->|"未声明流 / 执行事实非 ordered → 拒绝；配额池流不带主体集 → 拒绝；超池上限 → QuotaExceeded{quota, limit}"| S1
-  S3 -.->|"kind 未定义 → 拒绝；as_of 未达 → NotYetAvailable{frontier}"| S3
+  S3 -.->|"kind 未定义 → 拒绝；as_of 有位置尚未提交 → NotYetAvailable{positions}（各流已提交的流末）；tickets / subscriptions 带历史 as_of → 拒绝"| S3
   S4 -.->|"expected_version ≠ current_version → Conflict；同版本已有 Decision → Conflict(AlreadyDecided)"| S4
   S5 -.->|"越权 → Unauthorized；配置不合法 → Rejected 并保留上一有效版本；advance_retention 逐流判定 → NotForward / ReferencedBelow / InsideWindow"| S5
   S6 -.->|"越权 → Unauthorized；腿非 Undetermined → Rejected(NotUndetermined)"| S6
@@ -165,11 +165,12 @@ sequenceDiagram
   I->>C: handshake → Projection（作用域 + account_ref、流声明、写能力、配额）
   C->>C: 静态校验（§8.1）；account_ref 与同来源其他作用域重复或与历史绑定不一致 → 该引用标不可解析（不拒绝握手、不影响路由）
   C->>EJ: append 声明版本（session_epoch）
+  C->>EJ: 运行期能力变化：IO 壳 append CapabilityObserved（带该声明版本的 session_epoch；lane 能力随 lane 流，逻辑流读 / 回填能力随来源声明流）
   L->>RM: read_model(sources)
-  RM-->>L: 每来源：最近声明版本（账户 = account_ref + label + 挂的流、流的 read/backfill 与名义等级、写能力、配额）
+  RM-->>L: 每来源：最近声明版本加引用该版本的 CapabilityObserved（账户 = account_ref + label + 挂的流、流的 read/backfill 与名义等级、写能力、配额；account_ref 是否可解析）
   L->>C: subscribe(执行事实 (X, 作用域?), ordered, from)
-  EJ-->>L: 新声明版本 / 单据与腿的执行事实（按位置原样搬运）
-  L->>RM: 收到新声明版本 → 重读 sources
+  EJ-->>L: 新声明版本 / CapabilityObserved / 单据与腿的执行事实（按位置原样搬运）
+  L->>RM: 收到新声明版本或 CapabilityObserved → 重读 sources
   L-->>D: 账户列表、能力（支持 / 不支持 / 未确认）、待审事项、结果未知；引用冲突的账户显示“需要处理”
   Note over L,D: 待审事项是否偏离不推送：呈现时读 tickets（§8.5）
 ```
