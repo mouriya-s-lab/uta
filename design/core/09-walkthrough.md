@@ -294,19 +294,19 @@
 **失败路径。**
 
 1. 改单意图类型 `Replace [交易协议]`，构造期必须携带 `target: VenueRef | IdemKey`（parse-don't-validate，§6.2、§8.1）。
-   - 该 `(scope, Replace)` 声明两腿计划 `[cancel, submit]` → IO 壳在**同一条 Attempt 链**解释为 `SendBarrier(cancel) → 目标订单终态证据 → SendBarrier(new)`（§6.2、§6.5）。计划在撤单腿过发出前门时选定并记进它的 `SendBarrier`，之后能力声明换成原子计划也不改这条链。这是 `>>=`：第二腿读第一腿结果，发生在 IO 壳内。
+   - 该 `(scope, Replace)` 声明两腿计划 `[cancel, submit]` → IO 壳在**同一条 Attempt 链**解释为 `SendBarrier(cancel) → TargetTerminal（目标终态判定成立）→ SendBarrier(new)`（§6.2、§6.5）。计划在撤单腿过发出前门时选定并记进它的 `SendBarrier`，之后能力声明换成原子计划也不改这条链。这是 `>>=`：第二腿读第一腿结果，发生在 IO 壳内。
    - `target` 的种类不在该来源接受之列（例如撤一条只有请求键的腿、来源只接受 venue 订单身份）→ 输入约束步 `TargetNotAccepted`，单据在 `Prepared` 之前关闭（§6.2 可执行性）。
    - 行动者：IO 壳，身份 = `attempt_position` + `WriteLaneKey`。
-2. 撤单腿（`leg = 1`）`cancel` 无回执 → `Undetermined`（§6.5）→ 整条链停在对账，新单腿**不发**（§6.2）；取证用撤单腿自己声明的渠道，不带键的撤单腿没有 by-key 渠道。
-   - 撤单腿终结于 `VenueAccepted`/`Found` 后，链进入 `AwaitingTargetTerminal`（转移表，§6.5）。
-   - 目标终态若已在撤单腿的回执 / 取证观察里（含 `cumulative_filled_quantity`）即用它；否则 IO 壳按 `target` 身份对该作用域所挂、`read` 为 `Supported`、请求 schema 能表达该身份的各条订单状态流逐条 `read`（`VenueRef` 写 venue 订单身份，`IdemKey` 写调用方键；没有这样的流时只等回执与推送，§6.5），直到目标终态或 `deadline`。这些读的记录带 `OneShot{origins ∋ Attempt((p, 2))}`，不产生 `ResolutionEvidence`。
-   - 终态到达时同一事务 append `TargetTerminal`，新单数量按意图口径算出并记在其中（§6.2、§6.5）；数量 ≤ 0 则链 `Resolved`、不发新单腿。新单腿同样过发出前门（§6.5）：该集成此刻无会话，或当前能力对该意图不可执行、或声明的计划已不是两腿时，新单腿等待而不发，`deadline` 到时 `Expired(leg = 2)`；会话断开期间 IO 壳也不发目标终态的读。
+2. 撤单腿（`leg = 1`）`cancel` 无回执 → `Undetermined`（§6.5）→ 整条链停在对账，新单腿**不发**（§6.2）；取证只用撤单腿自己请求键的 by-key / replay-by-key，listing 与成交对账不属撤单腿，不带键的撤单腿没有自动取证渠道，只由 `Attributed` 或 `Manual` 收敛；目标订单的记录（例如 listing 上仍在或已不在）不是撤单腿的 `Found`（§6.6 撤单腿的取证）。
+   - 撤单腿终结于 `VenueAccepted`/`Found` 后，链进入 `AwaitingTargetTerminal`（转移表，§6.5）。进入的那个事务先看 `deadline`，再对截至此刻的全部记录做目标终态判定（§6.5）：目标订单（`VenueRef` 即该 `venue_order_id`；`IdemKey` 取能证明属于记下该键的那条腿的记录所带的 `venue_order_id`）在进入时该作用域所挂订单状态流（按进入之前最近的声明版本定下，此后不变）上的最近观察（§8.1）是终态（剩余量口径下还须带 `cumulative_filled_quantity`），就在这个事务 append `TargetTerminal`。撤单腿还 `Undetermined` 时就已推送到达的目标终态（例如外部订单的 `External` 推送），撤单腿之后经 `Manual` 终结时同样在此成立。
+   - 判定不成立时，IO 壳按 `target` 身份对这组流中 `read` 为 `Supported`、请求 schema 能表达该身份的各条逐条 `read`（`VenueRef` 写 venue 订单身份，`IdemKey` 写调用方键，§6.5），直到目标终态或 `deadline`。这些读的记录带 `OneShot{origins ∋ Attempt((p, 2))}`，不产生 `ResolutionEvidence`。每个 append 目标订单记录的事务（读、推送、回执、取证、回填，不论归因）都重新判定；选中的若是带序号而较旧的终态，或目标订单跨流冲突、`IdemKey` 解析出两笔订单，判定不成立，链继续等。没有可读的候选流时只靠这些到达的记录。
+   - 判定成立的事务 append `TargetTerminal`，新单大小按意图口径算出并记在其中（§6.2、§6.5）；数量 ≤ 0 则链 `Resolved`、不发新单腿。新单腿同样过发出前门（§6.5），`submit` 的参数带这个大小、不带 `target`（§8.2）：该集成此刻无会话，或当前能力对该意图不可执行、或声明的计划已不是两腿时，新单腿等待而不发，`deadline` 到时 `Expired(leg = 2)`；会话断开期间 IO 壳也不发目标终态的读。
    - 对外可见：读模型显示原操作与后续操作的关联及未决状态。
 3. 取证记录模型（§6.5）：撤单腿的每次命中取证，同一事务落一条观察记录（`provenance: Reconciliation{AttemptRef}`）与一条 `ResolutionEvidence{Found}`（含 `Evidence`）；`Absent`/`Inconclusive` 只有 `ResolutionEvidence`。
 4. 链的时限即该意图的 `deadline`（H6；`deadline` 处理器，§8.1），由 IO 壳在每条腿的发出前门与 `AwaitingTargetTerminal` 等待期间读取（§6.5）：
-   - `AwaitingTargetTerminal` 期间到期 → append `Expired(deadline)`（`leg = 2`），链 `Resolved`，新单腿永不发出、不补偿，链移出阻塞头集合。
+   - `AwaitingTargetTerminal` 期间、尚无 `TargetTerminal` 时到期 → append `Expired(deadline)`（`leg = 2`），不再判定目标终态、也不 append `TargetTerminal`，链 `Resolved`，新单腿永不发出、不补偿，链移出阻塞头集合。已有 `TargetTerminal` 而新单腿在发出前门等到到期，才是“`TargetTerminal` 之后 `Expired(leg = 2)`”。
    - 撤单腿仍 `Undetermined` 时到期**不终结链**：未知的写只能以证据终结（转移表，§6.5；未终结 Attempt 阻塞，§6.4），链留在阻塞头集合。
-   - 撤单腿之后终结于 `VenueAccepted`/`Found`，则进入 `AwaitingTargetTerminal`，并因 `deadline` 已过立即 `Expired(leg = 2)`。
+   - 撤单腿之后终结于 `VenueAccepted`/`Found`，则进入 `AwaitingTargetTerminal`，并因 `deadline` 已过立即 `Expired(leg = 2)`，即使目标终态已在记录里（`deadline` 优先，§6.5）。
    - 撤单腿之后终结于 `VenueRejected`/`Absent`，则链直接 `Resolved`。
 5. 腿身份 `AttemptRef` 使撤单腿的回执观察不会被当作新单腿的归因证据（代数，§6.5）。
 
@@ -512,8 +512,8 @@
 
 - 先 fold 链是否已 `Resolved`：cancel 腿 `VenueRejected`/`Absent`/`Expired`，或已有数量 ≤ 0 的 `TargetTerminal` → 已完，无动作。链是否为两腿由 cancel 腿的 `SendBarrier` 定，不重读声明。
 - 否则若已有数量 > 0 的 `TargetTerminal`：新单量取该记录，不重算，new 腿过发出前门后发出（确未发出，同 #2 语义；会话、能力或计划条件不成立则等待）。
-- 否则链处于 `AwaitingTargetTerminal`：该集成会话建立后按目标身份 `read` 到终态，同事务 append `TargetTerminal`，再按上一条处理。
-- `deadline` 已过则 `Expired(deadline)`（`leg = 2`），new 腿永不发。
+- 否则链处于 `AwaitingTargetTerminal`：不对已有记录重新判定（判定在进入等待与此后每个 append 目标订单记录的事务里都已求值，§6.5）；该集成会话建立后按目标身份 `read`，此后到达的目标订单记录使目标终态判定成立时，同事务 append `TargetTerminal`，再按上一条处理。
+- `deadline` 已过：尚无 `TargetTerminal` 的链记 `Expired(deadline)`（`leg = 2`），不再判定目标终态；已有 `TargetTerminal` 的新单腿在发出前门记 `Expired(deadline)`。两者 new 腿都永不发。
 
 **#12 的恢复动作（核心）：**
 

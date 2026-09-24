@@ -12,7 +12,7 @@ flowchart TB
   START --> Q0{"链已 Resolved？<br/>任一腿 Expired / VenueRejected；或末腿 VenueAccepted / Found / Absent 且按首腿 SendBarrier 记录的腿计划无下一腿；或已有 TargetTerminal 且数量 ≤ 0"}
   Q0 -->|"是"| DONE["无动作（已 Expired 的链不再过发出前门）"]
   Q0 -->|"否"| Q3{"两腿计划的链处于 AwaitingTargetTerminal 且尚无 TargetTerminal？<br/>撤单腿已终结于 VenueAccepted / Found，且 leg 2 无记录"}
-  Q3 -->|"是"| ATT["第 4 步：继续按目标身份 read（D6.4）；目标终态 → 同事务 TargetTerminal（算量）→ 数量 > 0 则 leg 2 过发出前门；deadline 到 → Expired(leg 2)"]
+  Q3 -->|"是"| ATT["第 4 步：不对已有记录重新判定（判定已在进入等待与每个 append 目标订单记录的事务里求值）；继续按目标身份 read（D6.4）；到达的记录使目标终态判定成立 → 同事务 TargetTerminal（算量）→ 数量 > 0 则 leg 2 过发出前门；deadline 到 → Expired(leg 2)，不再判定"]
   Q3 -->|"否"| LEG["取当前腿 r（单腿计划：leg 1；两腿计划：撤单腿未终结则 r = 撤单腿，否则 r = 新单腿，其数量取已有的 TargetTerminal，不重算）"]
   LEG --> Q1{"r 有 SendBarrier？"}
   Q1 -->|"无"| SAFE["本腿确未发出（不变量 §6.9-8）"]

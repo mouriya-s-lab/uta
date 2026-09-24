@@ -55,13 +55,13 @@ stateDiagram-v2
 ```mermaid
 flowchart TB
   UD[("Undetermined(r)")]
-  UD --> CH0["渠道集 = 当前能力证据中该腿的声明渠道（声明的腿计划与链记录一致、该位置的键角色与 SendBarrier 所记一致时；否则为空 → 停等）<br/>固定顺序：ByKey → Listing → Fills → Replay（默认关闭，按 venue 开启，仅保留期内）；ByKey / Replay 用该腿自己记下的键，不带键的腿没有这两条<br/>本轮已取证渠道 = round == 当前轮 的 ResolutionEvidence（fold）；round 在发起读时取定，迟到的旧轮响应不计入新轮"]
+  UD --> CH0["渠道集 = 当前能力证据中该腿的声明渠道（声明的腿计划与链记录一致、该位置的键角色与 SendBarrier 所记一致时；否则为空 → 停等）<br/>固定顺序：ByKey → Listing → Fills → Replay（默认关闭，按 venue 开启，仅保留期内）；ByKey / Replay 用该腿自己记下的键，不带键的腿没有这两条<br/>撤单腿只有 ByKey / Replay（问的是这次撤单请求）；目标订单的记录不归因到撤单腿，不是它的 Found<br/>本轮已取证渠道 = round == 当前轮 的 ResolutionEvidence（fold）；round 在发起读时取定，迟到的旧轮响应不计入新轮"]
   CH0 --> NEXT{"还有未取证渠道？"}
   NEXT -->|"是"| CALL["调用该渠道读操作<br/>query_by_key / list_open / list_fills / replay_by_key"]
   CALL --> RES{"返回？"}
   RES -->|"Unavailable"| GAP["只 append Gap{Channel}<br/>不算取证、不换渠道；同渠道按 pacing 再发"]
   GAP --> CALL
-  RES -->|"命中带归因身份的订单 / 成交 / 原响应"| FOUND["同事务：该回应的观察记录(provenance Reconciliation{r, channel}；list_fills 命中只有成交记录，observation 指同流 Seq 最小者)<br/>+ ResolutionEvidence{r, channel, Found{observation, evidence: Evidence}}"]
+  RES -->|"命中归因到 r 的订单 / 成交 / 原响应"| FOUND["同事务：该回应的观察记录(provenance Reconciliation{r, channel}；list_fills 命中只有成交记录，observation 指同流 Seq 最小者)<br/>+ ResolutionEvidence{r, channel, Found{observation, evidence: Evidence}}"]
   RES -->|"ByKey 明确否定"| ABS["ResolutionEvidence{r, ByKey, Absent}（唯一有否定语义的渠道）"]
   RES -->|"未命中（listing / fills 空 ≠ absent，F10）"| INC["ResolutionEvidence{r, channel, Inconclusive}"]
   INC --> NEXT
@@ -131,13 +131,13 @@ stateDiagram-v2
   state "链 Resolved" as R
   state "Expired(leg=2, deadline)：新腿永不发，不补偿" as EX
   [*] --> C : Prepared(Replace, target)；首腿过发出前门时按当时声明选定两腿计划，记进 SendBarrier(cancel)
-  C --> ATT : 撤单腿终结于 VenueAccepted 或 Found
+  C --> ATT : 撤单腿终结于 VenueAccepted 或 Found（进入的事务先看 deadline，再对截至此刻的全部记录做目标终态判定：回看）
   C --> R0 : 撤单腿终结于 VenueRejected / Absent / Expired（不解释拒绝原因；目标可能仍在时发新腿 = 加仓，H1）
-  ATT --> ATT : 读到目标存在但非终态 / 状态映射为 unknown 或 Unmapped(raw)（不冒充终态，C13） / 未见目标（F10，不当作 Absent） / 读被上游 Refused（已记读结论记录）→ 按 pacing 再读
+  ATT --> ATT : 目标订单的记录到达（推送 / 回执 / 取证 / IO 壳按目标身份 read / 回填，不论归因），判定仍不成立：最近观察非终态、为 unknown 或 Unmapped(raw)（C13）、为未被选中的较旧序号终态、剩余量口径下缺 cumulative_filled_quantity、已落到保留边界之下；跨流冲突；IdemKey 解析出不止一笔或尚无订单；或读被上游 Refused → 按 pacing 再读
   ATT --> ATT : 读返回 Unavailable → 该观察流上 Gap{Channel}，再读
-  ATT --> N : 目标终态观察到达（撤单腿回执 / 取证的观察记录已含终态；attribution 指向目标的推送；IO 壳按目标身份 read：VenueRef 与 IdemKey 都按订单状态公共请求 schema 的订单身份字段写入，只读请求 schema 能表达该身份的候选流；记录带 OneShot{origins ∋ Attempt((p,2))}，不写 ResolutionEvidence）→ 同事务 append TargetTerminal{(p,2), observation, evidence, quantity}，quantity > 0
-  ATT --> R0 : 目标终态到达，同事务 append TargetTerminal 且 quantity ≤ 0（剩余量口径且已成交到意图数量）
-  ATT --> EX : 意图 deadline 到期
+  ATT --> N : 目标终态判定成立（目标订单 = VenueRef 的 venue_order_id，或能证明属于记下该键那条腿的记录给出的 venue_order_id；在进入时作用域所挂的订单状态流上按 §8.1 取最近观察，是终态，剩余量口径下还带 cumulative_filled_quantity；在进入的事务或 append 目标订单记录的事务里求值）→ 同事务 append TargetTerminal{(p,2), observation, evidence, quantity}，quantity > 0
+  ATT --> R0 : 判定成立，同事务 append TargetTerminal 且 quantity ≤ 0（剩余量口径且已成交到意图数量）
+  ATT --> EX : 意图 deadline 到期（先于判定：到期后不再 append TargetTerminal）
   N --> R : 新腿终结（VenueAccepted / VenueRejected / Undetermined 后收敛）
   R0 --> [*]
   R --> [*]
@@ -152,9 +152,9 @@ stateDiagram-v2
 
 读法：
 
-- 这是 `>>=`：第二腿读第一腿的终态观察，发生在 IO 壳内，不是单据层两次起单；每条实际发出的腿各过一次发出前门、各至多一条 `SendBarrier`（发出前过期或链已终结的腿没有）、各自记下声明的键与键角色。撤单腿不带键时没有 by-key 渠道。
+- 这是 `>>=`：第二腿读目标终态判定选中的那条观察，发生在 IO 壳内，不是单据层两次起单；每条实际发出的腿各过一次发出前门、各至多一条 `SendBarrier`（发出前过期或链已终结的腿没有）、各自记下声明的键与键角色。撤单腿不带键时没有 by-key 渠道；撤单腿都不声明 listing 与成交 / 持仓对账，不带键的撤单腿只由 `Attributed` 或 `Manual` 收敛（§6.6 撤单腿的取证）。
 - 撤单腿被拒、缺席或过期 → 链终结、新腿永不发；负责人看观察记录另起单据。
-- 崩在撤单腿终态已持久、新腿未 `SendBarrier`（#8）：先 fold 链是否已 `Resolved`（含 `TargetTerminal` 数量 ≤ 0）；已有数量 > 0 的 `TargetTerminal` 则数量取记录、过门后发新腿；否则续 `AwaitingTargetTerminal`、读到终态再 append `TargetTerminal`。
+- 崩在撤单腿终态已持久、新腿未 `SendBarrier`（#8）：先 fold 链是否已 `Resolved`（含 `TargetTerminal` 数量 ≤ 0）；已有数量 > 0 的 `TargetTerminal` 则数量取记录、过门后发新腿；否则续 `AwaitingTargetTerminal`，不对已有记录重新判定，此后到达的记录使目标终态判定成立时再 append `TargetTerminal`。
 
 核出：等待目标终态的完整出边（非终态 / 未见 / 不可用 / `deadline`）与腿身份原文没有——已并入 §6.5。
 
@@ -181,7 +181,7 @@ sequenceDiagram
   S->>EJ: 同事务 Prepared @p + Close(Prepared(p)) + RuleState
   IO->>IO: 发出前门：deadline 未过 ∧ 会话已建立 ∧ 意图对当前能力可执行（Place、参数 schema）
   IO->>EJ: durable append SendBarrier(p,1)（fsync）
-  IO->>I: submit(attempt (p,1), idempotency_key)（SendBarrier 记该键为订单键）
+  IO->>I: submit(attempt (p,1)；WriteLaneKey、Place；意图参数 + 意图参数 schema 身份；idempotency_key)（SendBarrier 记该键为订单键；Place 不带 target）
   I->>V: 上游下单
   V-->>I: 业务回执（受理，venue_order_id）
   I-->>IO: Ack(venue_id, receipt)

@@ -67,7 +67,7 @@ flowchart LR
   NORM{"意图构造（parse-don't-validate）<br/>锚点：principal · WriteLaneKey · OperationKind ∈ {Place, Cancel, Replace, Close} · basis（可空）<br/>撤/改单必带 target: VenueRef 或 IdemKey（IdemKey 须是某条腿 SendBarrier 记为订单键的键）；平仓的 target: PositionRef（含 instrument）由核心从 basis 所指的持仓观察记录构造<br/>deadline 缺省按 (WriteLaneKey, OperationKind) 策略 → 运行期全局，填入版本"}
   NORM -->|"锚点构造不出"| MAL["会话：draft → Rejected(Malformed)，不 append<br/>程序：EffectResponse{NotDrafted(Malformed)}，不重派"]
   NORM -->|"构造成功（参数不在此判定）"| TK[("TicketAction 记录：Draft / SubmitForDecision<br/>每版带意图参数 schema 身份")]
-  TK -.-> PV["单据 fold：parameter_validity<br/>按该来源 CapabilityProof 声明的意图参数 schema：Valid / Invalid(违反项) / NotSupported / SchemaMismatch"]
+  TK -.-> PV["单据 fold：parameter_validity<br/>按该来源 CapabilityProof 声明的意图参数 schema 与目标种类：Valid / Invalid(违反项) / NotSupported / SchemaMismatch / TargetNotAccepted"]
   TK --> STS["STS 顺序固定链（D5.3）"]
   APPR -.->|"Decision 记录（绑定 current_version）"| STS
 ```
@@ -85,9 +85,9 @@ flowchart TB
   IN[("单据 AwaitingDecision(current_version)")]
   IN --> A{"授权<br/>(responsible, WriteLaneKey, OperationKind) ∈ scope？"}
   A -->|"否"| RJ1["Rejection::Unauthorized + 安全事件<br/>Close(DecisionRejected)"]
-  A -->|"是"| B{"输入约束（步内可交换集，Validated 累积）<br/>parameter_validity == Valid（无条件；含可执行性：Supported、参数 schema、目标种类）<br/>instrument 属账户、子账户已枚举、instrument ∈ 策略允许集合"}
+  A -->|"是"| B{"输入约束（步内可交换集，Validated 累积）<br/>parameter_validity == Valid（无条件；含可执行性：Supported、参数 schema、目标种类）<br/>instrument 属账户、子账户已枚举、instrument ∈ 策略允许集合（instrument 两项对 Cancel 不适用：它没有 instrument）"}
   B -->|"否"| RJ2["NonEmpty<Rejection>：全部违反项（参数违反 / NotSupported / SchemaMismatch / TargetNotAccepted 可区分）<br/>Close(DecisionRejected)"]
-  B -->|"是"| C{"审批<br/>策略：总是 / 从不 / 名义 > N（以数量定量 = 需人工）"}
+  B -->|"是"| C{"审批<br/>策略：总是 / 从不 / 名义 > N（以数量定量 = 需人工；Cancel 只可总是 / 从不）"}
   C -->|"是"| WAITC["等待 decide(Approve / Reject)<br/>待决集合对审批人可见（读模型 tickets）<br/>同 (ticket, current_version) 第二条 decide → Conflict(AlreadyDecided)"]
   WAITC -->|"Reject"| RJ3["Close(DecisionRejected)"]
   WAITC -->|"Approve（绑定版本；决定者按动作种类授权）"| D

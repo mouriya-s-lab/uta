@@ -64,7 +64,7 @@
 - 声明为成交种类的流，映射对齐了注册字段 `execution_id`；声明为订单状态种类的流，映射对齐了注册字段 `venue_order_id`（见下文“成交与订单状态的契约语义”）；
 - 写路径的回执与取证响应、以及可带 `attribution` 的流（订单状态、成交），不带“不保留原始负载”的声明。
 - 每条流声明的 `request_schema` 是公共请求 schema 或在该集成的扩展 schema 里；每个配额池只列本投影声明的流；每个作用域的 `streams` 只列本投影声明的流。
-- 每个 `Supported` 写能力的腿计划在交易协议为该操作种类列出的计划之内（§6.2 操作种类表），撤单腿的键角色是 `None` 或 `RequestKey`，不带键的腿不声明 by-key 与 replay-by-key 渠道；`Cancel`、`Replace` 的 `target_kinds` 非空，其余操作种类为空。
+- 每个 `Supported` 写能力的腿计划在交易协议为该操作种类列出的计划之内（§6.2 操作种类表），撤单腿的键角色是 `None` 或 `RequestKey`，不带键的腿不声明 by-key 与 replay-by-key 渠道，撤单腿不声明 listing 与成交 / 持仓对账渠道（§6.6 撤单腿的取证）；`Cancel`、`Replace` 的 `target_kinds` 非空，其余操作种类为空。
 - `backfill` 不为 `Unsupported` 的流有回填坐标：声明 `joinable_venue_seq` 或 `has_event_time`（§2.2、§8.4）。
 
 **每条流提供的字段集** = 被对齐的公共字段 ∪ 扩展字段。§2.5 的“引用了没有集成提供的字段即 fail-closed”对照的就是这个集合：适配器丢弃了某个可选字段，引用它的树在装载 / 启动期被拒。
@@ -114,24 +114,24 @@
 |---|---|---|
 | `occurred_at` | 观察 | 事件时间完备进度；缺席则按 `received_at` 保守推导（时间权威见 §8.3） |
 | `idempotency_key` | 效应 | key↔`AttemptRef` 登记（连同 `SendBarrier` 所记的键角色）；by-key 与 `replay_by_key` 渠道可用 |
-| `attribution: FromAttempt(AttemptRef)` | 效应 | lane 决议匹配；驱动复合链第二腿；归因 |
-| `cumulative_filled_quantity` | 效应[交易协议] | 两腿改单新单腿的数量（`TargetTerminal`，§6.5）；`orders` 读模型的订单累计成交量 |
+| `attribution: FromAttempt(AttemptRef)` | 效应 | lane 决议匹配；归因；两腿改单 `IdemKey` 目标的订单身份（§6.5 目标终态判定） |
+| `cumulative_filled_quantity` | 效应[交易协议] | 两腿改单目标终态判定与新单腿的数量（`TargetTerminal`，§6.5）；`orders` 读模型的订单累计成交量 |
 | `execution_id` | 效应[交易协议] | `orders` 读模型按执行计数的键（见下文“成交与订单状态的契约语义”） |
 | `execution_revision` | 效应[交易协议] | 同一执行的修订取舍（同上） |
 | `deadline` | 效应 | 过期规则 |
 | 守卫字段（side / instrument / quantity / notional） | 效应[交易协议] | 输入约束、审批阈值（各操作种类的必填与互斥见 §6.2） |
-| `venue_order_id` | 效应 | 按 id 撤单路径；`orders` 读模型按订单归并与取最近观察的键（见下文“成交与订单状态的契约语义”） |
+| `venue_order_id` | 效应 | 按 id 撤单路径；`orders` 读模型按订单归并与取最近观察的键（见下文“成交与订单状态的契约语义”）；两腿改单目标终态判定按它认目标订单的记录（§6.5） |
 | `payload_schema` | 观察 | 程序 / 钩子解释器选择 |
 
 **`idempotency_key` 处理器：**
 
 - 登记的是 `SendBarrier` 携带的键与它的角色，按腿。只有记为订单键的键可以作撤单 / 改单的 `IdemKey` target（§6.2）。
-- 推送观察只带该键而无 `FromAttempt` 时，由此登记解析到腿，再按 `attribution` 行处理。
+- 观察记录只带该键而无 `FromAttempt` 时，由此登记解析到腿，再按 `attribution` 行处理。
 
 **`attribution: FromAttempt(AttemptRef)` 处理器（效应侧归因处理器）：**
 
 - 目标腿处于 `Undetermined` 未终结时，append `ResolutionEvidence{AttemptRef, Attributed, Found{observation: 该记录, evidence: 该记录的载荷与原始负载}}`（§6.6）。
-- 复合链处于 `AwaitingTargetTerminal` 且该记录是目标订单的终态时，同事务 append `TargetTerminal` 并据其数量决定是否发第二腿（§6.5）。
+- 两腿改单的目标终态不由它决定：归因只在 `IdemKey` 目标上用来认出目标订单是哪一笔，终态由目标订单的最近观察判定，与各条记录的归因无关（§6.5 目标终态判定）。
 - 归因由谁填见 §8.3。
 
 ### `payload_schema`
@@ -283,7 +283,11 @@
 
 ### `submit(attempt) → Ack | Reject | NoResponse`
 
-- **语义**：投放一次写（一条腿）。参数是该腿的 `AttemptRef`、意图载荷、该腿所带的调用方键；两腿改单的新单腿另带 `TargetTerminal` 的数量（§6.5），集成按它下单，不自行重算。原子改单计划的 `submit` 带意图的 `target`，集成在上游以一次写完成改单。
+- **语义**：投放一次写（一条腿）。参数 [设计]：
+  - 每条腿都带：该腿的 `AttemptRef`；意图的 `WriteLaneKey` 与 `OperationKind`；该腿声明带键时它 `SendBarrier` 所记的调用方键。
+  - 意图参数及其所依据的意图参数 schema 身份（§6.2 参数合规）。两腿改单的新单腿，参数里的数量是 `TargetTerminal` 记下的新单大小（§6.5）：剩余量口径下核心把参数的 `quantity` 换成这个值再交出，绝对量口径下参数原样，新单大小就是它所带的 `quantity` 或 `notional`。集成按交来的参数下单，不自行重算，也不会同时收到两个数量。
+  - 按操作种类带 `target`：`Place` 不带；`Close` 带 `PositionRef`，即它所含的持仓身份与 instrument，取值同持仓公共 schema 的这两个字段（§6.2、§8.1）；原子改单计划带意图的订单目标（`VenueRef` 或 `IdemKey`），集成在上游以一次写完成改单；两腿改单的新单腿不带 `target`，它是一张新订单，不是对目标的改单。
+  - 理由：`target` 是锚点，不在意图参数里（§6.2），集成从参数里取不到它，而按持仓身份平仓的上游没有 `PositionRef` 就无从寻址；`AttemptRef` 不说明作用域与操作种类，集成要落到哪个账户、做哪种写，只能由核心交出；参数 schema 身份说明这份参数按哪一版 schema 写成，集成据它解读扩展字段。不选：**只交意图参数，锚点由集成反查**：集成不持有意图与执行记录（§8.3）；**把整条意图记录交出（含 principal、`basis`）**：它们是核心的授权与依据，集成不读；**不带 schema 身份、由集成按它此刻的声明解读参数**：集成推送的 `CapabilityObserved` 可能在核心过了发出前门之后才到达核心，集成此刻声明的版本已不是发出前门核对的那一版，同一份参数会按另一版被解读；带上身份，集成看得出不一致，按 §8.3 自行不发写；**新单腿同时带意图原数量与算出的数量**：一个字段两个候选值，取错就是按原数量加仓（H1）；**新单腿也带 `target`**：集成可能把它当成对目标的改单。
 - **动作轴**：**写**。
 - **返回**：`Ack(venue_id, receipt)`（业务回执，`receipt` 是订单状态的契约载荷及其原始负载）/ `Reject(reason)` / `NoResponse`。
 - **核心内部结果**（记录模型，§6.5）：
@@ -305,20 +309,20 @@
 
 ### `list_open(scope) → Listing | Unavailable`
 
-- **语义**：列 open orders。**动作轴**：**读**。
+- **语义**：列 open orders。只作撤单腿以外的腿的取证渠道（§6.6 撤单腿的取证）。**动作轴**：**读**。
 - **返回**：`Listing(items)` / `Unavailable`。
 - **核心内部结果**：
-  - 命中带归因身份的订单 → 同事务 观察记录 + `ResolutionEvidence{Listing, Found}`；
+  - 命中归因到被取证腿的订单 → 同事务 观察记录 + `ResolutionEvidence{Listing, Found}`；
   - 未命中 → `ResolutionEvidence{Listing, Inconclusive}`。F10：listing 未见不证明未递；本渠道没有 `Absent`。
 - **错误**：`Unavailable`（超时 / 断连 / 配额拒绝）→ `Gap{origin: Channel}`，同渠道再发；该腿的声明里没有此渠道则不调用；空 `Listing` ≠ `Absent`。
 - **重试**：可重试、可换渠道。
 
 ### `list_fills(scope, since) → Fills | Unavailable`
 
-- **语义**：列成交。**动作轴**：**读**。
+- **语义**：列成交。只作撤单腿以外的腿的取证渠道（§6.6 撤单腿的取证）。**动作轴**：**读**。
 - **返回**：`Fills(items)` / `Unavailable`。`items` 是成交记录，各带 `execution_id`（§8.1）；上游分页在适配器内（§8.1 操作的粒度），任一页失败即整体 `Unavailable`。
 - **核心内部结果**：
-  - 命中带归因身份的成交 → 同事务 观察记录 + `ResolutionEvidence{Fills, Found}`；
+  - 命中归因到被取证腿的成交 → 同事务 观察记录 + `ResolutionEvidence{Fills, Found}`；
   - 未命中 → `ResolutionEvidence{Fills, Inconclusive}`（本渠道没有 `Absent`）。
 - **错误**：
   - `Unavailable`（超时 / 断连 / 配额拒绝）→ `Gap{origin: Channel}`，同渠道再发；
@@ -329,7 +333,7 @@
 
 ### `cancel(attempt) → Ack | Reject | NoResponse`
 
-- **语义**：撤单（一条腿）：单腿 `Cancel` 意图，或两腿改单的首腿。参数是该腿的 `AttemptRef`、意图的 `target`（`VenueRef` 或 `IdemKey`）、该腿声明为带请求键时的那个键。**动作轴**：**写**。
+- **语义**：撤单（一条腿）：单腿 `Cancel` 意图，或两腿改单的首腿。参数是该腿的 `AttemptRef`、意图的 `WriteLaneKey` 与 `OperationKind`（`Cancel` 或 `Replace`）、意图的 `target`（`VenueRef` 或 `IdemKey`）、该腿声明为带请求键时的那个键；单腿 `Cancel` 另带意图参数及其意图参数 schema 身份，两腿改单的撤单腿不带（改单的参数属于新单，撤单腿只撤目标，§8.3）。**动作轴**：**写**。
 - **返回**：同 `submit` 的回执形态。
 - **核心内部结果**：同 `submit`（按腿，§6.5）。
 - **错误**：
