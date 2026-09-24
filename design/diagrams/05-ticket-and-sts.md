@@ -93,9 +93,9 @@ flowchart TB
   WAITC -->|"Approve（绑定版本；决定者按动作种类授权）"| D
   C -->|"否：以 rule_version 为依据通过"| D
   D{"lane<br/>该 WriteLaneKey 阻塞头集合非空？"}
-  D -->|"非空，且本笔不是以阻塞头幂等键为 target 的撤单"| WAITD["停在 lane 步，单据仍 AwaitingDecision<br/>期间 alignment 照常重算"]
-  WAITD -->|"集合清空（fold 变化）"| CD
-  D -->|"空 / 是撤阻塞头意图 / bypass_lane Decision"| CD
+  D -->|"非空，且本笔既不是以阻塞头中投放订单的腿的幂等键为 target 的撤单，也没有覆盖当前全部阻塞头的 bypass_lane 控制记录"| WAITD["停在 lane 步，单据仍 AwaitingDecision<br/>期间 alignment 照常重算"]
+  WAITD -->|"集合清空，或 bypass_lane Applied 覆盖当前全部阻塞头（fold 变化）"| CD
+  D -->|"空 / 是撤阻塞头意图 / bypass_lane 控制记录（本版本、所记阻塞头）覆盖当前全部阻塞头"| CD
   CD{"冷却（只判一次；bypass 不豁免）<br/>Place / Replace 且 now < (WriteLaneKey, instrument) 最近下单腿 SendBarrier 时间 + 该 (WriteLaneKey, OperationKind) 的间隔？<br/>或同键有绕过产生、尚未越过屏障的下单腿？"}
   CD -->|"是"| RJ6["Rejection::Cooldown{until}<br/>Close(DecisionRejected)"]
   CD -->|"否 / 未配置"| E
@@ -132,8 +132,8 @@ stateDiagram-v2
   [*] --> Free
   Free --> B1 : STS 放行一笔 → Prepared（交给 IO 壳，过发出前门即发；门不成立时在门前等待，仍是阻塞头，D6.1）
   B1 --> Free : 该 Attempt 链 Resolved（各腿终结且无下一腿）
-  B1 --> BN : 例外一：以阻塞头幂等键为 target 的撤单意图放行（lane 步不等待）
-  B1 --> BN : 例外二：bypass_lane(ticket) Decision（principal 承担协议违反）
+  B1 --> BN : 例外一：以阻塞头中投放订单的腿的幂等键为 target 的撤单意图放行（lane 步不等待；按腿精确匹配）
+  B1 --> BN : 例外二：bypass_lane(ticket) 控制记录 Applied（principal 承担协议违反；只对所记版本与所记阻塞头；不是 Decision）
   BN --> BN : 集合内任一链 Resolved 但集合非空（只移出自己）
   BN --> BN : 集合非空时再加入获准的例外（再一笔撤阻塞头 / 再一次绕过）
   BN --> Free : 集合清空
@@ -150,7 +150,7 @@ stateDiagram-v2
   end note
 ```
 
-读法：阻塞不是锁——后续写的语义依赖队首结果（buying power、待撤订单是否存在、venue 侧顺序），所以是与 venue 的通讯协议语义。撤阻塞头的意图不依赖队首结果，它存在的目的就是让队首结果可判定，所以是唯一不等待的写。任何终结只移出自己；集合为空才放行普通写。
+读法：阻塞不是锁——后续写的语义依赖队首结果（buying power、待撤订单是否存在、venue 侧顺序），所以是与 venue 的通讯协议语义。撤阻塞头的意图不依赖队首结果，它存在的目的就是让队首结果可判定，所以是唯一不违反协议而不等待的写；绕过是另一种不等待，但它是记在控制记录里的协议违反。任何终结只移出自己；集合为空才放行普通写。
 
 核出：集合语义曾按"单条终结即解除"表述——已统一为集合（§6.4、§6.5、§8.5、§10.5 #3）。
 

@@ -77,12 +77,12 @@ UTA 的类型分成两个宇宙：可撤回的观察，只追加的效应。本�
 | 观察侧处理器（§2.1） | 派生记录、进度推进 | 信封字段、派生流 | 引用效应侧任何类型 |
 | 效应侧处理器（§2.1、§6.1） | lane / 决议 / 规则记录、写请求 | 信封字段、执行事实记录、经单向边读的观察值 | 绕过效应路径直接写 venue |
 | 程序（值，§4.3、§6.1） | 派生记录（解释①）、`EffectRequest`（解释②） | cursor 之后的记录、frontier | 直接调用 venue 写接口 |
-| 规则 STS（§6.3） | `Outcome` 记录 | 执行事实记录（含冷却所读的 `SendBarrier`）、单据 fold 已算好的状态（`parameter_validity`、`basis_validity`、`alignment`） | 引用读模型 |
+| 规则 STS（§6.3） | `Outcome` 记录 | 执行事实记录（含冷却所读的 `SendBarrier`、lane 步所读的 `bypass_lane` 控制记录）、单据 fold 已算好的状态（`parameter_validity`、`basis_validity`、`alignment`） | 引用读模型 |
 | 读模型（§4.4） | 供解释层经 `read_model` 读取的只读 fold（§8.5） | 按种类：执行事实记录、观察记录、订阅表当前态（§8.5） | 被规则引用、被当作权威 |
 | IO 壳（§6.5） | 执行事实记录；回执与取证读产生的观察记录 | `Prepared`、证据响应、复合链所需的目标终态观察 | 修改任何记录、知道单据存在 |
 | 单据（§6.2） | `TicketAction` append 记录 | IO 壳 append 的记录、观察值 | 反向耦合进 IO 壳 |
 | 效应侧 → 观察侧（单向边，§5） | 观察记录（回执/取证/一次性读，带不透明 `provenance`） | 观察位置集 `Set<LogPosition>`（`basis`、`checked_as_of`、`Found{observation}`、`as_of`）、观察值 | — |
-| 观察侧 → 效应侧 | — | 只存不解析的出处值（`provenance`/`attribution`） | **类型依赖与语义消费全部禁止**（反向不编译） |
+| 观察侧 → 效应侧 | — | 只存不解析的出处值（`provenance`/`attribution`）；投递调度按位置搬运执行事实订阅所选记录的字节（经存储读出，不解析、不经读模型，§8.5） | **类型依赖与语义消费全部禁止**（反向不编译） |
 
 表中各格的补充：
 

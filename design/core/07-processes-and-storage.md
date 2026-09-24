@@ -223,8 +223,9 @@ flowchart TB
 | STS 规则链 | 顺序固定链（授权→输入约束→审批→lane→过期）、`RuleState`、`Rejection`、放行判定 | 规则内部守卫（组合子 kind enum） | 规则不引用读模型 | §6.3 |
 | lane 驱动 | 每 `WriteLaneKey` 的阻塞头集合（lane 规则的 `RuleState`）与按 `Prepared` 位置的执行顺序 | 上游账户结构对齐 | 有序与阻塞来自通讯协议，不是 UTA 的锁；lane 阻塞头等待发生在 `Prepared` 之前 | §6.4 |
 | IO 壳 | 核心内唯一的写调用出口（集成写接口）、`Prepared` 链驱动、两阶段、`SendBarrier`、对账驱动、崩溃恢复 | 转移表、渠道顺序 | 核心内唯一效应处，写在上游的落实由集成完成；不知道单据存在 | §6.5–§6.7 |
-| 读模型 | 对记录的只读 fold（种类、输入与能否按历史 `as_of` 重建见 §8.5；`subscriptions` 为订阅表当前态；`sources` 为声明版本与能力变化的 fold），非权威，经核心↔解释层契约暴露；为执行事实订阅提供按位置读取的已提交记录 | fold 的具体数据结构 | 不被规则引用；消费方也可自行 fold 原始记录 | §4.4、§8.5 |
+| 读模型 | 对记录的只读 fold（种类、输入与能否按历史 `as_of` 重建见 §8.5；`subscriptions` 为订阅表当前态；`sources` 为声明版本与能力变化的 fold），非权威，经核心↔解释层契约暴露 | fold 的具体数据结构 | 不被规则引用；消费方也可自行 fold 原始记录 | §4.4、§8.5 |
 | 控制面 | 认证 principal 传入的运维动作通道（P14） | 传输 | 只经认证 principal，不经进程信号或 flag 文件 | §6.3、§8.5 |
+| 会话入口 | 核心↔解释层会话的建立：由 OS 对端凭据与 `actor` 组成 principal、契约版本检查、启动第 5 步之前返回 `Starting`；拒绝未完成握手的请求并记安全事件 | 传输（UDS / 命名管道） | 信任单位是 OS 用户（H7）；请求体里的身份不参与授权 | §8.5 |
 
 控制面的补充：
 
@@ -236,7 +237,7 @@ flowchart TB
 
 | 元素 | 拥有 | 隐藏的决定 | 假设 | 抽象 |
 |---|---|---|---|---|
-| 存储（SQLite 单写者） | 单文件、表主键、事务原子性、append-only 的 Rust 接口保证、快照、格式版本 | SQL、索引、WAL 细节 | 核心独占；集成/宿主不接触 | §7.4（持久化落点：§4.1、§6.5） |
+| 存储（SQLite 单写者） | 单文件、表主键、事务原子性、append-only 的 Rust 接口保证、快照、格式版本；按位置交出已提交记录的字节（两侧通用，不解析），供投递调度搬运执行事实订阅 | SQL、索引、WAL 细节 | 核心独占；集成/宿主不接触 | §7.4（持久化落点：§4.1、§6.5） |
 | 行情派生计算子系统（外部，可选） | `Pooled` 段视图的物化与原生 op 的运行；**属子系统，不属核心** | 全部实现：布局、IPC、段生命周期、作者面 | 核心零影响；未安装即拒绝含 `Pooled` 的程序 | §4.5、§8.7（实现归 `hpc-derivation/design.md`） |
 | 解释层（核心之外，下游侧） | 对外概念、状态翻译表、一次性命令与双向长连接、续传令牌的编解码；由类型生成的参数与字段 | 核心概念、核心↔解释层契约、自身落点（CLI 或核心内部） | 不持有状态：订阅、确认进度、单据都在核心；授权全在核心 | §0.1、§8.5（设计归 `design/downstream/design.md`） |
 
@@ -247,10 +248,11 @@ flowchart TB
 | 写入者 | 记录 |
 |---|---|
 | 单据 | `TicketAction`，含 `Close(Prepared)` + 同事务 `Prepared` |
-| STS 规则链 | Decision/`Outcome`/`Rejection` |
+| STS 规则链 | Decision/`Outcome`/`Rejection`；授权步否决时的安全事件 |
 | IO 壳 | `SendBarrier`/`VenueAccepted`/`VenueRejected`/`Undetermined`/取证 `ResolutionEvidence`/`ReconciliationReopened{CancelLegTerminal \| SessionRestored}`/`Expired`/`CapabilityObserved`/取证 `Gap{Channel}` |
 | 效应侧归因处理器 | `ResolutionEvidence{Attributed}`（§8.1） |
-| 控制面 | 控制记录、安全事件、`ResolutionEvidence{Manual}`、`ReconciliationReopened{Manual}`（§8.5） |
+| 控制面 | 控制记录、控制动作与人工决议越权时的安全事件、`ResolutionEvidence{Manual}`、`ReconciliationReopened{Manual}`（§8.5） |
+| 会话入口 | 未完成握手的连接发起请求时的安全事件（§8.5） |
 | 核心握手处理（§7.2 第 3 步） | 握手成功时的声明版本（§7.5） |
 | 出站请求处理器 | `EffectRequest`、`EffectResponse`（§6.1） |
 
@@ -280,10 +282,12 @@ flowchart TB
   HOST["程序宿主"] --> PROG
   IOSHELL --> INT
   STORE["存储（SQLite 单写者）"]
-  TICKET -.basis 读观察位置.-> OJ
-  STS -.读观察值/归因观察.-> OJ
+  TICKET -.basis 位置 · 钩子读观察值与归因观察.-> OJ
+  IOSHELL -.append 回执 / 取证的观察记录 · 读复合链目标终态观察.-> OJ
   IOSHELL -.append 执行事实.-> STORE
   OJ -.持久化.-> STORE
+  DELIV -.按位置读观察记录.-> OJ
+  DELIV -.按位置读执行事实订阅所选记录的字节（不解析）.-> STORE
   RM -.只读 fold 执行事实.-> STORE
   RM -.只读 fold 观察记录.-> OJ
   RM -.subscriptions 当前态.-> SUB
@@ -295,7 +299,7 @@ flowchart TB
   class HPC,INT,HOST,IL ext;
 ```
 
-唯一跨边是效应侧读观察侧：`basis` 引用的观察位置、钩子读的观察值、归因观察、读模型 fold 的观察记录与读取的订阅表当前态。能力证据是执行事实侧记录，属效应侧内部（§7.5）。观察侧任何元素都不依赖效应侧；crate 依赖方向即此，反向不编译（§3.2）。
+唯一跨边是效应侧读观察侧：`basis` 引用的观察位置、钩子读的观察值与归因观察、IO 壳读的复合链目标终态观察、读模型 fold 的观察记录与读取的订阅表当前态；IO 壳 append 回执与取证的观察记录也沿这个方向（§3.2）。STS 规则链不读观察（§6.3），它读的是单据 fold 已算好的状态。能力证据是执行事实侧记录，属效应侧内部（§7.5）。存储不属任何一侧：投递调度经它按位置读出执行事实订阅所选记录的字节、原样搬运，不经读模型、不解析（§8.5）。观察侧任何元素都不依赖效应侧类型；crate 依赖方向即此，反向不编译（§3.2）。
 
 ## 7.4 存储引擎
 
@@ -344,14 +348,15 @@ flowchart TB
   - 程序解释①（派生记录）；
   - 一次性读与回填的结果及其读结论记录：读处理器、钩子取证、IO 壳按目标身份的读、消费方 `read`、订阅侧回填（§3.4、§8.2）；
   - IO 壳：回执与取证的观察记录（该回应的订单状态与每笔可识别执行的成交记录，记录模型，§6.5）；
-  - 核心：健康观察（会话状态、各流 readiness `Disconnected`、调用结果计数，§8.4）。
+  - 核心：健康观察（会话状态、各流 readiness `Disconnected`、各流 epoch 的回填进度、调用结果计数，§8.4）；
+  - 核心按宿主协议：程序观察 `ProgramReset{reason}`、`ProgramFailed{reason}`（§8.6）。
 - **读**：订阅者、程序、单据 `basis`/检查项、读模型、IO 壳（复合链读目标终态观察）。
 - **传播**：按 `LogPosition` 推进；`RetractableDelta` 可撤回可压缩；回执 / 取证的观察记录可压缩，`Evidence` 在执行 J。
 
 ### 执行事实 `Journal`
 
 - **写**：见唯一写入口表（§7.3）。补充：STS 规则链的 Decision/`Outcome`/`Rejection` 记录带 `checked_as_of`；IO 壳的 `VenueAccepted` 与取证 `ResolutionEvidence{Found}` 含 `Evidence`（契约载荷与原始负载，§6.5）；控制记录为 `Applied | Rejected`。
-- **读**：读模型、单据 `basis`、lane 规则（阻塞头集合）、IO 壳（重启重建链）、对账驱动、出站处理器（重启重派判定）。
+- **读**：读模型、单据 `basis`、lane 规则（阻塞头集合、`bypass_lane` 控制记录）、IO 壳（重启重建链）、对账驱动、出站处理器（重启重派判定）。投递调度经存储按位置搬运执行事实订阅所选的记录，不解析（§8.5）。
 - **传播**：纯 append；位置即顺序。lane 链状态与 `Resolved` 是它的 fold，不另存。
 
 ### 规则状态（`RuleState`）
@@ -378,7 +383,7 @@ flowchart TB
 - **写**：
   - 每次集成握手成功，由核心 append 一个**声明版本**（执行 J）：该握手 `Projection` 的声明部分（除记录映射外的全部，§8.1），含作用域与 `account_ref` 的可解析判定（§2.2）；
   - IO 壳在运行期观察到能力变化（含能力变更推送，§8.3；写能力与流的读 / 回填能力）时 append `CapabilityObserved`。它带所更新的声明版本：该来源（由记录锚点承载）加被接受的那条推送或回应所携的 `SessionEpoch`，不是 append 时另取的当前 epoch。
-- **读**：STS `Context`、单据 `AlignmentCheck` 解析、IO 壳取证渠道集、`required_inputs` 比对、一次性读与回填的路由（§8.2）、读模型 `sources`、执行事实订阅（§8.5）。
+- **读**：STS `Context`、单据 `AlignmentCheck` 解析、IO 壳取证渠道集、`required_inputs` 比对、一次性读与回填的路由（§8.2）、读模型 `sources`。执行事实订阅只按位置搬运这些记录，不读其内容（§8.5）。
 - **传播**：
   - 只 append，最新一版生效：取该来源最近的声明版本，只 fold 引用这一版本的 `CapabilityObserved`，同一能力目标的多条按其所在流的位置先后；旧会话的更新不覆盖新声明，不需要跨流的全局序（§2.3、§8.5 订阅组）。重启后由持久的声明版本与这些关联的更新重建，历史记录的 epoch 不必等于新的当前 epoch；集成重新握手时再 append 新版。
   - 取证渠道按**当前**能力证据选：取证是读，按当前能力才可执行。旧 Attempt 不绑定历史版本。

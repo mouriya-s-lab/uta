@@ -278,7 +278,7 @@ sequenceDiagram
   AI->>S: 单据 T3：cancel，target = IdemKey(p1 的幂等键)
   S->>S: T3 授权 ✓ 输入约束 ✓ 审批 ✓ lane 步不等待（唯一写例外）✓ 过期 ✓ 门 ✓
   S->>IO: Prepared @p3（阻塞头集合 = {p1, p3}）
-  IO->>I: SendBarrier(p3,1) → submit cancel
+  IO->>I: SendBarrier(p3,1) → cancel(p1 的幂等键)
   I-->>IO: Ack → VenueAccepted((p3,1))（撤单腿终结，不决议 p1）
   IO->>IO: append ReconciliationReopened{(p1,1), CancelLegTerminal((p3,1))}
   Note over IO: 重走一轮：按能力证据声明的渠道从头取证（D6.2）
@@ -299,6 +299,6 @@ sequenceDiagram
   Note over UI,I: 另一 lane（不同账户）的写全程不等待
 ```
 
-读法：撤单让 venue 侧到达一个读得出的终态，并触发阻塞头重开一轮取证；阻塞头仍只由取证收敛，撤单不提升任何渠道的证明力（listing 未见仍是 `Inconclusive`）。两条路径（撤阻塞头 / `bypass_lane`）都让该 lane 出现两条 `SendBarrier`，区别只在有无 `bypass_lane` Decision。
+读法：撤单让 venue 侧到达一个读得出的终态，并触发阻塞头重开一轮取证；阻塞头仍只由取证收敛，撤单不提升任何渠道的证明力（listing 未见仍是 `Inconclusive`）。T3 的 `target` 必须是 p1 那条投放订单的腿 `SendBarrier` 所带的键（按腿精确匹配）。两条路径（撤阻塞头 / `bypass_lane`）都让该 lane 出现两条 `SendBarrier`，区别只在有无 `bypass_lane` 控制记录（它不是 Decision）。
 
 核出："读不到即 `Absent`"的原表述违反 F10——已改为 by-key 否定才 `Absent`（§6.4、W5）。

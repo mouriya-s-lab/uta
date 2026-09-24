@@ -158,8 +158,8 @@ flowchart LR
 | 观察 | 回执的观察记录 | IO 壳 | 该回应的观察记录：回应含订单状态时订单状态一条，加回应所含每笔可识别执行一条成交记录（带 `execution_id`）；同一回应的各条 `provenance: Receipt{AttemptRef}` 相同；`attribution` 按各条自己的关联证据填写，不因同在一个回应而继承（订单状态一条为 `FromAttempt(AttemptRef)`）；可压缩；契约载荷与原始负载永存于执行侧 `Evidence` | 出处值（不解析）|
 | 观察 | 取证的观察记录 | IO 壳 | 同上，`provenance: Reconciliation{AttemptRef, channel}`；只对由自己的关联证据属于该腿的记录填 `FromAttempt(AttemptRef)`；`list_fills` 命中只有成交记录，不造订单状态记录；可压缩 | 出处值（不解析）|
 | 观察 | 派生记录（含 alert） | 派生 DAG | 程序流 `StreamId`、`RetractableDelta` | — |
-| 观察 | `ProgramReset{reason}` / `ProgramFailed{reason}` | 宿主协议 | 程序 id、`reason` | — |
-| 观察 | 健康观察 | readiness 由集成推送入口；会话状态、readiness `Disconnected`、调用结果由核心（§8.4） | 集成；`session` 状态，或流与 readiness，或调用目标与结果（失败 / 成功） | — |
+| 观察 | `ProgramReset{reason}` / `ProgramFailed{reason}` | 宿主协议（核心） | 程序 id、`reason` | — |
+| 观察 | 健康观察 | readiness（`Starting` / `Live{live_from}` / `Degraded`）由集成推送入口；会话状态、readiness `Disconnected`、回填进度、调用结果由核心（§8.4） | 集成；`session` 状态，或流与 readiness，或流 epoch 与回填进度（`Backfilling{through}` / `Closed` / `Incomplete{through}`），或调用目标与结果（失败 / 成功） | — |
 | 执行 | `TicketAction`：`Draft` / `Revise` / `Transfer` / `SubmitForDecision` / `SendBack` / `Close(outcome)` | 单据 | `ticket_id`、`by: principal`、`basis`、意图版本 hash | `basis` → 观察位置（含归因观察）+ 执行事实侧位置（`EffectRequest` / `VenueAccepted` / `SendBarrier`） |
 | 执行 | Decision / `Outcome` / `Rejection` | STS 规则链 | `ticket_id`、绑定 `current_version`、`principal`、`rule_version`、`checked_as_of` | → 单据记录；`checked_as_of` → 观察位置 |
 | 执行 | `Prepared` | 单据（放行事务） | `attempt_position` 即自身位置、`WriteLaneKey`、`OperationKind`、`deadline`、`target?`、意图载荷 | → `Close(Prepared)` 同事务 |
@@ -177,8 +177,8 @@ flowchart LR
 | 执行 | `EffectRequest` | 出站请求处理器 | 程序 id、`effect_kind`、`basis`、`key?`、载荷 | `basis` → 观察位置 |
 | 执行 | `EffectResponse{request, outcome}` | 出站请求处理器 | 读：`Concluded(读结论记录位置)` / `Unavailable(gap)` / `NotCalled(reason)`；写：`Drafted(ticket)` / `NotDrafted(Malformed{reason})`（§6.1） | → `EffectRequest` |
 | 执行 | 控制记录 `Applied(position)` / `Rejected(reason)` | 控制面 | principal、动作、配置版本 hash | — |
-| 执行 | 安全事件 | 控制面 / 会话层 / 授权步 | principal（或未认证连接标识）、请求种类 | — |
-| 执行 | `bypass_lane` Decision | 控制面 | principal、被绕过的阻塞头位置集 | → `Prepared` 集合 |
+| 执行 | 安全事件 | 会话入口（未完成握手的请求）/ STS 授权步（写越权）/ 控制面（控制动作与人工决议越权） | principal（或未认证连接标识）、请求种类 | — |
+| 执行 | `bypass_lane` 的控制记录 `Applied`（不是 Decision） | 控制面 | principal、单据、该单据的 `WriteLaneKey`（随该 lane 的执行事实流投递）、生效时的 `current_version`、被绕过的阻塞头位置集 | → 被绕过的 `Prepared` 集合 |
 
 读法：
 

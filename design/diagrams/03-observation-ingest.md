@@ -44,30 +44,22 @@ sequenceDiagram
 
 核出：无。
 
-## D3.2 集成 × 流的 readiness 与流 epoch 决定
+## D3.2 集成 × 流的 readiness、回填进度与流 epoch 决定
 
-对照：§8.4 readiness 状态机、§8.2 `handshake`、§4.2 `Gap{Source}` 原因集、§7.6 `rotate_credential`。
+对照：§8.4 readiness 状态机与回填进度、§8.2 `handshake`、§4.2 `Gap{Source}` 原因集、§7.6 `rotate_credential`。
 
 ```mermaid
 stateDiagram-v2
-  state "Live（非 Degraded）" as LN
-  [*] --> Starting : 会话建立（新 session_seq）
-  Starting --> Backfilling : 集成声明 Backfilling{through}（through = 已证明的连续覆盖上界，与窗口、live_from 同一流坐标）
-  Starting --> Live : 无回填可做：以 venue 游标续接原 epoch / 能力不支持回填
-  Backfilling --> Live : 进入 Live 时集成声明 live_from（首条实时记录的位置：有 venue 序号用序号，否则用事件时间）
+  state "Live{live_from}（非 Degraded）" as LN
+  [*] --> Starting : 会话建立（新 session_seq）；集成推送
+  Starting --> Live : 集成声明 live_from：上游给出可衔接 venue 序号时于订阅确认即声明（下一个期望序号，不等首条记录）；否则于首条实时记录到达（有 venue 序号用序号，否则用事件时间）
   state Live {
     [*] --> LN
     LN --> Degraded : 集成上报：上游降级 / 上游限流 / 能力收紧（子态，接受条件不变；与核心配额挂起订阅互相独立）
     Degraded --> LN : 恢复
   }
-  note left of Live
-    进入 Live 后核心只请求 < live_from 的回填范围；
-    回填页覆盖到 live_from 之前 → 边界闭合，frontier 才允许越过；
-    回填穷尽未达 live_from → Gap{Source, backfill_incomplete}，frontier 跳过
-  end note
-  Starting --> Disconnected : 断线 / 集成进程退出
-  Backfilling --> Disconnected : 断线 / 集成进程退出
-  Live --> Disconnected : 断线 / 集成进程退出
+  Starting --> Disconnected : 断线 / 集成进程退出（核心 append）
+  Live --> Disconnected : 断线 / 集成进程退出（核心 append）
   Disconnected --> Starting : 重连（新 session_seq）
   note right of Starting
     握手时每条流决定 epoch：
@@ -78,9 +70,27 @@ stateDiagram-v2
   end note
 ```
 
-读法：readiness 变化是派生健康观察（不需确认），经 `health` 读模型对解释层可见，再由它翻成下游的连接状态；它不改变记录接受条件——接受只看 `session_epoch`。
+```mermaid
+stateDiagram-v2
+  state "无回填任务（尚无 live_from / 续接原 epoch / 能力不支持 / 无要历史的订阅）" as NONE
+  state "Backfilling{through}" as BF
+  state "Closed" as CL
+  state "Incomplete{through}" as INC
+  [*] --> NONE : 流 epoch 开始
+  NONE --> BF : 新 epoch 以 Gap{Source} 开始 ∧ backfill Supported ∧ 有要历史的订阅 ∧ 已有 live_from → 核心建立任务，through = 起点
+  BF --> BF : 读结论 covered_to 推进 through；Unavailable 不推进
+  BF --> CL : covered_to 连到 live_from（边界闭合，frontier 才允许越过）
+  BF --> INC : 历史穷尽或 Refused 而未达 live_from → Gap{Source, backfill_incomplete}，frontier 跳过未覆盖区间
+  note right of BF
+    核心判定、核心 append 健康观察（与读结论 / backfill_incomplete 同事务）
+    只请求 < live_from 的窗口；实时记录同时照常到达
+    新 epoch 开新任务，旧任务的 Closed 不沿用
+  end note
+```
 
-核出：无。
+读法：readiness 由集成推送（`Disconnected` 由核心），只说实时供给；回填进度由核心凭读结论记录判定，只说这一个流 epoch 的 `[起点, live_from)` 补齐到哪。二者都是派生健康观察（不需确认），经 `health` 读模型对解释层可见，再由它翻成下游的连接状态；它们不改变记录接受条件——接受只看 `session_epoch`。
+
+核出：readiness 原把 `Backfilling` 放在 `Live` 之前，而回填窗口的终点 `live_from` 要到 `Live` 才有，`through` 又是核心凭读结论记录才证明得了的——已拆为集成推送的 readiness 与核心判定的回填进度（§8.4）。
 
 ## D3.3 回填与实时边界
 
@@ -90,7 +100,7 @@ stateDiagram-v2
 flowchart LR
   subgraph EPOCH["同一流 epoch"]
     direction LR
-    G["Seq 1<br/>Gap{Source}"] --- BF1["窗口 1 的记录<br/>backfilled + 读结论（covered_to）"] --- BF2["窗口 2 的记录<br/>backfilled + 读结论（covered_to）"] --- LF["live_from<br/>首条实时记录"] --- L1["实时 …"]
+    G["Seq 1<br/>Gap{Source}"] --- BF1["窗口 1 的记录<br/>backfilled + 读结论（covered_to）"] --- BF2["窗口 2 的记录<br/>backfilled + 读结论（covered_to）"] --- LF["live_from<br/>实时供给起点"] --- L1["实时 …"]
   end
   CORE["核心按订阅需求切窗口<br/>backfill(stream, window)；上游分页与 pacing 在适配器内"] -->|"只请求 < live_from"| BF1
   BF1 -->|"下一窗口从 covered_to 续（崩溃重启同样）"| BF2
@@ -113,8 +123,9 @@ sequenceDiagram
   participant SUB as 持久订阅元素
   participant DL as 投递调度
   participant J as 观察 Journal
+  participant EJ as 执行 Journal（经存储按位置读，不解析）
   C->>SUB: subscribe(selector, mode, from?)（selector = 观察流 (来源, 流, 主体集?) 或 执行事实 (来源, 作用域?)）
-  alt 来源未登记 / selector 引用最近声明里没有的流
+  alt 来源未登记 / 来源已有声明而 selector 引用其最近声明里没有的流
     SUB-->>C: 拒绝
   else 执行事实订阅而 mode ≠ ordered
     SUB-->>C: 拒绝
@@ -128,7 +139,8 @@ sequenceDiagram
     SUB-->>C: Subscription
   end
   loop 记录到达
-    J->>DL: 新记录 pos
+    J->>DL: 新记录 pos（观察流订阅）
+    EJ->>DL: 新记录 pos（执行事实订阅：存储按位置交出已提交的字节，投递不读读模型、不解析）
     DL->>C: 投递 pos（已投未确认 = 消费者内存里的事）
     C->>SUB: ack(subscription, cursor = pos)（确认 = 已处理）
     SUB->>SUB: cursor 推进（单写者，串行化）
@@ -151,7 +163,7 @@ sequenceDiagram
 
 - 确认语义唯一：`ack` = 已处理。已投未确认的记录在崩溃后会再见一次；已确认的永不重投（退回只经控制面 `rewind_cursor`）。
 - 程序是同一种订阅者：它的 cursor 与 `Checkpoint` 同事务持久化（D4.1），所以程序永远不会看到已折入状态的记录。
-- 执行事实订阅走同一套 cursor 与 ack，但只能 `ordered`：执行事实不压缩、不合并，所以慢消费者只背压自己，不出现 `Gap{Delivery}`；投递按位置原样搬运记录，不解析。
+- 执行事实订阅走同一套 cursor 与 ack，但只能 `ordered`：执行事实不压缩、不合并，所以慢消费者只背压自己，不出现 `Gap{Delivery}`；投递经存储按位置读出已提交的记录、原样搬运，不经读模型、不解析，所以观察侧的订阅与投递元素不依赖效应侧类型（§7.3 uses 图）。
 
 核出：无。
 

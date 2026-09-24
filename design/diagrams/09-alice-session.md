@@ -21,11 +21,11 @@ sequenceDiagram
   alt 契约版本不兼容
     C-->>L: 拒绝会话，记 P14
   else 启动第 5 步之前（§7.2 最后开放下游会话）
-    C-->>L: 会话可建立；除 handshake / health 外的操作一律返回 Starting，不给部分状态
+    C-->>L: 会话可建立；除 handshake 外的操作（含 health）一律返回 Starting，不给部分状态
   else 正常
     C-->>L: Session{principal = (os_user, actor), instance_id, contract_version}
   end
-  Note over L,C: 未握手的连接发写 / 控制 → 会话层拒绝 + 安全事件（W19 步 1）
+  Note over L,C: 未握手的连接发写 / 控制 → 核心的会话入口拒绝 + 安全事件（W19 步 1）
   Note over L,C: 请求体伪造 principal 不参与授权：只取会话绑定的 principal（W19 步 2）
   L->>RM: read_model(sources)（声明：账户、流、能力；D9.5）
   L->>RM: read_model(kind, as_of?)
@@ -80,7 +80,7 @@ flowchart LR
   S6b --> RRO
   S7 --> HL
   S2 -.->|"逐 target，按序判定：UnknownTarget / Unavailable{source_state}（从未有声明）/ Unsupported / Unconfirmed / InvalidRequest / Unavailable{source_state}（无会话，不调用不记 gap）/ Answered{conclusion, items} / Refused{conclusion, reason} / Unavailable（调用失败记 Gap{Channel}；deadline 内未返回）"| S2
-  S1 -.->|"未声明流 / 执行事实非 ordered → 拒绝；配额池流不带主体集 → 拒绝；超池上限 → QuotaExceeded{quota, limit}"| S1
+  S1 -.->|"来源未登记 / 来源已有声明而流不在最近声明里 / 执行事实非 ordered → 拒绝；来源已登记但从未有声明 → 待接纳；配额池流不带主体集 → 拒绝；超池上限 → QuotaExceeded{quota, limit}"| S1
   S3 -.->|"kind 未定义 → 拒绝；as_of 有位置尚未提交 → NotYetAvailable{positions}（各流已提交的流末）；tickets / subscriptions 带历史 as_of → 拒绝"| S3
   S4 -.->|"expected_version ≠ current_version → Conflict；同版本已有 Decision → Conflict(AlreadyDecided)"| S4
   S5 -.->|"越权 → Unauthorized；配置不合法 → Rejected 并保留上一有效版本；advance_retention 逐流判定 → NotForward / ReferencedBelow / InsideWindow"| S5
@@ -143,7 +143,7 @@ flowchart LR
   A5 --> F5["写快照（仅加速重建，不改 append-only）"]
   A6 --> F6["D8.2"]
   A7 --> F7["cursor 退回；已确认区间重投（显式控制动作，不是恢复路径）"]
-  A8 --> F8["bypass_lane Decision（自觉违反）；单据越过 lane 步 → Prepared；阻塞头成集合（D5.4）"]
+  A8 --> F8["控制记录 Applied（自觉违反，不是 Decision）：记单据当时的 current_version 与阻塞头位置集；单据不在 AwaitingDecision → Rejected<br/>lane 步只对这些阻塞头不等待，其余各步照常 → Prepared；阻塞头成集合（D5.4）"]
 ```
 
 读法：控制动作不经进程信号或 flag 文件；每个动作的结果是一条带 principal 与配置版本 hash 的控制记录，生效动作再触发相应记录。
@@ -169,7 +169,8 @@ sequenceDiagram
   L->>RM: read_model(sources)
   RM-->>L: 每来源：最近声明版本加引用该版本的 CapabilityObserved（账户 = account_ref + label + 挂的流、流的 read/backfill 与名义等级、写能力、配额；account_ref 是否可解析）
   L->>C: subscribe(执行事实 (X, 作用域?), ordered, from)
-  EJ-->>L: 新声明版本 / CapabilityObserved / 单据与腿的执行事实（按位置原样搬运）
+  EJ-->>C: 已提交的新声明版本 / CapabilityObserved / 单据与腿的执行事实（存储按位置交出字节）
+  C-->>L: 持久订阅与投递调度按位置原样搬运（不解析、不经读模型）
   L->>RM: 收到新声明版本或 CapabilityObserved → 重读 sources
   L-->>D: 账户列表、能力（支持 / 不支持 / 未确认）、待审事项、结果未知；引用冲突的账户显示“需要处理”
   Note over L,D: 待审事项是否偏离不推送：呈现时读 tickets（§8.5）

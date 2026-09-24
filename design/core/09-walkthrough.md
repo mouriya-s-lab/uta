@@ -142,15 +142,14 @@
 
 **扩展路径（撤阻塞头与显式绕过）。** 队首取证期间，lane 上读侧决议动作（按键查询 / listing / 对账）不是队列项（§6.4）。
 
-- **撤阻塞头**：以第一笔的幂等键为 `target` 起一张撤单单据。
-  - STS 全链照走，lane 步不等待阻塞头（唯一写例外，§6.4）；放行后阻塞头集合 = {第一笔, 撤单}。
+- **撤阻塞头**：以第一笔下单腿 `SendBarrier` 所携带的幂等键为 `target` 起一张撤单单据（按腿精确匹配，§6.4）。
+  - STS 全链照走，lane 步不等待阻塞头（唯一不违反协议的写例外，§6.4）；放行后阻塞头集合 = {第一笔, 撤单}。
   - 撤单腿自身的回执不决议第一笔。
   - 撤单腿终结（`VenueAccepted`/`Found`）时，IO 壳为第一笔 append `ReconciliationReopened{CancelLegTerminal}`，取证从 by-key 重走一轮：读到目标（任何状态）即 `Found`；by-key 明确否定即 `Absent`；listing 未见仍 `Inconclusive`（F10，§6.6）。
-- **显式绕过**：带 principal 的显式绕过记为 Decision（对协议的自觉违反，§6.4）。
-  - 第二笔越过 lane 步得 `Prepared`，阻塞头集合扩大。
+- **显式绕过**：运维 principal 对第二笔 `bypass_lane(ticket)`，得控制记录 `Applied`（对协议的自觉违反，不是 Decision，§6.4），记下第二笔当时的 `current_version` 与当时的阻塞头位置集 {第一笔}。
+  - 第二笔已获批准（或不需人工）时越过 lane 步得 `Prepared`，阻塞头集合扩大；未获批准则照常停在审批步，批准时这一版本仍受这条绕过覆盖。之后加入集合的阻塞头不在其内。
   - 各自的对账驱动独立收敛，任一终结只移出自己，集合清空即 lane 解除。
-  - 绕过记录带 principal 与被绕过的阻塞头位置集。
-- 对外可见：两种路径下该 lane 都有两条 `SendBarrier`（各属不同 Attempt）；前者无 `bypass_lane` Decision，后者有；其他 lane 不受影响。
+- 对外可见：两种路径下该 lane 都有两条 `SendBarrier`（各属不同 Attempt）；前者无 `bypass_lane` 控制记录，后者有；第二笔单据的 Decision 仍只是它的批准；其他 lane 不受影响。
 
 **走通。**
 
@@ -435,14 +434,14 @@
 
 **失败路径（三类输入）。**
 
-1. 未认证连接发起写或控制请求：会话未完成 `handshake`（传输给出 OS 对端凭据，`principal = (os_user, actor)`，§8.5），核心在会话层拒绝，不进入任何处理器。
-   - append 安全事件记录（执行 J，P7）。
+1. 未认证连接发起写或控制请求：会话未完成 `handshake`（传输给出 OS 对端凭据，`principal = (os_user, actor)`，§8.5），核心的会话入口拒绝（§7.3），不进入任何处理器。
+   - 会话入口 append 安全事件记录（执行 J，P7）。
    - 对外可见：无单据、无 venue 调用、无配置变更。
 2. 已认证会话在请求体里伪造另一 principal：单据操作（`draft` 等，§8.5）只取**会话绑定的 principal**（C11 “每个 P13 会话绑定一个 principal”），请求体身份字段不参与授权。
-   - 以会话 principal 开单后，授权步按 (principal, `WriteLaneKey`, `OperationKind`) 判定；越权则 `Close(DecisionRejected)` + 安全事件。
+   - 以会话 principal 开单后，授权步按 (principal, `WriteLaneKey`, `OperationKind`) 判定；越权则 `Close(DecisionRejected)` + STS 授权步 append 的安全事件。
    - 对外可见：安全事件可读；无 `Prepared`。
-3. 已认证但无 scope 的控制请求（`load_program`/`rotate_credential`/`restart_integration`/`request_snapshot` 等，§8.5）：控制动作按 (principal, 动作种类) 授权。策略文件（§7.6）的 scope 不含该动作 → 控制记录 `Rejected(Unauthorized)`，无副作用。
-   - 对外可见：配置文件未变（每文件唯一写者，§7.6）、集成会话未重建、无安全副作用之外的记录。
+3. 已认证但无 scope 的控制请求（`load_program`/`rotate_credential`/`restart_integration`/`request_snapshot` 等，§8.5）：控制动作按 (principal, 动作种类) 授权。策略文件（§7.6）的 scope 不含该动作 → 控制记录 `Rejected(Unauthorized)`，控制面另 append 安全事件，无其他副作用。
+   - 对外可见：配置文件未变（每文件唯一写者，§7.6）、集成会话未重建、除控制记录与安全事件外没有记录。
 
 **走通**（验收 §10.5 #13）。
 

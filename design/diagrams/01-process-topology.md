@@ -166,12 +166,13 @@ flowchart LR
     DAG["派生 DAG 解释①"]
     RD["一次性读与回填：读处理器 · 钩子取证 · IO 壳按目标身份的读 · 消费方 read · 订阅侧 backfill<br/>（结果项 + 读结论记录）"]
     IOR["IO 壳：回执 / 取证的观察记录（订单状态；每笔可识别执行一条成交记录）"]
-    HLT["核心：健康观察（会话状态 · readiness Disconnected · 调用结果计数）"]
+    HLT["核心：健康观察（会话状态 · readiness Disconnected · 回填进度 · 调用结果计数）"]
     TK["单据（TicketAction）"]
-    STS["STS 规则链"]
+    STS["STS 规则链（含授权步否决时的安全事件）"]
     IOE["IO 壳：SendBarrier / VenueAccepted / VenueRejected / Undetermined / Expired /<br/>ResolutionEvidence / ReconciliationReopened{CancelLegTerminal|SessionRestored} / CapabilityObserved / 取证 Gap{Channel}"]
     ATTR["效应侧归因处理器：ResolutionEvidence{Attributed}"]
-    CTL["控制面：控制记录 · 安全事件 · ResolutionEvidence{Manual} · ReconciliationReopened{Manual}"]
+    CTL["控制面：控制记录（含 bypass_lane）· 越权安全事件 · ResolutionEvidence{Manual} · ReconciliationReopened{Manual}"]
+    SESS["会话入口：未完成握手请求的安全事件"]
     OUT["出站请求处理器：EffectRequest · EffectResponse"]
     SUBEL["持久订阅元素"]
     HS["核心握手处理"]
@@ -205,12 +206,14 @@ flowchart LR
   IOE --> EJ
   ATTR --> EJ
   CTL --> EJ
+  SESS --> EJ
   OUT --> EJ
   SUBEL --> SUB
   HS --> CAP
   HS -->|"声明版本"| EJ
   IOE --> CAP
   HOSTP --> CK
+  HOSTP -->|"程序观察 ProgramReset / ProgramFailed"| OJ
   FENCE --> PT
   FENCE -->|"instance_id += 1（与 fence 同事务）"| IID
   FENCE --> RUN
@@ -224,7 +227,7 @@ flowchart LR
 
 读法：
 
-- 观察 J 有五类写者，执行 J 有七类；两侧共享存储原语但类型宇宙不共享（§4.1）。
+- 观察 J 有六类写者（含宿主协议的程序观察），执行 J 有八类（含会话入口的安全事件）；两侧共享存储原语但类型宇宙不共享（§4.1）。
 - 读模型不写任何表：它是按种类对执行 J、观察 J 的只读 fold（`subscriptions` 读订阅表当前态，§8.5），供 `read_model` 读取。
 - 引用登记不是独立写者动作：随 `Prepared`/`Checkpoint`/`ResolutionEvidence` 的 append 自动写入，随 `Resolved`/下一 checkpoint 自动解除（D8.1）。
 

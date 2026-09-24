@@ -80,7 +80,8 @@
 | `Checkpoint` / `state_version` | 程序状态的显式序列化字节及其版本号；与程序 cursor 同事务持久化 | §8.6、§7.5 |
 | `SessionEpoch` / `instance_id` | 会话 epoch `(instance_id, session_seq)`：`instance_id` 随 fence 单调递增，`session_seq` 每次握手加一；推送与回执只在 epoch 相等时接受 | §7.2 |
 | 会话状态 | 核心为每个登记的集成运行的 `Connecting`（无会话，自动重连）/ `Established(SessionEpoch)` / `Halted{cause}`（无会话，需运维动作；`cause ∈ {ProjectionInvalid, ContractIncompatible, Refused}`，跨核心重启保持） | §7.2 |
-| 健康面（`IntegrationHealth`） | 每个集成的会话状态、逐流 readiness、按调用目标（作用域或逻辑流）的连续失败数与最近成功时间；全部是健康观察的 fold，不进写路径 | §8.4 |
+| 健康面（`IntegrationHealth`） | 每个集成的会话状态、逐流 readiness、逐流 epoch 的回填进度、按调用目标（作用域或逻辑流）的连续失败数与最近成功时间；全部是健康观察的 fold，不进写路径 | §8.4 |
+| 回填进度 | 核心按流 epoch 判定的回填任务状态 `Backfilling{through}` / `Closed` / `Incomplete{through}`：`through` 由读结论记录证明；任务在 `live_from` 声明之后建立；不属 readiness | §8.4 |
 | principal | 会话绑定的身份 `(os_user, actor)`：OS 对端凭据给出 `os_user`，下游自报 `actor`、经解释层带入握手；授权与审计的键 | §8.5 |
 | `Snapshot` / `as_of` | 读模型的一次读取结果，及其吃到的位置集 `Set<LogPosition>` 与该 fold 所依赖的观察输入中生效、未被回填补齐的 `gaps`（只 fold 执行事实的 `lanes`、`sources` 为空）；`tickets`、`subscriptions` 只给当前态，没有历史切面 | §8.5 |
 | `sources` | 读模型的一种：各来源最近声明版本加引用该版本的能力变化的 fold，解释层据此得到账户、流与读写能力；可按历史 `as_of` 读 | §8.5 |
@@ -148,6 +149,7 @@
 | 解释层 / 解释器 | 解释层：核心之外把核心清洗成对外接口的一层，面向下游 | 解释器：核心内对值树的解释，包括五个 fold、程序的解释①② 与宿主 | 前者是接口清洗，不含抽象；后者属设计中心 | §0.1、§2.5、§4.3、§6.1 |
 | 两种“下游” | 核心内的“交给下游”：解释载荷的程序、钩子与消费方（§2.2） | 核心之外的下游：Alice、CLI 使用者、外部客户程序，只经解释层接触核心 | 前者说的是载荷的解释权，后者说的是接触核心的途径 | §2.2、§0.1、§8.5 |
 | “快照” | 核心快照：`fold_state` 的重启加速点，只供重启恢复，不对外读（§7.4、§7.5、P15） | 读模型 `Snapshot`：`read_model` 的一次读取结果，带 `as_of`（§8.5） | 段池也称“运行期快照”（§8.7）；旧 UTA 的账户快照（A36–A38）是组合视图，属业务，UTA 不提供（§10.6） | §7.4、§8.5、§10.6 |
+| `Starting` | 操作结果：核心启动第 5 步开放下游会话之前，除 `handshake` 外的操作一律返回它（§8.5 会话与 principal） | 流 readiness：会话已建立、该流尚未声明 `live_from`（§8.4） | 前者按整个核心、只在启动期；后者按集成 × 流、每次重连都会经过；开放之后某集成的流处在 `Starting` 不使任何操作返回 `Starting` | §7.2、§8.4、§8.5 |
 
 **四种“过期”的后两种：**
 

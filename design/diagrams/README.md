@@ -16,7 +16,7 @@
 |---|---|---|
 | `01-process-topology.md` | 进程拓扑、信任边界、启动五步、集成会话状态与会话 epoch、持久化归属与同事务集合 | §0.1、§7.1、§7.2、§7.4、§7.5、§8.2 `handshake`、§8.3、§8.4 健康面 |
 | `02-record-model.md` | 信封/锚点/处理器、流与位置与三种进度、`DerivationNode` 与五个 fold、两个宇宙与唯一边、记录种类总表 | §0.1、§2.1、§2.3、§2.5、§3.1、§5、§6.5 记录模型、§7.5 |
-| `03-observation-ingest.md` | 推送入库、readiness 与流 epoch、回填窗口与实时边界、订阅（两种 selector、配额、订阅状态）/cursor/ack/gap、三种消费方式、gap 来源判定 | §4.1、§4.2、§8.2 `backfill`、§8.3、§8.4、§8.5 订阅 |
+| `03-observation-ingest.md` | 推送入库、readiness 与回填进度及流 epoch、回填窗口与实时边界、订阅（两种 selector、配额、订阅状态）/cursor/ack/gap、三种消费方式、gap 来源判定 | §4.1、§4.2、§8.2 `backfill`、§8.3、§8.4、§8.5 订阅 |
 | `04-program-host.md` | `Advance` 循环、程序生命周期、`EffectRequest` 分派与重派 | §4.3、§3.4、§6.1、§8.6、§9.1 W17 |
 | `05-ticket-and-sts.md` | 单据状态机、意图构造与参数合规、STS 顺序固定链（含冷却）、lane 阻塞头、两层对账与检查目录重算、人工审批时序 | §6.1、§6.2、§6.3、§6.4、§5.2、§7.6 规则文件、§8.5 单据、§9.1 W18 |
 | `06-io-shell-attempt.md` | 腿的状态机、取证循环、一次交互的记录矩阵、`Replace` 复合链、W1/W2/W5 时序 | §6.5、§6.6、§3.4、§8.2、§9.1 W1/W2/W5/W12 |

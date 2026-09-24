@@ -81,7 +81,8 @@ flowchart LR
 
 本仓库随 release 发布：
 
-- 契约 schema：`Projection`、公共载荷 schema、记录映射的 schema；
+- 契约 schema：`Projection`、公共载荷 schema、公共请求 schema（有公共 schema 的种类各一份，§2.2）、交易协议各操作种类的公共意图 schema（§6.2、§8.1）、记录映射的 schema；
+- JSON Schema 的参考校验器（钉住的 draft 版本与关键字子集，§6.2）：核心的输入约束步按同一语义校验意图参数；集成作者写扩展意图 schema 时，据它确认 schema 只用该子集、参数的合规结论与核心一致；
 - 记录映射解释器（库）；
 - 一致性测试套件与 fixture 上游。
 
