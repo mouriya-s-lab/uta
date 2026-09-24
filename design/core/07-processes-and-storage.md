@@ -139,7 +139,7 @@ flowchart TB
 
 - 只有当前在途握手（按其 `SessionEpoch`）的结果能改变状态；其他 epoch 的握手结果丢弃，不转移、不 append 任何记录。
 - 未生效的控制动作（越权、文件不合法，§8.5）不转移。
-- 状态每改变一次（`Connecting → Connecting` 不算），集成会话 append 一条健康观察（新状态、原因、起始时间，§8.4）。
+- 状态每改变一次（`Connecting → Connecting` 不算），集成会话 append 一条健康观察（新状态、原因、起始时间，§8.4）。本步开始时各集成进入初始状态（`Connecting`，或恢复的 `Halted`）也 append 一条，并把该集成仍显示为在线的流标为 `Disconnected`，旧实例的健康值不留到新实例（§8.4“健康不留旧值”）。
 - 进入 `Halted` 时，集成会话在同一事务 append 执行事实 `IntegrationHalted{integration, cause, session_epoch}`（P14）与该 `Halted` 的健康观察，提交后终止该集成进程并清除它在进程表中的登记。集成登记配置、该集成已有的流记录与订阅不变。
 - 解除 `Halted` 的控制记录 `Applied`（`restart_integration`，或 `Halted{Refused}` 上的 `rotate_credential`）带被解除的那条 `IntegrationHalted` 的位置，与转入 `Connecting` 的健康观察同一事务；这一事务提交之后集成会话才拉起进程、握手。
 - 不在 `Established` 时该集成没有会话：不接受它的新推送；IO 壳不向它发写，也不发取证读（§6.5、§6.6）；已放行未发出的腿在发出前门等待或到期。
@@ -183,7 +183,7 @@ flowchart TB
 
 ### 5. 恢复观察侧与消费面
 
-1. 为已建立会话的集成，持久订阅按订阅表合成各流需求、经 `route` 下发（§8.2），并续回填；`Gap{origin: Source}` 标记断代（§4.2）。
+1. 为已建立会话的集成，持久订阅按订阅表与核心自己的需求（每个不在配额池里的作用域订单状态流与成交流恒为 `All`）合成各流需求、经 `route` 下发（§8.2），并续回填；`Gap{origin: Source}` 标记断代（§4.2）。
 2. 交回程序状态并装载程序（§8.6）。
 3. 最后开放下游会话（经解释层，§8.5）。
 
@@ -494,7 +494,7 @@ flowchart TB
 | 集成登记 | Alice | 每个集成的二进制路径、启动参数、负责的账户集、契约版本 | `restart_integration` / 启动期拉起 |
 | 策略/审批规则 | Alice | 见表下 | `reload_config(rules)`；版本 = 内容 hash |
 | 程序装载清单 | Alice | 程序值文件引用、预算、接受的 `state_version` | `load_program` / `unload_program` |
-| 运行期参数 | Alice | 快照频率、派生侧留存窗口、`deadline` 全局缺省（仅在策略规则未按 scope 给出时生效）、投递缓冲上限 | `reload_config(runtime)` |
+| 运行期参数 | Alice | 快照频率、派生侧留存窗口、`deadline` 全局缺省（仅在策略规则未按 scope 给出时生效）、投递缓冲上限、回填深度（全局缺省与按逻辑流的取值，§8.4） | `reload_config(runtime)` |
 | 运行期登记 | UTA | 当前 `instance_id`、格式版本、最近快照位置 | 只由核心写；Alice 只读 |
 
 **`rotate_credential` 的重载效果**：重建目标集成会话（进入 `Connecting`，新 `session_seq`），并强制该集成各流开新 epoch（`Gap{origin: Source, reason: credential_rotated}`），不续接。它也解除 `Halted{Refused}`，其 `Applied` 带被解除的 `IntegrationHalted` 位置；对因投影不合法或契约版本不兼容而 `Halted` 的集成被拒，那只经 `restart_integration` 解除（§7.2 第 3 步）。

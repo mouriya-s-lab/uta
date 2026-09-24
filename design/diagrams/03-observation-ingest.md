@@ -72,13 +72,13 @@ stateDiagram-v2
 
 ```mermaid
 stateDiagram-v2
-  state "无回填任务（尚无 live_from / 续接原 epoch / 能力不支持 / 无要历史的订阅）" as NONE
+  state "None{epoch}（无回填任务：尚无 live_from / 续接原 epoch / 能力不支持 / 需求为空 / 回填深度为 0 / 深度为 Origin 而未声明 backfill_from_origin；health 不列）" as NONE
   state "Backfilling{through}" as BF
   state "Closed" as CL
   state "Reached" as RE
   state "Incomplete{through}" as INC
-  [*] --> NONE : 流 epoch 开始
-  NONE --> BF : 新 epoch 以 Gap{Source} 开始 ∧ backfill Supported ∧ 有要历史的订阅 ∧ 已有 live_from → 核心建立任务，through = 起点
+  [*] --> NONE : 流 epoch 开始（新 epoch：None{epoch} 与起点 Gap{Source} 同事务 append）
+  NONE --> BF : 新 epoch 以 Gap{Source} 开始 ∧ backfill Supported ∧ 已有 live_from ∧ 需求非空（route 全集，含核心的 All）∧ 回填深度 ≠ 0 → 持久订阅建立任务；起点 = live_from − 回填深度，或 Origin（仅 backfill_from_origin 的流）；through = 起点
   BF --> BF : 读结论 covered_to 推进 through；Unavailable 不推进
   BF --> CL : joinable_venue_seq 的流：covered_to 连到 live_from（序号连续，边界闭合；frontier 越过）
   BF --> RE : 只有事件时间的流：covered_to 连到 live_from（已取得 [起点, live_from)，衔接未证明；frontier 越过，Gap{Source} 不视为闭合）
@@ -86,7 +86,8 @@ stateDiagram-v2
   note right of BF
     核心判定、持久订阅 append 健康观察（与读结论 / backfill_incomplete 同事务）
     只请求 < live_from 的窗口；实时记录同时照常到达
-    新 epoch 开新任务，旧任务的终态不沿用；health 只列当前 epoch
+    新 epoch 开新任务，旧任务的终态不沿用；深度、起点、主体集在建立时取定
+    进度值带所属 epoch；health 只列当前 epoch 的非 None 值
   end note
 ```
 
@@ -104,10 +105,11 @@ flowchart LR
     direction LR
     G["Seq 1<br/>Gap{Source}"] --- BF1["窗口 1 的记录<br/>backfilled + 读结论（covered_to）"] --- BF2["窗口 2 的记录<br/>backfilled + 读结论（covered_to）"] --- LF["live_from<br/>实时供给起点"] --- L1["实时 …"]
   end
-  CORE["核心按订阅需求切窗口<br/>backfill(stream, window, subjects)；坐标：joinable_venue_seq 用 venue 序号，否则事件时间<br/>subjects = 任务建立时被路由的主体集，各窗口不变；上游分页与 pacing 在适配器内"] -->|"只请求 < live_from"| BF1
+  CORE["核心按回填任务切窗口<br/>backfill(stream, window, subjects)；坐标：joinable_venue_seq 用 venue 序号，否则事件时间<br/>首窗口 from = 起点（live_from − 回填深度，或 Origin）；subjects = 任务建立时被路由的主体集，各窗口不变；上游分页与 pacing 在适配器内"] -->|"只请求 < live_from"| BF1
   BF1 -->|"下一窗口从 covered_to 续（崩溃重启同样）"| BF2
   BF2 -->|"covered_to 连到 live_from ∧ joinable_venue_seq"| CLOSE["Closed：边界闭合，frontier 越过<br/>回填与实时之间无重叠无洞（Q14）"]
   BF2 -->|"covered_to 连到 live_from ∧ 只有事件时间"| REACH["Reached：衔接未证明，frontier 越过<br/>Gap{Source} 仍列在 gaps，不满足成交完整性条件 2"]
+  CLOSE -.->|"仅当起点 = Origin ∧ subjects = All"| COMPLETE["成交完整性条件 2 成立（§8.1）<br/>有限起点的 Closed 不闭合 epoch 开头的 Gap{Source}"]
   BF2 -->|"上游历史穷尽（covered_to 未达）或 Refused"| INC["append Gap{Source, backfill_incomplete}<br/>frontier 跳过未覆盖区间（不伪造连续）"]
   CORE -->|"Unavailable（任一页失败即整体失败）"| CH["Gap{Channel, backfill}<br/>可再发"]
 ```
@@ -128,11 +130,11 @@ sequenceDiagram
   participant DL as 投递调度
   participant J as 观察 Journal
   participant EJ as 执行 Journal（经存储按位置读，不解析）
-  C->>SUB: subscribe(selector, mode, from?)（selector = 观察流：一组 (来源, 流, 主体集?) 项，可跨来源；或 执行事实 (来源, 作用域?)）
+  C->>SUB: subscribe(selector, mode, from?)（selector = 观察流：一组 (来源, 流, 主体集?, 供给 | 只投递) 项，可跨来源；或 执行事实 (来源, 作用域?)）
   alt 执行事实：mode ≠ ordered，或作用域键不在该来源任何声明版本里
     SUB-->>C: 拒绝
   else 观察流：逐项判定（各项独立）
-    Note over SUB: 每项：来源未登记 / 流不在最近声明 / 配额池里不带主体集 → 该项拒绝；from < 保留边界 → 该项 BeyondRetention；超配额 → 该项 QuotaExceeded（集成不收到超限主体）；来源从未有声明 → 该项待接纳
+    Note over SUB: 每项：来源未登记 / 流不在最近声明 / 配额池里不带主体集的供给项 → 该项拒绝；from < 保留边界 → 该项 BeyondRetention；供给项超配额 → 该项 QuotaExceeded（集成不收到超限主体）；来源从未有声明 → 该项待接纳；只投递项不进需求、不占配额
     alt 没有任何一项被接纳
       SUB-->>C: Rejected{items}
     else 至少一项被接纳
@@ -143,7 +145,7 @@ sequenceDiagram
     SUB->>SUB: 写订阅表；selector 是成员规则：此后出现的 lane 流自动加入，从其首条记录起；from 可为起点
     SUB-->>C: Subscription{id, items}
   end
-  opt 某流的需求（各订阅主体之并 ∪ 核心自己的需求）变了，且该集成会话已建立
+  opt 某流的需求（各供给项主体之并 ∪ 核心自己的需求；只投递项与挂起项不计）变了，且该集成会话已建立
     SUB->>I: route(stream, 主体全集 | All | 空集)
     alt Routed{refused}
       I-->>SUB: Routed{refused}
@@ -155,7 +157,7 @@ sequenceDiagram
   loop 记录到达
     J->>DL: 新记录 pos（观察流订阅）
     EJ->>DL: 新记录 pos（执行事实订阅：存储按位置交出已提交的字节，投递不读读模型、不解析）
-    DL->>C: 投递 pos（每条流各自有序，流与流之间不定序；已投未确认 = 消费者内存里的事）
+    DL->>C: 投递 pos（数据记录按信封 subject ∈ 项的主体集过滤，整条流的项不过滤；Gap / 读结论 / 路由结论投给该流每一项；同一订阅每条记录至多一次；每条流各自有序，流与流之间不定序；已投未确认 = 消费者内存里的事）
     C->>SUB: ack(subscription, cursor = pos)（确认 = 已处理）
     SUB->>SUB: cursor 推进（单写者，串行化）
   end
@@ -171,6 +173,10 @@ sequenceDiagram
     C->>SUB: 重连：同一 principal 重新 handshake → 自动挂接其持久订阅（不需再 subscribe）
     DL->>C: 从 cursor 之后重投；未确认区间可能重复，按 LogPosition 去重
   end
+  opt 重新握手使某流进入配额池
+    SUB->>SUB: 该流上整条流的供给项挂起（WholeStreamInPool），核心自己的 All 撤去；离开所有配额池时恢复
+    SUB->>I: route(stream, 重算后的全集)
+  end
   Note over SUB,I: 集成每次会话建立后，SUB 对每条需求非空的流重发 route；会话内第一次 route 之前集成不推送该流
 ```
 
@@ -179,6 +185,7 @@ sequenceDiagram
 - 确认语义唯一：`ack` = 已处理。已投未确认的记录在崩溃后会再见一次；已确认的永不重投（退回只经控制面 `rewind_cursor`）。
 - 程序是同一种订阅者：它的 cursor 与 `Checkpoint` 同事务持久化（D4.1），所以程序永远不会看到已折入状态的记录。
 - 需求按流的全集下发：多个订阅对同一主体只路由一次，配额在核心计量；一个主体的覆盖从加入它的路由结论记录之后开始。
+- 投递按主体：数据记录只看信封上的 `subject`，不论来自推送、回填、一次性读还是回执；控制记录投给该流每一项。只投递项不改变需求与配额，一次性读得 `Pending{from, instance_id}` 后从 `from` 订阅一个只投递项，即收到那条结论或 gap（同一核心实例内）。
 - 执行事实订阅走同一套 cursor 与 ack，但只能 `ordered`：执行事实不压缩、不合并，所以慢消费者只背压自己，不出现 `Gap{Delivery}`；投递经存储按位置读出已提交的记录、原样搬运，不经读模型、不解析，所以观察侧的订阅与投递元素不依赖效应侧类型（§7.3 uses 图）。它不经 `route`，不受声明与会话影响。
 
 核出：无。

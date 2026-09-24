@@ -153,14 +153,14 @@ flowchart LR
 | 观察 | 推送观察记录 | 集成推送入口 | `StreamId`、`Seq`、`received_at`、`occurred_at?`、`attribution?`、`idempotency_key?`、契约载荷 + `payload_schema`、原始负载（写路径与可带 `attribution` 的流必带，其余按记录映射声明，§8.1）、质量标记 | — |
 | 观察 | `Gap{origin: Source, reason}` | 集成推送入口 / 核心（新 epoch 首条） | 前一 `StreamId` 与最后 `Seq`、`reason` | 前一 epoch |
 | 观察 | `Gap{origin: Delivery, reason}` | 投递调度 | 订阅、from/to `Seq`、`reason` | — |
-| 观察 | 一次性读 / 回填的结果项 | 读处理器 / 钩子取证 / IO 壳按目标身份的读 / 消费方 `read` / 订阅侧回填 | 与该流推送记录同形；`provenance: OneShot{origins, request}`（`origins ⊆ {Request(pos), Ticket(id), Attempt(AttemptRef), Session(principal)}`）、`one_shot` 或 `backfilled` | 出处值（不解析）；`Request` → `EffectRequest` 位置 |
+| 观察 | 一次性读 / 回填的结果项 | 一次性读元素（发起方：读处理器 / 钩子取证 / IO 壳按目标身份的读 / 消费方 `read`，§7.3）/ 持久订阅元素（回填） | 与该流推送记录同形；`provenance: OneShot{origins, request}`（`origins ⊆ {Request(pos), Ticket(id), Attempt(AttemptRef), Session(principal)}`）、`one_shot` 或 `backfilled` | 出处值（不解析）；`Request` → `EffectRequest` 位置 |
 | 观察 | 读结论记录 | 同上（集成作答或上游 `Refused` 时） | 请求身份、`origins`、本次结果项的位置（一次性读）或窗口与 `covered_to`（回填）、或拒绝原因；控制记录，不是载荷 | → 本次结果项 |
 | 观察 | 路由结论记录 | 持久订阅元素（`route` 返回 `Routed` 时，§8.2） | 本次生效主体集相对上一条的增减、`refused` 与原因；控制记录，不是载荷；主体的覆盖从加入它的这条记录之后开始 | 前一条路由结论记录（同流） |
 | 观察 | 回执的观察记录 | IO 壳 | 该回应的观察记录：回应含订单状态时订单状态一条，加回应所含每笔可识别执行一条成交记录（带 `execution_id`）；同一回应的各条 `provenance: Receipt{AttemptRef}` 相同；`attribution` 按各条自己的关联证据填写，不因同在一个回应而继承（订单状态一条为 `FromAttempt(AttemptRef)`）；可压缩；契约载荷与原始负载永存于执行侧 `Evidence` | 出处值（不解析）|
 | 观察 | 取证的观察记录 | IO 壳 | 同上，`provenance: Reconciliation{AttemptRef, channel}`；只对由自己的关联证据属于该腿的记录填 `FromAttempt(AttemptRef)`；`list_fills` 命中只有成交记录，不造订单状态记录；可压缩 | 出处值（不解析）|
 | 观察 | 派生记录（含 alert） | 派生 DAG | 程序流 `StreamId`、`RetractableDelta` | — |
 | 观察 | `ProgramReset{reason}` / `ProgramFailed{reason}` | 宿主协议（核心） | 程序 id、`reason` | — |
-| 观察 | 健康观察 | readiness（`Starting` / `Live{live_from}` / `Degraded`）由集成推送入口；会话状态、readiness `Disconnected`、调用计数由集成会话；回填进度由持久订阅（§8.4） | 状态值：每条带其键上的完整当前值——集成的 `session`；流与 readiness；逻辑流与当前 epoch 的回填进度（`Backfilling{through}` / `Closed` / `Reached` / `Incomplete{through}`）；调用目标与计数后的 `consecutive_failures`、`last_success_at`；按键保留（§2.4） | — |
+| 观察 | 健康观察 | readiness（`Starting` / `Live{live_from}` / `Degraded`）由集成推送入口；会话状态、readiness `Disconnected`（含启动第 3 步的刷新）、调用计数由集成会话；回填进度由持久订阅（§8.4） | 状态值：每条带其键上的完整当前值——集成的 `session`；流与 readiness；逻辑流的回填进度，值带所属流 epoch（`None{epoch}` / `Backfilling{through}` / `Closed` / `Reached` / `Incomplete{through}`；`None` 与新 epoch 起点的 `Gap{Source}` 同事务）；调用目标与计数后的 `consecutive_failures`、`last_success_at`；按键保留（§2.4） | — |
 | 执行 | `TicketAction`：`Draft` / `Revise` / `Transfer` / `SubmitForDecision` / `SendBack` / `Close(outcome)` | 单据 | `ticket_id`、`by: principal`、`basis`、意图版本 hash | `basis` → 观察位置（含归因观察）+ 执行事实侧位置（`EffectRequest` / `VenueAccepted` / `SendBarrier`） |
 | 执行 | Decision / `Outcome` / `Rejection` | STS 规则链 | `ticket_id`、绑定 `current_version`、`principal`、`rule_version`、`checked_as_of` | → 单据记录；`checked_as_of` → 观察位置 |
 | 执行 | `Prepared` | 单据（放行事务） | `attempt_position` 即自身位置、`WriteLaneKey`、`OperationKind`、`deadline`、`target?`、意图载荷 | → `Close(Prepared)` 同事务 |

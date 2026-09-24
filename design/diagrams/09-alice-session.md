@@ -63,7 +63,7 @@ flowchart LR
   end
   subgraph EL["核心元素"]
     SUB["持久订阅 / 投递调度"]
-    RDP["读路径 → 集成 read → item 观察记录 + 读结论记录，OneShot{origins ∋ Session, request}"]
+    RDP["一次性读（§7.3）→ 判定 → 同一集成会话 epoch 内同一 identity 的在途调用并入 → 集成 read（经集成会话）→ item 观察记录 + 读结论记录或 Gap{Channel} + 计数观察，OneShot{origins ∋ Session, request}"]
     RM["读模型（只读 fold；含 sources：执行 J 声明版本的 fold）"]
     TK["单据（TicketAction）→ STS 链"]
     CTL["控制面（控制记录 Applied / Rejected）"]
@@ -79,8 +79,8 @@ flowchart LR
   S6 --> IOR
   S6b --> RRO
   S7 --> HL
-  S2 -.->|"逐 target，按序判定：UnknownTarget / Unavailable{source_state}（从未有声明）/ Unsupported / Unconfirmed / InvalidRequest / Unavailable{source_state}（无会话，不调用不记 gap）/ Answered{conclusion, items} / Refused{conclusion, reason} / Unavailable{gap}（渠道失败，已记 Gap{Channel}）/ Pending（deadline 到而调用在途；之后照常记结论或 gap）"| S2
-  S1 -.->|"逐项判定，没有任何一项被接纳 → Rejected{items}：来源未登记 / 流不在最近声明里 / 配额池流不带主体集 → 该项拒绝；来源从未有声明 → 该项待接纳；超池上限 → 该项 QuotaExceeded{quota, limit}；执行事实非 ordered 或作用域键不在任何声明版本里 → 拒绝"| S1
+  S2 -.->|"逐 target，按序判定：UnknownTarget / Unavailable{source_state}（从未有声明）/ Unsupported / Unconfirmed / InvalidRequest / Unavailable{source_state}（无会话，不调用不记 gap）/ Answered{conclusion, items} / Refused{conclusion, reason} / Unavailable{gap}（渠道失败，已记 Gap{Channel}）/ Pending{from, instance_id}（deadline 到而调用在途；之后照常记结论或 gap，从 from 订阅只投递项可收到；核心实例已换则不再保证）"| S2
+  S1 -.->|"逐项判定，没有任何一项被接纳 → Rejected{items}：来源未登记 / 流不在最近声明里 / 配额池流上不带主体集的供给项 → 该项拒绝；来源从未有声明 → 该项待接纳；供给项超池上限 → 该项 QuotaExceeded{quota, limit}；只投递项不进需求、不占配额；执行事实非 ordered 或作用域键不在任何声明版本里 → 拒绝"| S1
   S3 -.->|"kind 未定义 → 拒绝；as_of 有位置尚未提交 → NotYetAvailable{positions}（各流已提交的流末）；tickets / subscriptions 带历史 as_of → 拒绝"| S3
   S4 -.->|"expected_version ≠ current_version → Conflict；同版本已有 Decision → Conflict(AlreadyDecided)"| S4
   S5 -.->|"越权 → Unauthorized；配置不合法 → Rejected 并保留上一有效版本；advance_retention 逐流判定 → NotForward / ReferencedBelow / InsideWindow"| S5

@@ -122,6 +122,7 @@ struct StreamDecl {
     quality: NominalQuality,                     // 声明的名义数据等级，不担保逐条记录
     has_venue_cursor: bool, has_event_time: bool,
     joinable_venue_seq: bool,                    // 推送与回填的记录带本流 epoch 内连续、可衔接的 venue 序号（回填坐标与实时边界，§8.4）
+    backfill_from_origin: bool,                  // 回填能从上游该流历史的起点（Origin）起给出全部历史（§8.2 backfill、§8.4）
 }
 struct Quota { streams: Vec<StreamName>, max_subjects: u32 }   // 这些流上核心要求集成推送（route，§8.2）的不同订阅主体数上限
 struct Capability { scope: WriteLaneKey, operation: OperationKind, verdict: Verdict<CapabilityProof> }
@@ -169,6 +170,7 @@ UTA 对投影只做两件事：按投影路由（lane 按 `WriteScope`、订阅�
 - `quotas`：配额池属于来源；每个池列出共享一个上限的流与上限值，计量单位见 §8.5 订阅组。
 - `quality`：声明该流名义上的数据等级，分两个维度：时效（实时 / 延迟 / 未知）与覆盖（全市场 / 部分场所 / 未知）；词表随公共 schema 发布，核心不解释。它是来源对该流开通情况的声明，**不担保**每条记录：上游在回答里报告实际等级时，那是公共载荷的字段，逐条以记录为准。理由：数据等级常随 instrument 与开通状态变化，只有上游作答时才知道（运行期的量不冒充静态保证）；声明值只用来在读之前告诉下游“这条流通常是什么”。
 - `joinable_venue_seq`：该流推送与回填的记录是否带本流 epoch 内连续、可衔接的 venue 序号。它是集成对上游序号语义的断言（由一致性测试验证），不是“记录上有序号字段”：只有这样的序号能证明回填与实时在边界上既不重叠也不留洞，所以它决定该流的回填坐标与实时边界的证明（§8.4）。不声明它的流以事件时间作回填坐标；两者都没有的流不能回填（§8.1 握手校验）。
+- `backfill_from_origin`：该流的回填能否以 `Origin`（上游该流历史的真实起点，不是上游此刻保留的最早一条）为窗口起点，交回从起点到窗口终点的全部历史，含归并所需的修订与作废。它同样是集成对上游语义的断言，由一致性测试验证：上游只保留近期历史，或起点之前的历史取不全、或落不到与实时相同的回填坐标上的流不声明它。只有从 `Origin` 起补齐的回填能闭合流 epoch 开头的 `Gap{origin: Source}`，所以它决定成交流能否给出完整界（§8.1 精确重建的前提）。
 
 **能力未知 ≠ 结果未知。**
 
@@ -256,7 +258,7 @@ LogPosition = (StreamId, Seq)           // 一条记录的顺序身份
 - `LogPosition` 只在同一 `StreamId` 内有序（§2.3），所以保留边界是每条观察流一个位置。合起来与 `basis`、cursor 同形（`Set<LogPosition>`）。
 - 执行事实侧原始记录不压缩、不删除，没有保留边界；登记只对观察位置起作用。
 
-**健康流按键保留** [设计]。健康观察（§8.4）是状态值：每条带它那个键上的完整当前值，fold 一个键只取该键不高于 `as_of` 的最新一条。键是：一个集成的会话状态；一条流的 readiness；一个逻辑流当前流 epoch 的回填进度；一个调用目标的计数（带计数后的 `consecutive_failures` 与 `last_success_at`）。同键的后一条取代前一条，这就是健康流的 `RetractableDelta`（§4.1），它的压缩因此按键进行：
+**健康流按键保留** [设计]。健康观察（§8.4）是状态值：每条带它那个键上的完整当前值，fold 一个键只取该键不高于 `as_of` 的最新一条。键是：一个集成的会话状态；一条流的 readiness；一个逻辑流的回填进度（值带所属流 epoch，没有回填任务的 epoch 为 `None`，§8.4）；一个调用目标的计数（带计数后的 `consecutive_failures` 与 `last_success_at`）。同键的后一条取代前一条，这就是健康流的 `RetractableDelta`（§4.1），它的压缩因此按键进行：
 
 - 边界之下只删每个键被同键后续记录取代的记录；每个键在边界之下的最新一条作为**基线**留下，位置不变。对任一 `as_of ≥ 边界`，按键 fold 与压缩前相等；`as_of` 低于边界仍得 `BeyondRetention`（§5.2）。
 - 从边界订阅健康流的消费者先收到这些基线（原位置，低于边界），再收到边界起的记录；这是压缩的结果，不是 cursor 退回（§8.5）。

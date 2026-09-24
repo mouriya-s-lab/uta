@@ -465,7 +465,7 @@
    - P 有会话、报价流 `read` 为 `Supported`：集成作答，同一事务 append 报价记录（`one_shot`）与读结论记录，target 得 `Answered{conclusion, items}`。
    - 若 P 的某条历史 bar 流 `read` 为 `Unknown`：该 target 得 `Unconfirmed`，不调用；为 `Unsupported` 则得 `Unsupported`。
    - 上游对某 instrument 明确拒绝（未开通该行情）：得 `Refused{conclusion, reason}`，该流上只有读结论记录，流的能力不变。
-   - P 对另一个 instrument 迟迟不答，`deadline` 先到：该 target 得 `Pending`，没有结论也没有 gap；稍后上游作答，该流上照常 append 结论记录（同一请求身份，`origins` 含该会话），订阅了该流的解释层由此收到结果。
+   - P 对另一个 instrument 迟迟不答，`deadline` 先到：该 target 得 `Pending{from, instance_id}`，没有结论也没有 gap。解释层以 `from` 订阅该报价流的一个只投递项（主体集为这个 instrument，§8.5 按主体投递）：它不进入 `route` 需求、不占配额池的用量。稍后上游作答，该流上照常 append item 记录与结论记录（同一请求身份，`origins` 含该会话），这一项由此收到结果；若核心在作答之前重启，解释层重连时握手得到新的 `instance_id`，与 `Pending` 所带的不同，就知道这次读的结果不再有保证：从 `from` 起没收到结论的，报为需要重新读，不让下游一直等。
    - 对外可见：各 target 独立；“来源重连中”“不支持”“能力未确认”“来源拒绝”“尚未作答”“空结果”彼此可区分，没有看似成功的空数组。
 4. 下游在一个订阅里选 P 的报价流（属配额池，带主体集）、P 最近声明里没有的一条流、X 某账户的持仓流三项：第二项被拒，第一项的主体集并入后超过配额池上限得 `QuotaExceeded{quota, limit}`，第三项为“活”；订阅照常建立，逐项结果交给下游，集成不收到超限主体（§8.5 订阅组）。
    - X 会话建立后，核心对该持仓流 `route` 一次全集（`All`，§8.2 `route`）；此后 X 的持仓推送才到达该订阅。
