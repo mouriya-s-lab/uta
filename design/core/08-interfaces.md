@@ -256,7 +256,7 @@
 
 ## 8.2 核心→集成操作集
 
-> 图：D6.5 W1 时序、D6.6 W2 时序、D9.2 操作落点、D4.1/D4.3 读处理器、D3.3 回填窗口、D3.4 订阅与 `route`；`handshake` 与既有订阅随新声明见 D1.2 启动、D1.3 会话状态（`design/diagrams/06-io-shell-attempt.md`、`09-alice-session.md`、`04-program-host.md`、`03-observation-ingest.md`、`01-process-topology.md`）。
+> 图：D6.5 W1 时序、D6.6 W2 时序、D9.2 操作落点、D4.1/D4.3 读处理器、D3.3 回填窗口、D3.4 订阅与 `route`；`handshake` 与既有订阅随新声明见 D1.2 启动、D1.3 会话状态；`route` 的 `generation` 与读侧调用的生命周期见 D1.6（`design/diagrams/06-io-shell-attempt.md`、`09-alice-session.md`、`04-program-host.md`、`03-observation-ingest.md`、`01-process-topology.md`）。
 
 操作集小且闭合。
 
@@ -383,7 +383,7 @@
 - **核心内部结果**：记录打 `backfilled` 标记 append 观察 `Journal`，同一事务再 append 一条读结论记录（同 `read`，见下），带窗口与 `covered_to`；`Refused` 只 append 结论记录。覆盖到 `live_from` 时，`joinable_venue_seq` 的流边界闭合，序号覆盖的起点下延到任务起点；其余的流补到实时起点而衔接未证明（§8.4）。
 - **错误**：
   - `Unavailable` → `Gap{origin: Channel}`，可再发；
-  - 结果到达时该流的当前流 epoch 已不是这次调用的发出 epoch（会话内集成上报的 `Gap{origin: Source}` 已开新 epoch；集成本应在上报之前以 `Unavailable` 完成这次调用，§8.3）→ 不论集成返回什么，核心把这次调用完成为 `Unavailable`：在当前 epoch 上记 `Gap{origin: Channel}`，不 append 结果记录与读结论记录，所以该流的 `Covered` 链与 `covered_to` 只来自发出 epoch 就是所在 epoch 的调用。发出 epoch 的任务已被新 epoch 取代、不再推进（§8.4 回填进度），核心不为它再发；
+  - 结果到达时该流的当前流 epoch 已不是这次调用的发出 epoch（会话内集成上报的 `Gap{origin: Source}` 已开新 epoch：集成在送出 gap 之后才收到这次调用的，是合规的竞态；送出之前已收到、却在之后作答的，是集成违约，§8.3）→ 不论集成返回什么，核心把这次调用完成为 `Unavailable`：在当前 epoch 上记 `Gap{origin: Channel}`，不 append 结果记录与读结论记录，所以该流的 `Covered` 链与 `covered_to` 只来自发出 epoch 就是所在 epoch 的调用。发出 epoch 的任务已被新 epoch 取代、不再推进（§8.4 回填进度），核心不为它再发；
   - `Refused` → 上游明确拒绝这次回填（如未开通该历史数据）；不记 `Gap{origin: Channel}`（渠道没有失败），该窗口按穷尽处理；
   - `covered_to < to` 或 `Refused` 使边界无法闭合 → `Gap{origin: Source, reason: backfill_incomplete}` 标出未覆盖的区间；
   - 该流在会话有效声明里的 `backfill` 能力不是 `Supported`（`Unsupported`、`Unknown`，或来源此刻没有已建立会话）→ 核心不调用。任务是否建立在该 epoch 声明 `live_from` 时一次判定（§8.4）；已建立的任务在能力不再是 `Supported` 或没有会话期间不发调用、停在 `Backfilling`，恢复后从最近的 `covered_to` 续；
@@ -407,7 +407,7 @@
   - 一次性读不参与实时边界，不推进序号覆盖（§8.4）；`LogPosition` 由核心分配（§8.3）。
 - **错误**：
   - `Unavailable`（超时 / 断连 / 限流）→ 该流上 `Gap{origin: Channel}`，可再发。这里的超时是集成对上游调用的时限；发起方的 `deadline` 不结束这次调用，到期时调用仍在途的，发起方得 `Pending`，调用结束时照常记结论或 gap（§8.5 一次性读）；
-  - 结果（`Answered` 或 `Refused`）到达时该流的当前流 epoch 已不是这次调用的**发出 epoch**，即 `dispatch_end` 所在的流 epoch（会话内集成上报的 `Gap{origin: Source}` 已开新 epoch；集成本应在上报之前以 `Unavailable` 完成这次调用，§8.3）→ 核心把这次调用完成为 `Unavailable`：在当前 epoch 上记 `Gap{origin: Channel}`，不 append item 记录与读结论记录。回答问的是已结束的 epoch 里的供给，不作新 epoch 的记录；发起方得 `Unavailable{gap}`（已得 `Pending` 的，从 `Pending.from` 订阅收到这条 gap，§8.5），要结果就在新 epoch 再读；
+  - 结果（`Answered` 或 `Refused`）到达时该流的当前流 epoch 已不是这次调用的**发出 epoch**，即 `dispatch_end` 所在的流 epoch（会话内集成上报的 `Gap{origin: Source}` 已开新 epoch：集成在送出 gap 之后才收到这次调用的，是合规的竞态；送出之前已收到、却在之后作答的，是集成违约，§8.3）→ 核心把这次调用完成为 `Unavailable`：在当前 epoch 上记 `Gap{origin: Channel}`，不 append item 记录与读结论记录。回答问的是已结束的 epoch 里的供给，不作新 epoch 的记录；发起方得 `Unavailable{gap}`（已得 `Pending` 的，从 `Pending.from` 订阅收到这条 gap，§8.5），要结果就在新 epoch 再读；
   - 结果中某笔成交给不出上游证明的执行身份时返回 `Unavailable`，不返回删过项的集合；上游回应里不是成交的行由记录映射丢弃，不算缺项（§8.1“成交与订单状态的契约语义”）；
   - 核心不调用集成的情形，按顺序判定：来源未登记；来源从未有过声明版本；来源此刻没有已建立的会话；流不在会话有效声明里；该流 `read` 为 `Unsupported`；为 `Unknown`；请求不合 `request_schema` 或所依据的 schema 身份与会话有效声明不一致，`range` 用在无事件时间的流上。这些情形不 append 任何观察记录（没有渠道被调用，也就没有渠道失败），结果交还发起方，逐项名称见 §8.5 一次性读。
 - **重试**：可重试、可批处理（只读批处理条件，§2.2）。
@@ -417,8 +417,8 @@
 ### `route(stream, subjects, generation) → Routed{refused} | Unavailable`
 
 - **语义**：订阅需求，即 P4 里“机→集成”的那一半：本会话内要集成为该流推送哪些主体。`subjects` 是一个主体集，或 `All`（整条流）；空集撤回该流的全部需求。每次调用给出全集而不是增减，集成以本会话内最后收到的一次为准。核心对同一流同一时刻至多有一次 `route` 在途，上一次返回后才发下一次，所以“最后收到的”就是核心最新的需求，迟到的旧调用不会覆盖新的；重发同一全集幂等。**动作轴**：非动作（会话内的供给声明，不改变上游的业务状态）。
-  - `generation` 指名这次调用问的是该流的哪个流 epoch [设计]。集成在会话内为某流上报的每条 `Gap{origin: Source}` 都带一个 `generation`：它由集成创建，按流、按会话计，会话开始时为 0，该流每上报一条加一（§8.3）。核心在 `route` 里带上它在本会话里为该流最后接受的那个：本会话该流最近一条 `Gap{origin: Source}` 所带的值，还没有这样一条则为 0。核心只转交集成给的值，不自己计数；下一个会话从 0 重新开始。
-- **谁调、何时调**：核心的持久订阅元素（§7.3），只在该集成会话已建立时调用。会话建立后，对每条需求非空的流各调一次（重新握手后需求照样重发）；会话内某流开了新流 epoch（集成上报的 `Gap{origin: Source}`），对该流以这条 gap 的 `generation` 重发一次；此后某流的需求一变就再调。每个流 epoch 因此都有自己的路由结论记录：该 epoch 的供给由在它之内向来源问得的结论证明，不沿用上一 epoch 的（§8.4 序号覆盖）。一条流的需求由两部分合成：
+  - `generation` 指名这次调用问的是该流的哪个流 epoch [设计]。集成在会话内为某流上报的每条 `Gap{origin: Source}` 都带一个 `generation`：它由集成创建，按流、按会话计，会话开始时为 0，该流每上报一条加一并带上新值（§8.3）。核心在 `route` 里带上它在本会话里为该流最后接受的那个：本会话里集成为该流上报、核心已接受的最近一条 `Gap{origin: Source}` 所带的值，还没有这样一条则为 0。握手事务里 append 的与 `backfill_incomplete` 的 `Gap{origin: Source}` 不是集成在会话内上报的，不带 `generation`，不改变这个值。核心只转交集成给的值，不自己计数；下一个会话从 0 重新开始。
+- **谁调、何时调**：核心的持久订阅元素（§7.3），只在该集成会话已建立时调用。**每条流至多一项未了的 `route` 义务** [设计]：三种事件使一条流有一项未了的义务：会话建立（需求非空的流；重新握手后需求照样重发）；核心接受该流一条会话内上报的 `Gap{origin: Source}`（新流 epoch）；该流的需求变化。义务已在时，后两种并入它，不另起一项：gap 把它的目标 `generation` 更新为这条 gap 所带的值，需求变化把它的目标全集更新为新需求。义务在“同一时刻至多一次在途”之下逐次发出，每次带发出时的目标全集与最后接受的 `generation`；得 `Unavailable` 的按 pacing 再发，仍是这一项（见下文“错误”）。第一次 `Routed` 了结它；这次调用所带的全集已不是目标全集的（需求在它在途期间变了），了结之后随即以目标全集再起一项。所以核心接受一条开 epoch 的 gap 之后，按 pacing 的重试与这条 gap 触发的重发是同一项义务，新 epoch 的第一条路由结论记录来自一次带新 `generation` 的 `route`。每个流 epoch 因此都有自己的路由结论记录：该 epoch 的供给由在它之内向来源问得的结论证明，不沿用上一 epoch 的（§8.4 序号覆盖）。一条流的需求由两部分合成：
   - 该流上各订阅的供给项的主体之并，不带主体集的供给项计为 `All`。只投递项不计入（它只搬运已有的记录，§8.5）；挂起（`StreamUndeclared`、`QuotaExceeded`、`WholeStreamInPool`）与被拒的项不计入（§8.5）。
   - 核心自己的需求：每个作用域的订单状态流与成交流，只要不在配额池里，恒为 `All`。效应侧的被动取证渠道 `Attributed`（§6.6）与成交完整性（§8.1 条件 2）都靠这些流的推送，不能等某个消费方恰好订阅了它们。在配额池里的这类流不接受 `All`（§8.5 配额），核心对它没有自己的需求：该作用域只有被订阅主体的推送，被动渠道只看得见这些主体，成交完整性的条件 2 不成立，`orders` 不给完整界。重新握手使这类流进入配额池时，核心自己的需求随新声明撤去；离开配额池时恢复。两种情形下该流的全集都按新声明重算后重发（§8.5 配额）。
 - **返回**：
@@ -429,8 +429,8 @@
   - 一个主体在一个流 epoch 内的记录，从加入它的那条路由结论记录之后开始。此前没有它的记录不是缺口，那时没有它的需求，这一点由这条记录显式标出（C6）。以 `from` 订阅较早位置的订阅者由此知道该主体从哪里起有记录。握手以游标续接原 epoch 时，新会话的第一条路由结论记录只表示需求在本会话恢复，不重置已在需求里的主体的记录起点。
   - `refused` 里的主体在选中它的每个订阅的状态里逐主体列为“来源拒绝”（P4）。它仍在需求之内，仍计入配额；本会话内核心不为它自动重发，直到该流下一次 `route` 或下一个会话：上游的明确拒绝不会自己好，与 `read` 的 `Refused` 同理。
 - **错误**：
-  - `Unavailable` → 不 append 路由结论记录，按 pacing 重发其时最新的全集。最近一条路由结论记录仍是已确认的供给，这次的增减未经确认；集成因这次失败失去了对已路由主体的供给时，按断代上报 `Gap{origin: Source}`（§8.3）。
-  - 调用跨过会话内的流 epoch 更替 → 只由集成按 `generation` 判定，核心不另判：集成上报 `Gap{origin: Source}` 之前，先以 `Unavailable` 完成已收到的这条流的 `route`（§8.3）；核心在接受这条 gap 之前发出、带旧 `generation` 的 `route`，集成答 `Unavailable`，不改变任何供给。所以集成只以 `Routed` 回答带它当前 `generation` 的调用；同一会话上集成→核心的消息按发送顺序处理，在 gap 之前送出的 `Routed` 总在 gap 之前到达，它的路由结论记录落在它确认的那个 epoch 里。这两种 `Unavailable` 按上一条处置：核心收到它时已接受了这条 gap，重发的就是带新 `generation` 的那次，即新 epoch 本来要做的那次 `route`，不多发一次。
+  - `Unavailable` → 不 append 路由结论记录；该流的 `route` 义务未了（上文“谁调、何时调”），按 pacing 再发，带其时最新的全集与最后接受的 `generation`。最近一条路由结论记录仍是已确认的供给，这次的增减未经确认；集成因这次失败失去了对已路由主体的供给时，按断代上报 `Gap{origin: Source}`（§8.3）。
+  - 调用跨过会话内的流 epoch 更替 → 只由集成按 `generation` 判定，核心不另判：集成上报 `Gap{origin: Source}` 之前，先以 `Unavailable` 完成已收到的这条流的 `route`（§8.3）；集成送出 gap 之后才收到、带旧 `generation` 的 `route`，集成答 `Unavailable`，不改变任何供给。所以集成只以 `Routed` 回答带它当前 `generation` 的调用；同一会话上集成→核心的消息按发送顺序处理，在 gap 之前送出的 `Routed` 总在 gap 之前到达，它的路由结论记录落在它确认的那个 epoch 里。这两种 `Unavailable` 按上一条处置，两种到达次序都有定义：在 gap 之前送出的那种先于 gap 到达核心，核心在接受 gap 之前按 pacing 再发的仍带旧 `generation`，集成照样答 `Unavailable`，只多一次无害的失败；核心接受 gap 之后，每次再发都带它为该流最后接受的 `generation`。接受 gap 前后的这些发出是同一项义务（上文“谁调、何时调”），不多出一次。
 - **重试**：同一全集的重发幂等；重试前需求已变的，重发的是新的全集。健康按调用目标计数，目标是该逻辑流（§8.4）。
 
 [设计] 需求按流的全集下发，而不是按订阅或增减下发。全集可以在每个新会话上原样重发，崩溃后不需要知道集成已经收到过什么；同流串行，最后一次即最新需求；多个订阅对同一主体的需求在核心合并一次，配额只在核心计量（§8.5）。路由结论记录落在流上而不是执行事实侧：需求是按主体的，`Gap{origin: Source}` 按流，只有带主体的记录能如实说出哪个主体从哪里起有记录、来源此刻确认了哪些供给；它落在流上，读这条流的程序与订阅者才看得见，序号覆盖也只读它而不读订阅表（§8.4）。不选：
@@ -451,14 +451,14 @@
 
 ### 集成→核心的推送
 
-> 图：D3.1 推送入库时序、D1.3 边界接受（`design/diagrams/03-observation-ingest.md`、`01-process-topology.md`）。
+> 图：D3.1 推送入库时序、D1.3 边界接受；上报 gap 之前先完成已收到的调用见 D1.6、D3.2（`design/diagrams/03-observation-ingest.md`、`01-process-topology.md`）。
 
 推送不是对外部世界的读 / 写动作，而是集成把观察与状态送进核心；核心内部结果是 append 或进度推进。
 
 | 推送 | 语义 | 核心内部结果 |
 |---|---|---|
 | 观察记录 | 集成推送观察记录（venue seq/cursor 证据、`attribution`、契约载荷 + `payload_schema`、原始负载），不带会话 epoch；`LogPosition` 由核心按到达顺序分配，`SessionEpoch` 由核心盖上（§7.2 会话 epoch） | append 观察 `Journal`、推进序号覆盖（§8.4）、触发处理器与 DAG |
-| `Gap{origin: Source}` | 集成负责的观察流断代；会话内上报的每条带该流在本会话的 `generation`（集成创建，会话开始为 0，每条加一，§8.2 `route`） | 记来源 gap（新 epoch 首条记录，含前一范围与最后 `Seq`、原因，会话内上报的另含 `generation`） |
+| `Gap{origin: Source}` | 集成负责的观察流断代；会话内上报的每条带该流在本会话的 `generation`（集成创建，会话开始为 0，每上报一条加一并带上新值，§8.2 `route`） | 记来源 gap（新 epoch 首条记录，含前一范围与最后 `Seq`、原因，会话内上报的另含 `generation`） |
 | 能力变更 | 握手后能力变化，含某流一次性读与回填能力（§2.2 `StreamDecl`）；配额只随重新握手变化 | IO 壳 append `CapabilityObserved`（执行 J，§7.5）、重算受影响单据的 `alignment` 与 `parameter_validity` |
 | readiness（P16） | 按集成 × 流：`Starting` / `Live{live_from}`（含 `Degraded` 子态）；`live_from` 是回填的终点，声明时机按该流有无可衔接序号而定（§8.4） | 核心盖上到达会话的 `SessionEpoch` 与该流当时的流 epoch 后 append 为健康观察；只在该会话是最近一条会话记录且为 `Established`、该流 epoch 仍是当前流 epoch 时有效（§8.4 readiness 的 fold）；订阅状态派生（非损失，不需确认） |
 
@@ -535,8 +535,8 @@
     - 键角色不是 `None` 的声明同时说明键的作用域与上游保证唯一的期限。集成只在这个作用域与期限内，依上游以该键给出的关联把记录填为 `FromAttempt`；其外只凭键的记录填 `Unattributed`。同一作用域没有别的写者使用核心的键编码是运维义务，集成与核心都观察不到它被违反（§10.4 #25）。
 - **不以拷贝回答读**：`query_by_key`、`list_open`、`list_fills`、`replay_by_key`、`backfill`、`read` 的回答必须来自本次对上游的询问，不来自集成自己保存的状态；问不到上游即 `Unavailable`。集成为消费推送流而维持的状态（如由增量重建的盘口）只用于产出推送记录，不用于回答读。理由：读的回答被核心当作来源的证据（`Absent` 确立一次尝试的结果，§6.6；`Covered` 推进序号覆盖，§8.4），而集成保存的状态是上游原值在过去某刻的拷贝（§0.1）。
 - 按 `route`（§8.2）供给推送：会话建立后，一条流在收到本会话第一次 `route` 之前不推送；此后只推送最近一次 `route` 给出、且未被上游拒绝的主体（`All` 即整条流）；`Routed` 只在上游确实开始供给这些主体后返回，`refused` 只列上游明确拒绝的主体；新加入主体的记录在送出 `Routed` 之后才推送。握手以游标续接原 epoch 时，等待 `route` 期间不丢上游记录（靠上游按游标续传或集成暂存），`route` 生效后先接续这些记录；做不到（游标失效、暂存溢出）就不能续接，按断代上报 `Gap{origin: Source}`。已路由主体的供给中断时同样上报，不静默停推（上游推送通道断开重连即是这种中断）。
-- **按 `generation` 划分流 epoch** [设计]：会话内上报的每条 `Gap{origin: Source}` 带该流在本会话的 `generation`：集成创建它，会话开始时每条流为 0，该流每上报一条加一。这条 gap 开一个新流 epoch。此后该流只在收到带这个新 `generation` 的 `route` 之后才推送，与会话建立后的规则同理。所带 `generation` 早于该流最近上报的那个的 `route`，一律答 `Unavailable`，不改变任何供给，也不作为新 epoch 的 `route`（§8.2 `route`）。
-- **流 epoch 结束之前先完成它的调用** [设计]：会话内为某流上报 `Gap{origin: Source}` 之前，先把这条流上在途的 `read`、`backfill` 与 `route` 调用以 `Unavailable` 完成，再送出这条 gap。这些调用是该流当前流 epoch 的内层（§8.4“会话内开的新流 epoch”）：它们问的是这个 epoch 里的供给，回答要在这个 epoch 结束之前落下。同一会话上集成→核心的消息按发送顺序处理，所以 `read`、`backfill` 的 `Gap{origin: Channel}` 落在旧 epoch 里；`route` 的 `Unavailable` 不 append 记录，由核心带新 `generation` 为新 epoch 重发。写调用与取证调用（`submit`、`cancel`、`query_by_key`、`list_open`、`list_fills`、`replay_by_key`）不在此列：它们按作用域寻址，回答照常返回，跨过流 epoch 更替的回答由核心按 §8.1 来源顺序第 1 条处理。`read`、`backfill` 的这一步做不到时，核心仍有定义的结果（§8.2 两者的“错误”），但那是违约，由一致性测试查出。`route` 跨过更替只由集成按 `generation` 判定，核心不另判，违反只由一致性测试查出。
+- **按 `generation` 划分流 epoch** [设计]：会话内上报的每条 `Gap{origin: Source}` 带该流在本会话的 `generation`：集成创建它，会话开始时每条流为 0，该流每上报一条加一并带上新值，所以本会话第一条带 1。这条 gap 开一个新流 epoch。此后该流只在收到带这个新 `generation` 的 `route` 之后才推送，与会话建立后的规则同理。所带 `generation` 早于该流最近上报的那个的 `route`，一律答 `Unavailable`，不改变任何供给，也不作为新 epoch 的 `route`（§8.2 `route`）。
+- **上报 gap 之前先完成已收到的调用** [设计]：会话内为某流上报 `Gap{origin: Source}` 之前，先把这条流上已收到、尚未作答的 `read`、`backfill` 与 `route` 调用以 `Unavailable` 完成，再送出这条 gap。集成已收到它们，回答就在 gap 之前送出；它们的发出 epoch 是调用所问供给的属性，不是它们生命周期的外层，它们只嵌在会话里（§8.4“会话内开的新流 epoch”）。同一会话上集成→核心的消息按发送顺序处理，所以这些 `read`、`backfill` 的 `Gap{origin: Channel}` 落在这条 gap 之前的 epoch 里；`route` 的 `Unavailable` 不 append 记录，核心按 pacing 重发，每次带它最后接受的 `generation`（§8.2 `route`）。这项义务只及于送出 gap 之前已收到的调用：在途跨过 gap、集成送出 gap 之后才收到的调用是合规的竞态，集成照常作答（其中 `route` 带旧 `generation`，按上一条答 `Unavailable`），`read`、`backfill` 的结果由核心按发出 epoch 处置（§8.2 两者的“错误”）。写调用与取证调用（`submit`、`cancel`、`query_by_key`、`list_open`、`list_fills`、`replay_by_key`）不在此列：它们按作用域寻址，回答照常返回，跨过流 epoch 更替的回答由核心按 §8.1 来源顺序第 1 条处理。已收到的 `read`、`backfill` 在 gap 之后才作答是违约：核心仍有定义的结果（同上），由一致性测试查出。`route` 跨过更替只由集成按 `generation` 判定，核心不另判，违反只由一致性测试查出。
 - 按 §8.4 的时机声明 `live_from`，每个流 epoch 一次：声明 `joinable_venue_seq` 的流在上游确认实时订阅时声明，值为下一个期望的序号；其余流的 `live_from` 是首条实时记录的事件时间，在推送该记录之前或同一推送里声明。会话内开了新流 epoch 的流，readiness 回到 `Starting`，为新 epoch 按同一时机重新声明 `Live{live_from}`。
 - 上报 `Gap{origin: Source}` 与 readiness（§8.4）。
 
@@ -558,7 +558,7 @@
 
 ## 8.4 回填、实时边界、readiness、健康面
 
-> 图：D3.2 readiness 与流 epoch、D3.3 回填与实时边界（`design/diagrams/03-observation-ingest.md`）；健康面的会话状态见 D1.3（`01-process-topology.md`）。
+> 图：D3.2 readiness 与流 epoch、D3.3 回填与实时边界（`design/diagrams/03-observation-ingest.md`）；健康面的会话状态见 D1.3，会话内开的新流 epoch 的生命周期见 D1.6（`01-process-topology.md`）。
 
 **回填**（P5）是 IDL 读操作 `backfill(stream, window, subjects) → Covered{records, covered_to} | Unavailable | Refused`（§8.2）。
 
@@ -594,7 +594,7 @@
 - `Starting → Live{live_from}`。`Starting`：会话已建立，该流在它的当前流 epoch 里尚未声明 `live_from`；`Live{live_from}`：当前流 epoch 的 `live_from` 已声明，同上。回填不是 readiness 的状态：它依赖 `live_from`，进度由核心据读结论记录判定，见下文“回填进度”。
 - readiness 是集成在一个会话里、对该流一个流 epoch 的实时供给的陈述，只代表那个会话与那个流 epoch。核心在接受时给它盖上到达会话的 `SessionEpoch` 与该流当时的流 epoch 后 append 为健康观察；集成离开 `Established` 后自己推不了任何东西，核心也不替它 append。
 - **会话内开的新流 epoch** [设计]：集成在会话中上报的 `Gap{origin: Source}` 开一个新流 epoch，它是该流 epoch 生命周期的开始锚点，也是上一 epoch 的结束锚点，与握手时开的新 epoch 同样处理：该流的 readiness 回到 `Starting`，核心带这条 gap 的 `generation` 为它重发 `route`（§8.2），集成在收到之前不推送、确认实时供给后为新 epoch 声明 `Live{live_from}`（§8.3），回填任务在这个 `live_from` 声明时一次判定（见下文“回填进度”）。上一 epoch 的 readiness、路由结论与回填进度都不沿用。
-  - 核心对这条流的 `read`、`backfill`、`route` 调用同时是会话与发出时的流 epoch 的内层。`read` 的发出 epoch 由它的 `dispatch_end` 记下，`backfill` 的是它的任务所在的 epoch，这两者都是 UTA 自己关于这次调用的事实；`route` 的由它所带的 `generation` 指名，这是集成的值（§8.2 `route`）。所以它们要在各自的 epoch 结束之前完成：集成在上报 `Gap{origin: Source}` 之前以 `Unavailable` 完成已收到的这些调用（§8.3）。`read`、`backfill` 的结果仍在 epoch 更替之后到达核心的，核心把这次调用完成为 `Unavailable`，不把它作为新 epoch 的记录：记 `Gap{origin: Channel}`，不 append 结果与结论记录（§8.2 两者的“错误”）。`route` 在更替之后才到达集成的，带的是旧 `generation`，由集成答 `Unavailable`、不改变供给，核心不另判。回执与取证的回答不在此列：它们不属于某个流 epoch 的供给，是写的证据，照常 append 在当前 epoch，只是它们的 venue 序号不作来源顺序与序号覆盖的证据（§8.1 来源顺序第 1 条）。
+  - 核心对这条流的 `read`、`backfill`、`route` 调用只嵌在会话里（§7.2 生命周期表）。发出时的流 epoch 是调用的属性：它指名这次调用问的是哪个 epoch，并决定结果能否准入，不是调用的外层。`read` 的发出 epoch 由它的 `dispatch_end` 记下，`backfill` 的是它的任务所在的 epoch，这两者都是 UTA 自己关于这次调用的事实；`route` 的由它所带的 `generation` 指名，这是集成的值（§8.2 `route`）。流 epoch 何时结束由集成决定，与核心发出调用互不等待：集成送出 gap 时仍在通道上的调用，只能在 gap 之后结束，所以 epoch 不是它们的外层。集成在上报 `Gap{origin: Source}` 之前以 `Unavailable` 完成它已收到的这些调用（§8.3）。`read`、`backfill` 的结果仍在 epoch 更替之后到达核心的，核心把这次调用完成为 `Unavailable`，不把它作为新 epoch 的记录：记 `Gap{origin: Channel}`，不 append 结果与结论记录（§8.2 两者的“错误”）。`route` 在更替之后才到达集成的，带的是旧 `generation`，由集成答 `Unavailable`、不改变供给，核心不另判。回执与取证的回答不在此列：它们不属于某个流 epoch 的供给，是写的证据，照常 append 在当前 epoch，只是它们的 venue 序号不作来源顺序与序号覆盖的证据（§8.1 来源顺序第 1 条）。
 - **fold**：一条流当前的 readiness 只取同时带着最近一条会话记录的 `SessionEpoch` 与该流当前流 epoch（健康流上该逻辑流最近一条回填进度所带的 epoch，见下文“健康不留旧值”）的值，且只在那条会话记录是 `Established` 时。已建立而该流在当前流 epoch 里尚无这样的 readiness 时为 `Starting`。会话为 `Connecting` 或 `Halted` 时，各流为 `Disconnected`：由会话状态派生，不是记录，不带自己的时刻，只随附当前会话状态及其 `since`（那是会话状态记录的时刻，不是断线时刻；核心不回填崩溃发生的时刻）。
 - `Degraded{reason}` 是 `Live` 的子态，由集成上报（上游服务降级、上游限流、该流能力收紧），不改变记录接受条件，也不阻断写：发出前门只看会话与能力（§6.5）。它与核心按声明配额把订阅挂起（原因 `QuotaExceeded`，§8.5）互相独立：`Degraded` 不使超配的订阅恢复路由。
 - readiness 变化是健康观察，不需确认。
@@ -606,7 +606,7 @@
 - 该流的需求非空：§8.2 `route` 合成的全集，含核心自己的 `All`；
 - 该逻辑流的**回填深度**不为 0；为 `Origin` 时，会话有效声明含 `backfill_from_origin`。
 
-判定之后能力、需求、深度或声明的变化只影响下一个流 epoch 的判定，不在本 epoch 补建、改建或撤销任务：epoch 中途新增的需求不建任务，已建立的任务在需求撤去后仍按建立时的主体集进行（需求的变化只改 `route` 下发的全集，不改任务；任务的主体集不是需求）。理由：本设计让一个流 epoch 至多有一个回填任务，它的起点与主体集在 `live_from` 声明时取定，`health` 与完整界说的都是这一个任务。中途才订阅的消费方：若该 epoch 没有任务，或任务没有闭合起点的 `Gap{origin: Source}`，这条 gap 仍标出未覆盖的区间，要那段历史就用带 `range` 的一次性读（§8.2 `read`）。已建立的任务在能力不再是 `Supported` 或来源没有已建立会话期间不发调用、停在 `Backfilling{through}`；恢复后从最近的 `covered_to` 续，直到终态或该 epoch 结束。一直恢复不了的任务没有终态：到 epoch 结束仍是 `Backfilling`，下一 epoch 开新的判定，旧任务不再推进，它在 epoch 结束时仍在途的调用以 `Unavailable` 完成、结果不 append（见上文“会话内开的新流 epoch”），那段未补的历史由 e 起点的 `Gap{origin: Source}` 继续标出。
+判定之后能力、需求、深度或声明的变化只影响下一个流 epoch 的判定，不在本 epoch 补建、改建或撤销任务：epoch 中途新增的需求不建任务，已建立的任务在需求撤去后仍按建立时的主体集进行（需求的变化只改 `route` 下发的全集，不改任务；任务的主体集不是需求）。理由：本设计让一个流 epoch 至多有一个回填任务，它的起点与主体集在 `live_from` 声明时取定，`health` 与完整界说的都是这一个任务。中途才订阅的消费方：若该 epoch 没有任务，或任务没有闭合起点的 `Gap{origin: Source}`，这条 gap 仍标出未覆盖的区间，要那段历史就用带 `range` 的一次性读（§8.2 `read`）。已建立的任务在能力不再是 `Supported` 或来源没有已建立会话期间不发调用、停在 `Backfilling{through}`；恢复后从最近的 `covered_to` 续，直到终态或该 epoch 结束。一直恢复不了的任务没有终态：到 epoch 结束仍是 `Backfilling`，下一 epoch 开新的判定，旧任务不再推进；它在 epoch 结束时仍在途的调用，集成已收到的由集成在 gap 之前以 `Unavailable` 完成，在途跨过 gap 的由核心按发出 epoch 完成为 `Unavailable`，结果都不 append（见上文“会话内开的新流 epoch”），那段未补的历史由 e 起点的 `Gap{origin: Source}` 继续标出。
 
 回填深度是运行期参数（§7.6），按逻辑流给，缺省取全局值；取值是该流回填坐标上的一段长度、`0`（不回填），或 `Origin`。长度的单位随坐标：声明 `joinable_venue_seq` 的流为 venue 序号个数，其余流为时长；全局缺省因此给两个值，按流的坐标取其一。起点 = `live_from` 往前一个回填深度；深度为 `Origin` 时起点为 `Origin`，即上游该流历史的真实起点（§8.2 `backfill`）。深度、起点与主体集在任务建立时取定，同一任务内不变。
 
@@ -645,7 +645,7 @@
 调用结果的计数：
 
 - **目标**是调用显式寻址的对象：`submit`、`cancel`、`query_by_key`、`list_open`、`list_fills`、`replay_by_key` 的目标是 `WriteScope`（按作用域寻址，或经 `AttemptRef` 所在 lane）；`read`、`backfill`、`route` 的目标是逻辑流 `(source, stream)`。不从 `WriteScope.streams` 推定某条流属于哪个作用域。
-- **计入**：核心经集成会话实际发出的每个调用恰好计一次，计它唯一的最终结果：该调用的封闭返回值；会话在返回前结束时由集成会话给出的结果（写为 `NoResponse`，其余为 `Unavailable`，§7.2 第 3 步）；或结果在发出 epoch 结束之后才到达、由核心完成的 `Unavailable`（`read`、`backfill`、`route`，§8.2）。通道关闭之后，核心不再从那个会话读入任何东西。每个最终结果恰推进一次它的目标，一条健康观察带推进后的值。握手不计（由 `session` 表达）；推送、`Attributed`、`CrashWindow` 与 principal 的 `Abandoned` 都不是调用结果；无会话时没有发出的调用不计。
+- **计入**：核心经集成会话实际发出的每个调用恰好计一次，计它唯一的最终结果：该调用的封闭返回值；会话在返回前结束时由集成会话给出的结果（写为 `NoResponse`，其余为 `Unavailable`，§7.2 第 3 步）；或结果在发出 epoch 结束之后才到达、由核心完成的 `Unavailable`（`read`、`backfill`，§8.2）。通道关闭之后，核心不再从那个会话读入任何东西。每个最终结果恰推进一次它的目标，一条健康观察带推进后的值。握手不计（由 `session` 表达）；推送、`Attributed`、`CrashWindow` 与 principal 的 `Abandoned` 都不是调用结果；无会话时没有发出的调用不计。
 - **失败** = `Unavailable`、`NoResponse`、`NotSent`：`consecutive_failures` 加一。
 - **成功** = 其余每个封闭结果，即带着上游回答的结果：`Ack`、`Reject`、非空或空 `Answered`、记录集为空的 `Covered`、`Routed`、`Refused`、`Found`、`Absent`、得出 `Inconclusive` 的 `Listing` / `Fills`、`Original`。`consecutive_failures` 归零，`last_success_at` 取该结果被接受的时刻。它回答“这个目标最近一次得到上游回答是什么时候”，不表示业务成功，也不表示历史已取全。
 - 从未成功过的目标没有 `last_success_at`。计数跨会话、跨核心重启延续：每条计数观察带计数后的值，按键保留使它不随压缩丢失（§2.4）。
@@ -659,7 +659,7 @@
 
 ## 8.5 核心↔解释层
 
-> 图：D9.1 会话与重连、D9.2 操作集落点、D9.3 放弃等待、D9.4 控制动作、D9.5 声明与执行事实推送、D3.4 订阅（`design/diagrams/09-alice-session.md`、`03-observation-ingest.md`）。
+> 图：D9.1 会话与重连、D9.2 操作集落点、D9.3 放弃等待、D9.4 控制动作、D9.5 声明与执行事实推送、D3.4 订阅；会话的生命周期见 D1.6（`design/diagrams/09-alice-session.md`、`03-observation-ingest.md`、`01-process-topology.md`）。
 
 本节契约的消费者只有解释层。下游（Alice、CLI 使用者、外部客户程序）是独立生命周期的消费方与控制方，只经解释层接触核心；它们看到的是解释层的对外概念，不是本节的操作、记录与状态（§0.1；`design/downstream/design.md`）。所以本节可以用核心的抽象写。
 
@@ -863,7 +863,7 @@
 
 ## 8.6 核心↔程序宿主
 
-> 图：D4.1 一轮 `Advance`、D4.2 程序生命周期、D7.4 程序侧崩溃分支（`design/diagrams/04-program-host.md`、`07-crash-recovery.md`）。
+> 图：D4.1 一轮 `Advance`、D4.2 程序生命周期、D7.4 程序侧崩溃分支；程序的活动集合、卸载与替换的生命周期见 D1.6（`design/diagrams/04-program-host.md`、`07-crash-recovery.md`、`01-process-topology.md`）。
 
 **宿主 = 受监督子进程** [设计]。
 
