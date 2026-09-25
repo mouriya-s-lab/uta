@@ -99,7 +99,7 @@ sequenceDiagram
   N->>N: STS 链按记录重新评估待决单据（RuleState 由记录 fold 出）；按 deadline 重装过期计时器
   Note over N,H: 第 5 步 恢复观察侧与消费面
   N->>I: 为已建立会话的集成，持久订阅按订阅表与核心自己的需求（非配额池作用域的订单状态流与成交流恒为 All）合成全集经 route 下发，按需 backfill（不等回填完成）
-  N->>H: 活动集合（控制流的 fold）中未被失败抑制、所引用来源都已有声明版本的程序：读程序值并核对 Applied 所钉的内容 hash，拉起宿主并登记；交回本成员可交回的最近 checkpoint（Applied 沿用的或之后持久化的）→ Load(program, checkpoint?, budget)；来源尚无声明版本的程序留在活动集合里等待，不拉起、不 ProgramHalted
+  N->>H: 活动集合（控制流的 fold）中未被失败抑制、所引用来源都已有接纳依据的程序：读程序值并核对 Applied 所钉的内容 hash，拉起宿主并登记；交回本成员可交回的最近 checkpoint（Applied 沿用的或之后持久化的）→ Load(program, checkpoint?, budget)；所引用来源尚无接纳依据的程序（集成来源还没有声明版本，或所引用的程序还没有开始成员的 Applied）留在活动集合里等待，不拉起、不 ProgramHalted
   H-->>N: Loaded 或 LoadRejected（→ ProgramHalted）；交回的 checkpoint 的 state_version 总在本成员接受的集合内（替换 Applied 比对或 Output 检查，§8.6 状态迁移），Load 不比对版本
   N->>A: 开放下游会话；此前 health() 返回 Starting
 ```
@@ -108,7 +108,7 @@ sequenceDiagram
 
 - 第 2 步的结论只来自记录：`Undetermined(CrashWindow)` 在没有任何集成在线时就已 append；随后第 4 步才去问 venue。上一实例受控停止时，第 1 步没有要回收的行，第 2 步没有无后继的 `SendBarrier`。
 - 第 4 步先取证后发送：等待已结束的尝试先移出阻塞头集合，再放未发出的 `Prepared`；发送与取证都依赖该集成已建立的会话，尚无会话的集成其尝试在发出前门等会话建立（或 `deadline` 到期）。
-- 失败分两级：取不到 fence、格式版本 / 迁移 / 重建失败、统一路径配置读不出，整体拒绝启动，不进入部分运行态；单个集成 `Connecting` 或 `Halted`、单个程序装载失败、被失败抑制或等待来源的首个声明版本，只使该单元不可用，其余照常启动。`Halted` 与程序的失败抑制跨核心重启保持：它们来自控制流上的执行事实 `IntegrationHalted`、`ProgramHalted`，不来自可压缩的观察记录。消费方在第 5 步之前只看到 `Starting`。
+- 失败分两级：取不到 fence、格式版本 / 迁移 / 重建失败、统一路径配置读不出，整体拒绝启动，不进入部分运行态；单个集成 `Connecting` 或 `Halted`、单个程序装载失败、被失败抑制或等待所引用来源的接纳依据（集成来源的首个声明版本，或所引用程序的首条开始成员的 `Applied`），只使该单元不可用，其余照常启动。`Halted` 与程序的失败抑制跨核心重启保持：它们来自控制流上的执行事实 `IntegrationHalted`、`ProgramHalted`，不来自可压缩的观察记录。消费方在第 5 步之前只看到 `Starting`。
 - 旧实例的 readiness 不另写：第 3 步的 `Connecting` 记录之后，readiness 由 fold 派生为 `Disconnected`，直到新会话 `Established`（§8.4）。
 
 核出：第 4 步原文只写了取证与发送，没写 `EffectRequest` 重派与待决单据的计时器重装——已并入 §7.2 第 4 步。
@@ -177,7 +177,7 @@ flowchart LR
     STS["STS 规则链（含授权步否决时的安全事件）"]
     IOE["IO 壳：SendBarrier（写操作 · 键 · 键角色）/ VenueAccepted / VenueRejected / NotSent / Undetermined / Expired / Abandoned /<br/>ResolutionEvidence / ReconciliationReopened{SessionRestored} / CapabilityObserved / 取证 Gap{Channel}"]
     ATTR["效应侧归因处理器：ResolutionEvidence{Attributed}"]
-    CTL["控制面：控制记录（bypass_lane 随其 lane 流，其余都在控制流；解除 Halted 的 Applied 引用 IntegrationHalted；restart_integration 的 Applied 带文件 hash 与 instance_id；load_program 的 Applied 钉内容 hash、记下沿用的 Checkpoint，解除失败抑制时引用 ProgramHalted）· 越权安全事件 · ReconciliationReopened{Manual}"]
+    CTL["控制面：控制记录（bypass_lane 随其 lane 流，其余都在控制流；解除 Halted 的 Applied 引用 IntegrationHalted；restart_integration 的 Applied 带文件 hash 与 instance_id；load_program 的 Applied 钉内容 hash、以值记下程序流集合、记下沿用的 Checkpoint，解除失败抑制时引用 ProgramHalted）· 越权安全事件 · ReconciliationReopened{Manual}"]
     SESS["会话入口：未完成握手请求的安全事件"]
     OUT["出站请求处理器：EffectRequest · EffectResponse"]
     SUBEL["持久订阅元素"]
@@ -263,7 +263,7 @@ flowchart LR
 | `IntegrationHalted` + `Halted` 健康观察（进程的终止在提交之后，另由 OS 确认） | §7.2 第 3 步 | 二者皆无：仍在上一状态，重启按执行事实重判；已提交而进程未确认退出：继任实例第 1 步回收 |
 | 解除 `Halted` 的控制记录 `Applied`（引用 `IntegrationHalted`）+ `Connecting` 健康观察；只在上一次集成运行结束（进程 OS 确认退出、行已清除）之后提交 | §7.2 第 3 步 | 二者皆无：仍 `Halted`，没有握手发生 |
 | `restart_integration` 采纳本实例尚未运行的 id：`Applied`（带文件 hash 与 `instance_id`）+ `Connecting` 健康观察 | §7.2 第 3 步、§8.5 | 二者皆无：该 id 不在采纳集合里，没有运行、没有进程 |
-| `load_program` 的 `Applied`（钉内容 hash、记下沿用的 `Checkpoint`）+ 程序全部输入的 cursor；让 id 进入活动集合的（首次装载、卸载之后再装载）另加新成员每条程序流新 epoch 的 `Gap{Source, start}`；替换不沿用旧状态时（`cold_start`、不接受旧 `state_version`，或程序流集合不同）另加 `ProgramReset`、新成员每条程序流新 epoch 的 `Gap{Source, program_upgrade}`、旧保留引用的解除；新成员不声明的流不写记录 | §8.5、§8.6 卸载与替换、程序流的 epoch | 二者皆无：id 不在活动集合里的，程序仍不在集合里，程序流没有新 epoch；替换的，旧成员照旧（替换时旧宿主已结束，重启照常装载旧成员）；已提交：按 `Applied` 所记沿用或不携带装载，不重复 `Reset`，不再开 epoch |
+| `load_program` 的 `Applied`（钉内容 hash、以值记下程序流集合、记下沿用的 `Checkpoint`）+ 程序全部输入的 cursor；让 id 进入活动集合的（首次装载、卸载之后再装载）另加新成员每条程序流新 epoch 的 `Gap{Source, start}`；替换不沿用旧状态时（`cold_start`、不接受旧 `state_version`，或开始旧成员的 `Applied` 所记的程序流集合与新成员的不同）另加 `ProgramReset`、新成员每条程序流新 epoch 的 `Gap{Source, program_upgrade}`、旧保留引用的解除；新成员不声明的流不写记录 | §8.5、§8.6 卸载与替换、程序流的 epoch | 二者皆无：id 不在活动集合里的，程序仍不在集合里，程序流没有新 epoch；替换的，旧成员照旧（替换时旧宿主已结束，重启照常装载旧成员）；已提交：按 `Applied` 所记沿用或不携带装载，不重复 `Reset`，不再开 epoch |
 | `unload_program` 的 `Applied` + 程序 cursor 的结束 + 保留引用的解除（宿主已 OS 确认退出之后）；程序流上不写记录，它的 epoch 不结束 | §8.6 卸载与替换 | 二者皆无：程序仍在活动集合里，重启照常装载 |
 | `ProgramHalted` + `ProgramFailed` 观察（宿主的终止在提交之后） | §8.6 | 二者皆无：重启时程序仍在活动集合里且未被抑制，按 `Checkpoint` 重新装载；超预算或 trap 若再发生，再记一次 |
 
@@ -293,7 +293,7 @@ flowchart TB
     end
     HEXEC["程序宿主执行：拉起 + 行 + Load 开始 · Unload 或终止后 OS 确认退出结束"]
   end
-  subgraph MEMBER["程序成员（跨实例）：load_program Applied 开始（钉内容 hash）· unload_program 或替换的 Applied 结束，只在宿主执行结束之后 append；替换的同一个 Applied 开始新成员"]
+  subgraph MEMBER["程序成员（跨实例）：load_program Applied 开始（钉内容 hash，以值记下程序流集合）· unload_program 或替换的 Applied 结束，只在宿主执行结束之后 append；替换的同一个 Applied 开始新成员，沿用判定比较开始旧成员的 Applied 所记程序流集合"]
     CUR["输入 cursor：开始成员的 Applied 同事务建立 · unload_program 或替换的 Applied 结束（沿用时共有输入原样转给新成员）"]
     CKREF["Checkpoint 的保留引用：进入活动集合后第一个 Checkpoint 登记 · unload_program 或不沿用旧状态的替换 Applied 解除；Unload 与失败抑制不解除"]
   end

@@ -107,7 +107,8 @@ fn compact_below_retention<Record, D: RetractableDelta>(journal: &mut Journal<Re
 程序是 **deep embedding 的小闭合值**，节点即值树（§2.5）：
 
 ```rust
-struct Program { nodes: Vec<DerivationNode>, rules: Vec<DecisionStep>, state: Vec<NamedProj> }
+struct Program { nodes: Vec<DerivationNode>, rules: Vec<DecisionStep>, outputs: Vec<Output> }
+struct Output  { name: StreamName, node: Id }   // 输出声明：节点 node 的值落在该程序的流 name 上
 // DerivationNode 见 §2.5；DecisionStep 见 §6.1
 ```
 
@@ -116,7 +117,8 @@ struct Program { nodes: Vec<DerivationNode>, rules: Vec<DecisionStep>, state: Ve
 同一个程序值有两种解释。观察半边是**解释①（派生）**；解释②见 §6.1。
 
 - `nodes` → 增量 DAG，仅重算受影响节点，并通过 cutoff 截断。
-- 输出写回派生侧 `Journal`。alert 本质上是派生观察，与外部观察同形。
+- **输出由 `outputs` 声明**：每个 `Output` 把节点 `node` 的值落在流 `(Program(id), name)` 上（§2.3 `Source`）；该程序的**程序流集合**恰是 `outputs` 里的全部 `name`（§8.6 程序流的 epoch）。每次 `Advance`，每个 `Output.node` 的值 append 为该流上的派生记录（派生侧 `Journal`）；其余节点的值是程序内部的，不落任何流。alert 本质上是派生观察，与外部观察同形。
+- 装载期校验拒绝 `outputs` 里名字重复或 `Output.node` 不存在的程序值（§8.6 装载期校验）。程序状态就是 `Scan`/`Window` 节点的累加器（见下文“状态正交划分”），经 `Checkpoint` 持久化（§8.6），不另有状态声明。
 - **增量在节点粒度**（哪些节点因输入变化重跑），不在算法内部。一个节点被触发时可以看它声明的完整窗口，输出相等时 cutoff 仍成立。记录渐进不要求算法渐进。[证据：fp-01 M3 Mu `Work_`；fp-05 案例 7 Incremental；域 B3/P2]
 - **输入 = 位置推进**：`required_inputs` 各流 cursor 之后的记录，加上 `await-all` 输入上来源证据证明的覆盖（§4.2）。程序可见 gap 与两种时间。解释②另读声明的执行事实流与该程序的请求流（§6.1、§8.6 程序的输入），解释①的节点不消费它们。
 - **输出 = (effect 请求集, 派生记录集)**：锚点经处理器成为 Intent 或读结果。

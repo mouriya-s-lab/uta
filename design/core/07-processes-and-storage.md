@@ -104,7 +104,7 @@ flowchart TB
 | 核心→集成的在途读侧调用（`read`、`backfill`、`route`） | 经通道发出（集成会话，内存）。发出时这条流的当前流 epoch 是它的发出 epoch：`read` 由 `dispatch_end` 记下，`backfill` 是任务所在的 epoch，`route` 由它所带的 `generation` 指名（§8.2） | 封闭返回值（集成；它在上报 `Gap{origin: Source}` 之前以 `Unavailable` 完成已收到的这类调用，§8.3）；会话结束时的强制完成（集成会话）；实例崩溃时随实例结束，结束锚点即继任者的 fence 事务，调用结果无从记录，由发起方按各自规则重来。结果按发出 epoch 准入：`read`、`backfill` 的结果到达时发出 epoch 已结束的，调用仍以这个返回值结束，核心不准入它、记为 `Unavailable`（§8.2 两者的“错误”）；`route` 所带 `generation` 早于集成最近上报的，集成答 `Unavailable`、供给不变（§8.2 `route`） | 集成会话。发出 epoch 是调用的属性，不是外层：流 epoch 何时结束由集成决定，与核心的调用互不等待，集成送出 gap 时仍在通道上的调用只能在 gap 之后结束（§8.4“会话内开的新流 epoch”） | 结果记录与计数观察同一事务 |
 | 核心→集成的 `route` 义务（每条逻辑流至多一项） | 会话建立时，为需求非空的流各起一项；会话已建立期间，核心接受该流一条会话内上报的 `Gap{origin: Source}`，或该流的需求变化时起一项，已有则并入（持久订阅元素，内存，§8.2 `route`“谁调、何时调”） | 第一次 `Routed`（持久订阅元素）；会话结束：在途调用完成之后、关闭通道之前丢弃，不再重发（持久订阅元素）；实例崩溃时随实例结束 | 集成会话：没有已建立的会话就没有义务，需求变化只改变需求；它逐次发出的 `route` 是上一行的调用 | 无；`Routed` 的路由结论记录是那次调用的结果 |
 | 核心→集成的在途写与取证调用（`submit`、`cancel`、`query_by_key`、`list_open`、`list_fills`、`replay_by_key`） | 经通道发出（集成会话，内存） | 封闭返回值（集成）；会话结束时的强制完成（集成会话）；实例崩溃时随实例结束，结束锚点即继任者的 fence 事务，调用结果无从记录（写由第 2 步记为 `Undetermined(CrashWindow)`，取证由 IO 壳按恢复规则重做，§6.7） | 集成会话：按作用域寻址，不是流 epoch 的内层；跨过流 epoch 更替的回答按 §8.1 来源顺序第 1 条处理 | 结果记录与计数观察同一事务 |
-| 程序（活动集合的成员） | `load_program` 的 `Applied`：钉住内容 hash、预算与接受的 `state_version`；替换时同一个 `Applied` 结束旧成员、开始新成员（控制面，§8.6） | `unload_program` 的 `Applied`，或替换它的那个 `Applied`（控制面）；只在它的宿主执行已结束之后 append：停止调度 `Advance`、在途输出事务已提交或确知不提交、宿主 OS 确认退出（§8.6 卸载与替换） | 不嵌在实例里：跨实例持续 | 控制记录（控制流） |
+| 程序（活动集合的成员） | `load_program` 的 `Applied`：钉住内容 hash，以值记下预算、接受的 `state_version`、执行事实输入与程序流集合；替换时同一个 `Applied` 结束旧成员、开始新成员（控制面，§8.6） | `unload_program` 的 `Applied`，或替换它的那个 `Applied`（控制面）；只在它的宿主执行已结束之后 append：停止调度 `Advance`、在途输出事务已提交或确知不提交、宿主 OS 确认退出（§8.6 卸载与替换）；替换的沿用判定读开始它的 `Applied` 所记的程序流集合 | 不嵌在实例里：跨实例持续 | 控制记录（控制流） |
 | 程序的输入 cursor | 开始成员的 `Applied` 同一事务，按各输入声明的起点建立；沿用旧状态的替换原样沿用共有输入的 cursor（核心，§8.6） | `unload_program` 的 `Applied`，或替换的 `Applied`（不沿用时同一事务按 `Reset` 重建，沿用时只结束新程序不再声明的输入）（核心） | 程序成员 | 与 `Checkpoint` 同事务持久化 |
 | 程序宿主执行 | 拉起并写进程表，`Load`（OS、宿主） | `Unload` 或终止之后 OS 确认退出、清除该行（OS）；继任实例回收 | 程序成员 ∩ 核心实例 | 进程表 |
 | `Checkpoint` 的保留引用 | 进入活动集合之后的第一个 `Checkpoint`，与 cursor 同一事务（核心） | 下一个 `Checkpoint` 取代它；`unload_program` 的 `Applied`，或不沿用旧状态的替换 `Applied` 解除；沿用的替换原样转给新成员（核心，§2.4）；宿主的 `Unload` 与失败抑制不解除它 | 程序成员 | 引用登记 |
@@ -114,7 +114,7 @@ flowchart TB
 启动顺序由这张表与存储归属（§7.4、§7.5）、写边界恢复（§6.7）推出。失败分两级 [设计]：
 
 - **核心级**：核心自身不能安全运行时整体拒绝启动，不进入部分运行态。只有四种：第 1 步取不到 fence（专用退出码，此时无权写 SQLite）；第 2 步格式版本校验或迁移失败（C14）；第 2 步从快照 + 记录重建失败（状态重建不出，核心就无法判定哪些写可能已经发出）；第 3 步读取统一路径配置失败（§7.6、C14）。后三种以专用退出码与诊断报告原因。
-- **单元级**：只涉及一个集成或一个程序的失败，只使该单元不可用，其余照常启动：集成处于 `Connecting` 或 `Halted`（第 3 步会话状态）；程序 `LoadRejected`、被失败抑制，或所引用的来源尚无声明版本而等待（§8.6）。
+- **单元级**：只涉及一个集成或一个程序的失败，只使该单元不可用，其余照常启动：集成处于 `Connecting` 或 `Halted`（第 3 步会话状态）；程序 `LoadRejected`、被失败抑制，或所引用的来源尚无接纳依据而等待（集成来源还没有声明版本，或所引用的程序还没有开始成员的 `Applied`，§8.6）。
 
 理由：集成与程序宿主各是独立故障域（§7.1、§8.6）；一个 venue 不通就让全部账户与程序停摆，违背 Q15、Q18 的隔离。C14 管的是持久格式与迁移，不管集成是否可用。
 
@@ -222,7 +222,7 @@ flowchart TB
 ### 5. 恢复观察侧与消费面
 
 1. 为已建立会话的集成，持久订阅按订阅表与核心自己的需求（每个不在配额池里的作用域订单状态流与成交流恒为 `All`）合成各流需求，按会话建立时起的 `route` 义务下发（需求非空的流才有义务，§8.2 `route`“谁调、何时调”），并续回填；`Gap{origin: Source}` 标记断代（§4.2）。
-2. 装载程序的活动集合：控制流上 `load_program` / `unload_program` 的 `Applied` 的 fold，减去未解除失败抑制的程序（§8.6）；每个程序按它的 `Applied` 所钉的内容 hash 与预算，从本成员可交回的最近 `Checkpoint`（与 cursor 同事务持久化，§8.6 `Load`）交回状态；这个 `Checkpoint` 的 `state_version` 总在该 `Applied` 所记的接受集合内（§8.6 状态迁移），装载时不再比对。所引用的来源尚无声明版本的程序留在活动集合里等待，不拉起宿主，该来源第一次握手成功之后再装载（§8.6 装载期校验）。
+2. 装载程序的活动集合：控制流上 `load_program` / `unload_program` 的 `Applied` 的 fold，减去未解除失败抑制的程序（§8.6）；每个程序按它的 `Applied` 所钉的内容 hash 与预算，从本成员可交回的最近 `Checkpoint`（与 cursor 同事务持久化，§8.6 `Load`）交回状态；这个 `Checkpoint` 的 `state_version` 总在该 `Applied` 所记的接受集合内（§8.6 状态迁移），装载时不再比对。所引用的来源尚无接纳依据的程序（集成来源还没有声明版本，或所引用的程序还没有开始成员的 `Applied`）留在活动集合里等待，不拉起宿主，依据出现之后再装载（§8.6 装载期校验）。
 3. 最后开放下游会话（经解释层，§8.5）。
 
 第 4、5 步只建立恢复任务与路由，不等取证收敛、回填完成或全部程序装载成功；之后才建立会话的集成，在会话建立时做同样的恢复。
@@ -285,8 +285,8 @@ flowchart TB
 
 | 元素 | 拥有 | 隐藏的决定 | 假设 | 抽象 |
 |---|---|---|---|---|
-| 程序解释器（值树） | 两种解释的纯语义、装载期校验（`Id` 越界/环、`required_inputs` 与最近声明比对） | — | 程序状态显式可序列化 | §2.5、§4.3、§6.1 |
-| 程序宿主 | 程序的活动集合（控制流上 `load_program` / `unload_program` 的 `Applied` 的 fold，含替换）与失败抑制（`ProgramHalted`）；卸载与替换的顺序（先结束宿主执行，再 append `Applied`）；受监督子进程的拉起、登记与 OS 确认退出、CPU/内存/意图速率/状态大小预算、trap、`Load`/`Advance`/`Reset`/`Unload` 协议 | 宿主进程的 OS 机制（rlimit / job object） | 预算靠宿主进程，不靠类型；程序值从装载清单所指的文件读取，与 `Applied` 所钉的内容 hash 不符就不装载（§8.6） | §6.1、§8.6 |
+| 程序解释器（值树） | 两种解释的纯语义、装载期校验（`Id` 越界/环、`outputs` 名字重复或所指节点不存在、`required_inputs` 与所引用来源的接纳依据比对） | — | 程序状态显式可序列化 | §2.5、§4.3、§6.1 |
+| 程序宿主 | 程序的活动集合（控制流上 `load_program` / `unload_program` 的 `Applied` 的 fold，含替换）与失败抑制（`ProgramHalted`）；历代开始成员的 `Applied` 所记的程序流集合，以流名集合交给订阅接纳与装载期校验（§8.5 订阅组、§8.6 装载期校验）；卸载与替换的顺序（先结束宿主执行，再 append `Applied`）；受监督子进程的拉起、登记与 OS 确认退出、CPU/内存/意图速率/状态大小预算、trap、`Load`/`Advance`/`Reset`/`Unload` 协议 | 宿主进程的 OS 机制（rlimit / job object） | 预算靠宿主进程，不靠类型；程序值从装载清单所指的文件读取，与 `Applied` 所钉的内容 hash 不符就不装载（§8.6） | §6.1、§8.6 |
 | 出站请求处理器 | `EffectRequest`→读/写处理器分派；读处理器立即执行成观察，写处理器以装载 principal 开单 | 副作用具体种类 | 写处理器不绕效应路径 | §6.1 |
 
 ### 效应侧元素
@@ -344,7 +344,7 @@ flowchart TB
 | STS 规则链 | Decision/`Outcome`/`Rejection`；授权步否决时的安全事件 |
 | IO 壳 | `SendBarrier`/`VenueAccepted`/`VenueRejected`/`NotSent`/`Undetermined`/取证 `ResolutionEvidence`/`ReconciliationReopened{SessionRestored}`/`Expired`/`Abandoned`/`CapabilityObserved`/取证 `Gap{Channel}` |
 | 效应侧归因处理器 | `ResolutionEvidence{Attributed}`（§8.1） |
-| 控制面 | 控制记录：除 `bypass_lane` 之外都落控制流（见下）；解除 `Halted` 的 `Applied` 带被解除的 `IntegrationHalted` 位置，§7.2 第 3 步；`restart_integration` 的 `Applied` 带文件 hash 与 `instance_id`，§7.2 第 3 步；`load_program` 的 `Applied` 钉住内容 hash、预算与 `state_version` 并记下所沿用的 `Checkpoint`（位置或无），解除失败抑制时带被解除的 `ProgramHalted` 位置，§8.6。另有控制动作与 `abandon` 越权时的安全事件、`ReconciliationReopened{Manual}`（§8.5） |
+| 控制面 | 控制记录：除 `bypass_lane` 之外都落控制流（见下）；解除 `Halted` 的 `Applied` 带被解除的 `IntegrationHalted` 位置，§7.2 第 3 步；`restart_integration` 的 `Applied` 带文件 hash 与 `instance_id`，§7.2 第 3 步；`load_program` 的 `Applied` 钉住内容 hash、预算与 `state_version`，以值记下程序流集合，并记下所沿用的 `Checkpoint`（位置或无），解除失败抑制时带被解除的 `ProgramHalted` 位置，§8.6。另有控制动作与 `abandon` 越权时的安全事件、`ReconciliationReopened{Manual}`（§8.5） |
 | 会话入口 | 未完成握手的连接发起请求时的安全事件（§8.5） |
 | 集成会话（§7.2 第 3 步） | 登记的采纳记录（控制流）、握手成功时的声明版本（§7.5）、`IntegrationHalted`（控制流，与 `Halted` 健康观察同事务） |
 | 出站请求处理器 | `EffectRequest`、`EffectResponse`（§6.1），都落该程序的请求流（按程序 id 的执行事实流） |
@@ -384,7 +384,7 @@ flowchart TB
     PROG["程序解释器"] --> DAG
   end
   INT["集成进程"] --> ENV
-  HOST["程序宿主"] --> PROG
+  HOST -->|"Load / Advance · 装载期校验所需：所引用程序来源最近开始成员的 Applied 所记程序流集合"| PROG
   HOST -->|"Advance 输出的 EffectRequest"| OUTH
   SESS -->|"拉起 · 通道 · 凭据副本"| INT
   OUTH -->|"读处理器的 read"| ONE
@@ -394,8 +394,10 @@ flowchart TB
   IOSHELL -->|"submit / cancel · 取证 · 会话有效声明（发出前门）"| SESS
   TICKET -->|"会话有效声明（参数合规、能力项）"| SESS
   STS -->|"会话有效声明（放行门）"| SESS
-  PROG -->|"最近声明（装载期 required_inputs 比对）"| SESS
+  PROG -->|"集成来源的最近声明（装载期 required_inputs 比对）"| SESS
   SUB -->|"route（需求全集）· backfill · 会话有效声明（回填）· 最近声明（供给项接纳、配额）· 历代声明（只投递项、执行事实作用域）"| SESS
+  SUB -->|"历代开始成员的 Applied 所记程序流集合（程序来源只投递项接纳；公共值）"| HOST
+  HOST -.读已提交的 load_program / unload_program Applied（活动集合与各成员程序流集合的 fold）.-> STORE
   CTL -->|"restart_integration / rotate_credential"| SESS
   CTL -.append 控制记录.-> STORE
   CTL -.append 程序流开 epoch 的 Gap{Source}（与开始不沿用旧状态之成员的 Applied 同事务）.-> OJ
@@ -427,7 +429,7 @@ flowchart TB
   class HPC,INT,HOST,IL ext;
 ```
 
-唯一跨边是效应侧读观察侧：`basis` 引用的观察位置、钩子读的观察值与归因观察、归因处理器读的观察记录、读模型 fold 的观察记录与读取的订阅表当前态；效应侧的发起方经一次性读发读、IO 壳 append 回执与取证的观察记录、控制面在开始不沿用旧状态之成员的 `Applied` 事务里 append 程序流开 epoch 的 `Gap{origin: Source}`（§8.6 程序流的 epoch），也沿这个方向（§3.2）。STS 规则链不读观察（§6.3），它读的是单据 fold 已算好的状态。存储与集成会话不属任何一侧：投递调度经存储按位置读出执行事实订阅所选记录的字节、原样搬运，不经读模型、不解析（§8.5）；两侧都经集成会话调用集成、取得会话有效声明与最近声明，它的接口只是契约值（IDL 消息与声明，见上文“集成会话”）。能力证据的记录存在执行事实侧，但写门、订阅接纳与读路由读的都是集成会话给出的会话有效声明。观察侧任何元素都不依赖效应侧类型；crate 依赖方向即此，反向不编译（§3.2）。
+唯一跨边是效应侧读观察侧：`basis` 引用的观察位置、钩子读的观察值与归因观察、归因处理器读的观察记录、读模型 fold 的观察记录与读取的订阅表当前态；效应侧的发起方经一次性读发读、IO 壳 append 回执与取证的观察记录、控制面在开始不沿用旧状态之成员的 `Applied` 事务里 append 程序流开 epoch 的 `Gap{origin: Source}`（§8.6 程序流的 epoch），也沿这个方向（§3.2）。STS 规则链不读观察（§6.3），它读的是单据 fold 已算好的状态。存储与集成会话不属任何一侧：投递调度经存储按位置读出执行事实订阅所选记录的字节、原样搬运，不经读模型、不解析（§8.5）；两侧都经集成会话调用集成、取得会话有效声明与最近声明，它的接口只是契约值（IDL 消息与声明，见上文“集成会话”）。能力证据的记录存在执行事实侧，但写门、订阅接纳与读路由读的都是集成会话给出的会话有效声明。程序来源的接纳依据同理：持久订阅与程序解释器得到的是程序宿主元素从已提交控制记录取出的流名集合，不读 `Applied` 本身（§8.5 订阅组）。观察侧任何元素都不依赖效应侧类型；crate 依赖方向即此，反向不编译（§3.2）。
 
 ## 7.4 存储引擎
 
@@ -488,7 +490,7 @@ flowchart TB
 ### 执行事实 `Journal`
 
 - **写**：见唯一写入口表（§7.3）。补充：STS 规则链的 Decision/`Outcome`/`Rejection` 记录带 `checked_as_of`；IO 壳的 `VenueAccepted` 与取证 `ResolutionEvidence{Found}` 含 `Evidence`（契约载荷与原始负载，§6.5）；控制记录为 `Applied | Rejected`。
-- **读**：读模型、单据 `basis`、lane 规则（阻塞头集合、`bypass_lane` 控制记录）、IO 壳（重启重建链）、对账驱动、出站处理器（重启重派判定）。投递调度经存储按位置搬运执行事实订阅所选的记录，不解析（§8.5）。
+- **读**：读模型、单据 `basis`、lane 规则（阻塞头集合、`bypass_lane` 控制记录）、IO 壳（重启重建链）、对账驱动、出站处理器（重启重派判定）、程序宿主元素（控制流上的 `load_program` / `unload_program` `Applied`：活动集合，与交给订阅接纳和装载期校验的各成员程序流集合，§8.5、§8.6）。投递调度经存储按位置搬运执行事实订阅所选的记录，不解析（§8.5）。
 - **传播**：纯 append；位置即顺序。lane 上每次尝试的等待与结果、阻塞头集合是它的 fold，不另存（§6.4、§6.5）。
 - **会话与程序的持久状态也是它的 fold，不另存**：都在控制流上（§7.3），按这条流上的位置 fold：集成的持久 `Halted`（`IntegrationHalted` 与以位置解除它的 `Applied`，§7.2 第 3 步）；程序的活动集合（`load_program` / `unload_program` 的 `Applied`）与失败抑制（`ProgramHalted` 与以位置解除它的 `load_program` `Applied`，§8.6）；登记的采纳（采纳记录与之后带同一 `instance_id` 的 `restart_integration` `Applied`，§7.2 第 3 步）。
 

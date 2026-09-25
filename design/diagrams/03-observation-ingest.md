@@ -143,10 +143,10 @@ sequenceDiagram
   participant J as 观察 Journal
   participant EJ as 执行 Journal（经存储按位置读，不解析）
   C->>SUB: subscribe(selector, mode, from?)（mode = ordered | latest；selector = 观察流：一组 (来源, 流, 主体集?, 用途：供给 | 只投递) 项，可跨来源；或 执行事实 (来源, WriteScope?)；或 控制（核心的控制流））
-  alt 执行事实 / 控制：mode ≠ ordered，或执行事实的 WriteScope.key 不在该来源任何声明版本里（不看采纳集合）
+  alt 执行事实 / 控制：mode ≠ ordered，或执行事实的来源是 Program(_)（只收集成来源），或执行事实的 WriteScope.key 不在该来源任何声明版本里（不看采纳集合）
     SUB-->>C: 拒绝
   else 观察流：逐项判定（各项独立，按项在请求里的次序）
-    Note over SUB: 每项：来源不在采纳集合且从未有声明 → 拒绝；在采纳集合而从未有声明 → 待接纳；供给项：来源不在采纳集合 → 拒绝（来源未登记），流不在最近声明 / 配额池里不带主体集 → 拒绝，放不下 → QuotaExceeded（集成不收到超限主体）；只投递项：流在该来源任何一个声明版本里出现过 → 接纳（不看采纳集合、不要求最近声明、不要求会话；不进需求、不占配额），从未声明过 → 拒绝；from < 保留边界 → 该项 BeyondRetention
+    Note over SUB: 每项（集成来源）：来源不在采纳集合且从未有声明 → 拒绝；在采纳集合而从未有声明 → 待接纳；供给项：来源不在采纳集合 → 拒绝（来源未登记），流不在最近声明 / 配额池里不带主体集 → 拒绝，放不下 → QuotaExceeded（集成不收到超限主体）；只投递项：流在该来源任何一个声明版本里出现过 → 接纳（不看采纳集合、不要求最近声明、不要求会话；不进需求、不占配额），从未声明过 → 拒绝。每项（程序来源 Program(p)，依据是 p 历代开始成员的 Applied 所记程序流集合）：p 没有这种 Applied → 拒绝（来源未登记）；供给项 → 拒绝（ProgramStreamNotRouted，程序流不经 route）；只投递项：流在任一条这种 Applied 的集合里出现过 → 接纳且为活（不要求 p 此刻在活动集合里），从未出现过 → 拒绝。from < 保留边界 → 该项 BeyondRetention
     alt 没有任何一项被接纳或待接纳
       SUB-->>C: Rejected{items}
     else 至少一项被接纳或待接纳

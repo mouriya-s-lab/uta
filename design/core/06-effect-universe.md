@@ -28,7 +28,7 @@ Emit(EffectRequest { effect_kind: EffectKind, payload: Bytes, basis: Basis })
 - 立即经一次性读元素（§7.3）执行一次核心→集成的 `read`（§8.2）；同 identity 的在途调用照常并入（§2.2）。
 - 集成作答（含上游明确拒绝）时，该流上同一事务 append 作答的 N 条观察记录与一条读结论记录（§8.2），出处 `OneShot{origins ∋ Request(该 EffectRequest 记录的 LogPosition), request}`（§3.4）。
 - 程序按位置推进看到作答的记录：闭环走观察侧。
-- `Unavailable` → 观察侧 `Gap{origin: Channel}`。核心未调用集成的情形（来源未登记、来源从未有过声明版本、来源无当前会话、流不在会话有效声明里、会话有效声明对该流为 `Unsupported` 或 `Unknown`、请求不合 schema，判定顺序见 §8.2 `read`、§8.5 一次性读）不调用、不 append 观察记录。
+- `Unavailable` → 观察侧 `Gap{origin: Channel}`。核心未调用集成的情形（来源未登记或不是集成来源、来源从未有过声明版本、来源无当前会话、流不在会话有效声明里、会话有效声明对该流为 `Unsupported` 或 `Unknown`、请求不合 schema，判定顺序见 §8.2 `read`、§8.5 一次性读）不调用、不 append 观察记录。
 - 读处理器**不自行重试**：一条请求一次执行，是否再请求由程序看到结果 / gap 后决定。读可重试的主体是发起者（§3.4）。
 
 **写处理器：**
@@ -50,7 +50,7 @@ Emit(EffectRequest { effect_kind: EffectKind, payload: Bytes, basis: Basis })
 - `EffectResponse` 与产生它的读结论记录 / `Gap` / `Draft` 同一事务 append；`NotCalled` 与 `NotDrafted` 没有伴随记录，`EffectResponse` 单独 append。
 - **落点**：`EffectRequest` 与它的 `EffectResponse`（全部结果，含 `NotCalled` 与 `NotDrafted`）都在该程序的**请求流**上：按程序 id 各成一条的执行事实流。它们是 UTA 关于这个程序自己生命周期的事实，不属任何来源、lane 或作用域，所以没有有效 lane 或未登记来源的请求也有落点（§8.5 执行事实流）。
 - **发出成员**：每条 `EffectRequest` 记下发出它的程序成员 `member`，即开始该成员的 `load_program` 或替换 `Applied` 在控制流上的位置。核心在 `Advance` 的输出事务里写下它：哪个成员在运行是核心自己的控制事实（§8.6）。
-  - 该 `Applied` 以值记下成员的事实：装载 principal（该控制动作的 principal）、声明的执行事实输入集合、钉住的内容 hash 与接受的 `state_version` 集合（§8.5 `load_program`）。
+  - 该 `Applied` 以值记下成员的事实：装载 principal（该控制动作的 principal）、声明的执行事实输入集合、程序流集合、钉住的内容 hash 与接受的 `state_version` 集合（§8.5 `load_program`）。
   - 写处理器与重启重派只读发出成员的这些事实，不读当前成员的，也不重读程序值文件。请求可以在发出成员结束之后才被处理（§8.6 卸载与替换）；`Applied` 是控制流上的执行事实，成员结束、程序值文件被改或删去之后照样可读。
   - 不选：**按处理时的当前成员判定**：替换或卸载之后分派的请求会以另一成员的 principal 开单、按另一份声明判定作用域，卸载之后则无成员可读；**按请求与 `Applied` 的位置先后推断成员**：请求流与控制流之间没有可比的序（§2.3）；**结束成员之前处理完它的全部请求**：`Unhandled` 请求永远没有响应，在途读没有上界。
 - 理由：观察记录可压缩（§2.4），`EffectRequest` 永存（§7.5）；“是否已处理”必须能从与请求同寿命的事实重建。

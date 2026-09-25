@@ -15,7 +15,7 @@
 | 质量场景 | 由刺激源、刺激、构件、环境、响应、响应度量六项组成的可证伪场景。 | §1.4 |
 | `Record` | 某条流的记录词表，由集成在边界处解析给出的具体类型 | §4.1 |
 | `Delta` / `RetractableDelta` | 幺半群增量；后者额外要求逆元（`neg`），只派生侧要求 | §4.1 |
-| `StreamId` | `(source, stream, epoch)`：独立维持单调位置的有序范围 | §2.3 |
+| `StreamId` / `Source` | `(source, stream, epoch)`：独立维持单调位置的有序范围 / `source` 是带标签的值 `Integration(IntegrationId) \| Program(ProgramId)`：两个命名空间不相交；集成只拥有 `Integration(_)` 的流，`Program(_)` 的流由核心产出、控制面只在它们上开 epoch；声明、采纳、会话、`route`、回填与一次性读只对 `Integration(_)` 成立 | §2.3 |
 | `Seq` | 某 `StreamId` 内每 epoch 独立单调递增的持久序号 | §2.3 |
 | cursor（消费位置） | 某消费者已确认（已处理）的位置，每条选中流一个；只说日志，不说任何完备 | §2.3、§4.2 |
 | 完备进度（序号覆盖） | 来源证据证明的覆盖：今天只有声明 `joinable_venue_seq` 的流上的**序号覆盖**，命题是“流 epoch e 内 venue 序号落在 `[from, through)` 的记录都已 append”，坐标是 e 的 venue 序号；只计入 append 在 e 上一条同会话、确认整条流供给（`All` 且 `refused` 为空）的路由结论记录之后的推送，需求不是输入；没有证据的流没有完备进度（“完备未确立”），契约里没有事件时间上的完备 | §2.3、§8.4 |
@@ -49,9 +49,9 @@
 | 回填深度 | 运行期参数，按逻辑流给出每次回填任务从 `live_from` 往前补多少：该流坐标上的长度、`0` 或 `Origin` | §8.4、§7.6 |
 | `subject` | 观察记录信封上的注册字段，给出该记录的订阅主体，与 `route` 用同一主体身份；订阅按它投递 | §8.1、§8.5 |
 | 观察流订阅 | `subscribe` 的一种选择器：一组 `(来源, 流, 主体集?, 用途)` 项，可跨来源，逐项接纳、逐项状态；每条流各自有序，流间不定序 | §8.5 |
-| 供给项 / 只投递项 | 观察流订阅项的两种用途：供给项的主体进入 `route` 需求、计入配额，按采纳集合与最近声明接纳 / 只投递项只搬运已有或将有的记录，不增加需求、不占配额，只按声明历史接纳（登记已移除的来源的历史也可订；一次性读 `Pending` 之后等结果即用它） | §8.5 |
+| 供给项 / 只投递项 | 观察流订阅项的两种用途：供给项的主体进入 `route` 需求、计入配额，按采纳集合与最近声明接纳，`Program(_)` 来源上一律拒绝（`ProgramStreamNotRouted`：程序流由核心产出，不经 `route`）/ 只投递项只搬运已有或将有的记录，不增加需求、不占配额，只按历史接纳：集成来源按声明历史，`Program(p)` 按 `p` 历代开始成员的 `Applied` 所记程序流集合（登记已移除的来源、已卸载的程序的历史也可订；`p` 从无这种 `Applied` 即来源未登记；一次性读 `Pending` 之后等结果即用它） | §8.5 |
 | `WholeStreamInPool` | 订阅项挂起原因：整条流的供给项所在的流进入配额池；该流不在任何配额池时恢复 | §8.5 |
-| 执行事实订阅 | `subscribe` 的一种选择器：某来源（或其一个作用域）的执行事实与声明版本，含此后才出现的 lane 流；按声明历史里的作用域键接纳；只能 `ordered`、可从起点、无投递损失；程序的请求流不经它订阅；另有 `Control` selector 选核心的控制流（§7.3） | §8.5 |
+| 执行事实订阅 | `subscribe` 的一种选择器：某集成来源（`Integration(_)`，或其一个作用域）的执行事实与声明版本，含此后才出现的 lane 流；`Program(_)` 来源拒绝；按声明历史里的作用域键接纳；只能 `ordered`、可从起点、无投递损失；程序的请求流不经它订阅；另有 `Control` selector 选核心的控制流（§7.3） | §8.5 |
 | `venue_order_id` / 最近观察 | 订单状态记录的订单身份：来源 × 作用域内唯一、生命周期内不变，一笔订单只在一条流上 / 同一身份在它所在流上按来源顺序的极大记录；`orders`、`positions` 与检查项共用 | §8.1 |
 | 来源顺序 / 顺序未确立 | 同一身份两条记录之间的先后只凭四种声明的来源证据：同一流 epoch 的 venue 序号（发出 epoch 不是所在 epoch 的回执与取证记录，其序号不算）、`order_revision`、`query_not_lagging`（只对 `dispatch_end` 及之前的记录）、`push_ordered`（只在同一会话 epoch、同一流 epoch 内的两条推送之间）；其余（到达顺序、不声明 `push_ordered` 的流上推送的送达次序、`received_at`、累计量、终态格）都不定序 / 几条极大记录彼此不可比而内容不同时，最近观察并列给出，检查项得 `Undecidable` | §8.1 |
 | 记录映射（`RecordMapping`） | 一条上游记录怎样落到对齐点的值：处置表（上游字段名 → 对齐并附换算 / 进扩展 / 丢弃）、枚举映射表、原始负载保留声明；换算是 `Comb<上游值, 契约值>`；随 `Projection.mappings` 交出，集成侧求值，核心握手时静态校验 | §8.1、§2.5 |
@@ -106,8 +106,9 @@
 | 续传令牌 | 对外的不透明续收凭据，编码核心侧的确认进度；下游保存，解释层不保存 | `design/downstream/design.md` |
 | 程序宿主（program host） | 解释值树程序的受监督子进程，只提供隔离与预算，不进设计中心；协议 = `Load`/`Advance`/`Reset`/`Unload` | §7.1、§8.6 |
 | `Checkpoint` / `state_version` | 程序状态的显式序列化字节及其版本号；与程序 cursor 同事务持久化；`Load` 只交回本成员的（开始成员的 `Applied` 所沿用的，或其后持久化的）；本成员可交回的 `Checkpoint` 的 `state_version` 总在本成员接受的集合内（替换的 `Applied` 比对沿用的，`Output` 检查其后持久化的，违反视同 trap），`Load` 不比对版本 | §8.6、§7.5 |
-| 程序的活动集合 / `ProgramHalted` | 控制流上 `load_program` / `unload_program` 的 `Applied` 的 fold，`Applied` 以值记下成员事实：装载 principal、内容 hash、预算、接受的 `state_version` 集合、声明的执行事实输入集合；改清单或程序值文件不改变它；所引用来源尚无声明版本的成员留在集合里等待（首次装载、替换或卸载后再装载开始的新成员皆然），不拉起宿主 / 超预算、trap、内容不符与装载期校验失败时与观察 `ProgramFailed` 同事务 append 在控制流上的执行事实：失败抑制，跨重启保持，只由以位置引用它的 `load_program` `Applied` 解除 | §8.6 |
-| 替换（程序） / 沿用 | 对已在活动集合里的程序 id 再 `load_program`：先结束旧宿主执行（停调度 `Advance`、等在途输出事务、`Unload` 且 OS 确认退出），再以一条 `Applied` 结束旧成员、开始新成员 / 替换时 `cold_start` 为假、新旧成员的程序流集合相同，且旧成员没有 `Checkpoint` 或新程序接受它的 `state_version`：共有输入的 cursor 与保留引用在该事务原样转给新成员，`Applied` 记下沿用的 `Checkpoint`，程序流接着原 epoch；不沿用时该事务照 `Reset` 处理（`ProgramReset{Replace \| Operator}`，新成员的每条程序流开新 epoch） | §8.5、§8.6 |
+| 程序的活动集合 / `ProgramHalted` | 控制流上 `load_program` / `unload_program` 的 `Applied` 的 fold，`Applied` 以值记下成员事实：装载 principal、内容 hash、预算、接受的 `state_version` 集合、声明的执行事实输入集合、程序流集合；改清单或程序值文件不改变它；所引用来源尚无接纳依据（集成来源还没有声明版本，或所引用的程序还没有开始成员的 `Applied`）的成员留在集合里等待（首次装载、替换或卸载后再装载开始的新成员皆然），不拉起宿主 / 超预算、trap、内容不符与装载期校验失败时与观察 `ProgramFailed` 同事务 append 在控制流上的执行事实：失败抑制，跨重启保持，只由以位置引用它的 `load_program` `Applied` 解除 | §8.6 |
+| 替换（程序） / 沿用 | 对已在活动集合里的程序 id 再 `load_program`：先结束旧宿主执行（停调度 `Advance`、等在途输出事务、`Unload` 且 OS 确认退出），再以一条 `Applied` 结束旧成员、开始新成员 / 替换时 `cold_start` 为假、开始旧成员的 `Applied` 所记的程序流集合与新成员的相同，且旧成员没有 `Checkpoint` 或新程序接受它的 `state_version`：共有输入的 cursor 与保留引用在该事务原样转给新成员，`Applied` 记下沿用的 `Checkpoint`，程序流接着原 epoch；不沿用时该事务照 `Reset` 处理（`ProgramReset{Replace \| Operator}`，新成员的每条程序流开新 epoch） | §8.5、§8.6 |
+| 程序值 / 程序流集合 | `Program { nodes, rules, outputs }`：节点、决策步与输出声明 `Output { name, node }`；每次 `Advance` 每个 `Output.node` 的值落在流 `(Program(id), name)` 上，其余节点的值不落流；装载期拒绝重名输出与不存在的节点 / 一个成员的程序流集合恰是 `outputs` 里的全部 `name`，由开始该成员的 `Applied` 以值记下；沿用判定、程序流的 epoch 与程序来源的接纳都读这份记录，不读程序值文件 | §4.3、§8.6 |
 | `SessionEpoch` / `instance_id` | 会话 epoch `(instance_id, session_seq)`：`instance_id` 随 fence 单调递增，`session_seq` 在核心每拉起一个集成进程时分配（一个进程恰一个会话，`Unavailable` 的再握手不换 epoch）；核心给经该会话通道读入并 append 的记录盖上它，集成不在消息里回填 | §7.1、§7.2 |
 | 会话即通道化身 | 核心拉起集成进程时创建、只有该子进程继承的通道就是会话；接受条件是“经当前会话的通道读入”，通道关闭之后那个会话送来的任何东西都不再读入；在途调用恰好完成一次、核心关闭通道时会话结束 | §7.1、§7.2 |
 | 凭据副本 | 核心拉起集成进程时经继承句柄交付的凭据，只在该进程内存在，随进程的 OS 确认退出结束；换凭据 = 换进程（`rotate_credential`） | §7.1 |
@@ -167,7 +168,7 @@
 | 两种 schema 身份 | `payload_schema`：观察记录的契约载荷按哪份 schema 读，随 `StreamDecl` 声明 | 意图参数 schema：写意图的参数按哪份 schema 校验，随写能力的 `CapabilityProof` 声明，每版意图带它 | 前者标观察的载荷，核心不校验；后者在输入约束步校验意图参数，校验后参数原样交给集成 | §2.2、§6.2、§8.1 |
 | 上游的两种 `Refused` | `handshake` 返回 `Refused`：上游明确拒绝集成的身份或配置，整个集成登记 `Halted`，等运维动作 | `read`/`backfill` 返回 `Refused`：上游拒绝这一次读请求，集成照常运行，不是 gap | 都只在上游给出明确拒绝时返回；不可达、超时一律 `Unavailable` | §8.2、§8.3 |
 | 离线 / 待处理 | `Connecting`：没有会话，会自己恢复（传输失败、上游暂时不可达） | `Halted`：没有会话，不会自己恢复（投影不合法、契约不兼容、身份被拒） | 二者都不发写（发出前门等待）；只有后者要 `restart_integration` 或 `rotate_credential` | §7.2、§6.5 |
-| 读的“拿不到” | 不调用集成、不记 gap：`UnknownTarget`：来源未登记；`Unavailable{source_state}`：来源从未有过声明版本，或此刻没有已建立的会话；`Unsupported`：会话有效声明说该流不支持此读，或流不在会话有效声明里；`Unconfirmed`：会话有效声明说能力未知；`InvalidRequest`：请求不合 schema 或 schema 身份不一致 | 调用之后：`Unavailable{gap}`：渠道失败（已记 `Gap{origin: Channel}`）；`Pending`：`deadline` 到而调用在途（之后照常记结论或 gap，不是 gap；只限发出它的核心实例，以所带 `instance_id` 辨认）；`Refused`：上游明确拒绝这次请求，记读结论记录，不改能力 | 空回答是 `Answered`，不属“拿不到”；判定顺序与结果见 §8.5 一次性读 | §8.2、§8.5 |
+| 读的“拿不到” | 不调用集成、不记 gap：`UnknownTarget`：target 不是可向其发起读取的集成来源（来源未登记，或是 `Program(_)`）；`Unavailable{source_state}`：来源从未有过声明版本，或此刻没有已建立的会话；`Unsupported`：会话有效声明说该流不支持此读，或流不在会话有效声明里；`Unconfirmed`：会话有效声明说能力未知；`InvalidRequest`：请求不合 schema 或 schema 身份不一致 | 调用之后：`Unavailable{gap}`：渠道失败（已记 `Gap{origin: Channel}`）；`Pending`：`deadline` 到而调用在途（之后照常记结论或 gap，不是 gap；只限发出它的核心实例，以所带 `instance_id` 辨认）；`Refused`：上游明确拒绝这次请求，记读结论记录，不改能力 | 空回答是 `Answered`，不属“拿不到”；判定顺序与结果见 §8.5 一次性读 | §8.2、§8.5 |
 | 账户的三个名字 | `WriteLaneKey`：核心路由键，不外露 | `account_ref`：对外账户引用，稳定、不复用 | 第三个 `label`：只给人看，可重复、可改 | §2.2 |
 | 名义数据等级 / 记录上的等级 | 流声明的名义等级：读之前告诉下游“通常是什么” | 公共载荷里上游报告的实际等级 | 不一致时以记录为准；声明不担保逐条 | §2.2 |
 | 两种“证据” | `CapabilityProof`：venue 有这个能力（握手结果） | `ResolutionEvidence`：我的尝试发生了没（对账结果） | 前者进 `Projection.capabilities`，后者进链 | §2.2、§6.5 |
