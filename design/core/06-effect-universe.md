@@ -761,15 +761,16 @@ venue 对我方写的响应是执行事实：C13 原始负载完整保留，执�
 
 - **执行事实侧**一条，**持有 `Evidence`**（永存）。
 - **观察 `Journal`** 上该回应的观察记录，可压缩：订单状态一条（回应含订单状态时），加回应所含每笔可识别执行各一条成交记录（§8.1）。各条的 `attribution` 只按该条自己的关联证据填写，不因同在一个回应里继承；`provenance` 相同，由 IO 壳填（§8.3）。它们供单据钩子与读模型消费、供订阅者与推送观察同形地看到。
+- **`dispatch_end` 按落点的流记** [设计]：IO 壳在发出写调用或取证调用时，为这次调用可能写入的每条流（该作用域的订单状态流与成交流）各记下那一刻已提交的流末位置。append 回应的观察记录时，每条带它所在那条流的这个位置作 `dispatch_end`；同一回应的各条 `provenance` 相同，`dispatch_end` 各是自己那条流的（§8.1 来源顺序与 `dispatch_end`）。理由：`dispatch_end` 所在的流 epoch 是这条记录的发出 epoch，流末位置与流 epoch 都只对一条流有意义；拿订单状态流的位置去标成交记录，成交流上的来源顺序与发出 epoch 就都没有依据。
 
 具体：
 
 | 交互 | 执行事实侧 | 观察侧 |
 |---|---|---|
-| 写调用返回 `Ack` | `VenueAccepted{venue_order_id, receipt: Evidence, observation: LogPosition}`；`observation` 指订单状态记录 | `provenance: Receipt{attempt}` 的观察记录 |
+| 写调用返回 `Ack` | `VenueAccepted{venue_order_id, receipt: Evidence, observation: LogPosition}`；`observation` 指订单状态记录 | `provenance: Receipt{attempt}` 的观察记录，各带所在流的 `dispatch_end` |
 | 写调用返回 `Reject` | `VenueRejected`，`reason` 保留 `Unmapped(raw)`（§2.6） | 无（venue 侧不存在订单） |
 | 写调用返回 `NotSent` | `NotSent{reason, evidence: Evidence}`；`raw` 是集成据以判定未交出的本地原文，可为空 | 无（没有交给上游） |
-| 取证命中 | `ResolutionEvidence{attempt, channel, round, outcome: Found{observation: LogPosition, evidence: Evidence}}`；`observation` 指命中的那条记录（`list_fills` 命中多笔归因到该尝试的成交时，它们同在该作用域成交流上，取其中 `Seq` 最小者） | `provenance: Reconciliation{attempt, channel}` 的观察记录；`list_fills` 命中不造订单状态记录 |
+| 取证命中 | `ResolutionEvidence{attempt, channel, round, outcome: Found{observation: LogPosition, evidence: Evidence}}`；`observation` 指命中的那条记录（`list_fills` 命中多笔归因到该尝试的成交时，它们同在该作用域成交流上，取其中 `Seq` 最小者） | `provenance: Reconciliation{attempt, channel}` 的观察记录，各带所在流的 `dispatch_end`；`list_fills` 命中不造订单状态记录 |
 | 取证 `Absent` / `Inconclusive` | `ResolutionEvidence` | 无（没有订单状态可记） |
 | `Unavailable` | 只落 `Gap{origin: Channel}`，不是取证结果（§6.6） | 无 |
 

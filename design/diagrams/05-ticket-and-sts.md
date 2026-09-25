@@ -53,7 +53,7 @@ stateDiagram-v2
 
 ## D5.2 意图从哪来、怎么开单
 
-对照：§6.1 写处理器、§6.2 参数合规与交易协议、§8.5 单据组、§7.6 `deadline` 缺省、§8.1 意图锚点。
+对照：§6.1 写处理器（构造规则、发出成员）、§6.2 参数合规与交易协议、§8.5 单据组、§7.6 `deadline` 缺省、§8.1 意图锚点。
 
 ```mermaid
 flowchart LR
@@ -63,16 +63,19 @@ flowchart LR
     APPR["审批人 decide(Approve)"]
   end
   AI -->|"draft(intent) → TicketId<br/>revise / submit_for_decision"| NORM
-  PROG -->|"写处理器：装载 principal 为 responsible<br/>Draft + SubmitForDecision 同事务"| NORM
+  PROG -->|"写处理器：发出成员的装载 principal 为 responsible<br/>Draft + SubmitForDecision 同事务"| NORM
   NORM{"意图构造（parse-don't-validate）<br/>锚点：principal · WriteLaneKey · OperationKind ∈ {Place, Cancel, Replace, Close} · basis（可空）<br/>撤/改单必带 target: VenueRef 或 IdemKey（IdemKey 须是该作用域内某次尝试 SendBarrier 记为订单键的键）；平仓的 target: PositionRef（含 instrument）由核心从 basis 所指的持仓观察记录构造<br/>deadline 缺省按 (WriteLaneKey, OperationKind) 策略 → 运行期全局，填入版本"}
   NORM -->|"锚点构造不出"| MAL["会话：draft → Rejected(Malformed)，不 append；revise 使下一版构造不出 → Rejected(Malformed)，单据不变<br/>程序：EffectResponse{NotDrafted(Malformed)}，不重派"]
-  NORM -->|"构造成功（参数不在此判定）"| TK[("TicketAction 记录：Draft / SubmitForDecision<br/>每版带意图参数 schema 身份")]
+  NORM -->|"构造成功，下游会话（参数不在此判定）"| TK[("TicketAction 记录：Draft / SubmitForDecision<br/>每版带意图参数 schema 身份")]
+  NORM -->|"构造成功，程序（参数不在此判定）"| SCOPE{"仅程序来源：作用域判定<br/>意图 WriteLaneKey 所属 (来源, 作用域) 被发出成员 Applied 所记的执行事实输入选中？"}
+  SCOPE -->|"否"| NSO["EffectResponse{NotDrafted(ScopeNotObserved)}<br/>不开单、无 TicketAction"]
+  SCOPE -->|"是"| TK
   TK -.-> PV["单据 fold：parameter_validity<br/>按该来源会话有效声明的意图参数 schema 与目标种类：Valid / Invalid(违反项) / CapabilityNotEstablished（Unknown 或无会话，非终结）/ NotSupported / SchemaMismatch / TargetNotAccepted"]
   TK --> STS["STS 顺序固定链（D5.3）"]
   APPR -.->|"Decision 记录（绑定 current_version）"| STS
 ```
 
-读法：三种来源的记录同形（principal + 依据位置）；差别只在授权规则里"哪些 principal 的记录足以进 prepare"。参数合规对所有来源同一规则：不挡开单，送审时由输入约束步读取（D5.3）。
+读法：开单的记录对各来源同形（principal + 依据位置）；差别只在授权规则里"哪些 principal 的记录足以进 prepare"，以及程序来源在构造成功之后多一步作用域判定：意图的作用域不在发出成员 `Applied` 所记的执行事实输入之内即 `NotDrafted(ScopeNotObserved)`，不开单（§6.1 构造规则、发出成员）。这一步只读 UTA 自己的事实（发出成员的 `Applied` 与请求锚点），不看参数。参数合规对所有来源同一规则：不挡开单，送审时由输入约束步读取（D5.3）。
 
 核出：程序意图无编辑期这一点原文未写——已并入 §6.1（写处理器 `Draft` + `SubmitForDecision` 同事务）。
 

@@ -558,7 +558,7 @@
 
 **订阅需求下发**（§8.2 `route`、§8.5 配额）。已定（验收 §10.5 #47）。
 
-- 选中：核心→集成的 IDL 操作 `route(stream, subjects)`：每条流的需求全集（各订阅主体之并，加上非配额池作用域订单状态与成交流的 `All`），每个会话建立后与每个会话内新开的流 epoch 上各重发一次、需求一变再发，全集替换；`Routed` 在流上 append 路由结论记录，记这次生效的全集（`All` 或主体集）与 `refused` 及原因，不记增减，相邻两条之差即增减；上游拒绝的主体逐主体标出；`route` 是发出时流 epoch 的内层：集成上报 `Gap{origin: Source}` 之前先以 `Unavailable` 完成在途的 `route`，`Routed` 在流 epoch 更替之后才到达的，核心按 `Unavailable` 完成、不 append 路由结论记录，由新 epoch 本来要做的重发补上；配额在核心按需求计量。
+- 选中：核心→集成的 IDL 操作 `route(stream, subjects, generation)`：每条流的需求全集（各订阅主体之并，加上非配额池作用域订单状态与成交流的 `All`），每个会话建立后与每个会话内新开的流 epoch 上各重发一次、需求一变再发，全集替换；`Routed` 在流上 append 路由结论记录，记这次生效的全集（`All` 或主体集）与 `refused` 及原因，不记增减，相邻两条之差即增减；上游拒绝的主体逐主体标出；`route` 是它所指名的流 epoch 的内层，跨过流 epoch 更替只由集成按 `generation` 判定（见下文“`route` 跨过流 epoch 更替的判定者”）；配额在核心按需求计量。
 - Q 场景后果：Q13：集成从不收到超限主体；Q14/Q29：重连后与每个新流 epoch 上需求原样恢复，每个主体在该流 epoch 里的记录从何处起开始可见；一条记录自己说出此刻确认的供给，序号覆盖的计入只读它；被动取证与成交完整性不依赖某个消费方恰好订阅。
 - 不选：集成对声明的流一律全量推送（公共行情做不到，配额无从执行）；按订阅逐个下发（重复要求，集成要引用计数）；增减式下发（丢一次即分叉，重连要先对账）；路由结论记录只记增减（计入覆盖要从上一 epoch 或上一会话的记录累加）；路由结论记录带发出 epoch、由各读者按它过滤（覆盖、记录起点、`refused`、增减的每个读者都要各做一次同一判断，而一条已结束 epoch 的供给结论不说明任何在新 epoch 里仍成立的事）。
 - 证据：P4；§8.1（操作按意图定粒度）；域 F7、C5。
@@ -643,6 +643,13 @@
 - Q 场景后果：Q25：程序状态不被静默丢弃；Q17/Q21：崩溃重启不重复 `Reset`，不把 `Tail` 输入的 cursor 挪到更晚的流末。
 - 不选：`Load` 时比对、不接受就 `Reset`（`ProgramReset` 是可压缩的观察，没有执行事实结束旧 `Checkpoint` 的可交回性；`Reset` 之后、新宿主第一个 `Checkpoint` 之前崩溃，重启又交回它、再 `Reset` 一次）；保留装载时的 `Reset`、另写一条结束旧 `Checkpoint` 可交回性的控制记录（为程序自己就能避免的违例增加一种控制事实，而契约在 `Output` 上即可检查）。
 - 证据：§0.1“权威源头与生命周期”（机制即信号）；C14；§8.6 崩溃恢复。
+
+**`route` 跨过流 epoch 更替的判定者**（§8.2 `route`、§8.3 集成义务、§8.4 会话内开的新流 epoch）。已定（验收 §10.5 #47、#87）。
+
+- 选中：流 epoch 的边界归集成：上游连接是它的，`Gap{origin: Source}` 也由它上报。集成在会话内上报的每条 `Gap{origin: Source}` 带一个按流、按会话的 `generation`，由集成创建，会话开始为 0，每条加一。`route` 带核心在本会话为该流最后接受的 `generation`。所带值早于集成最近上报的调用，集成答 `Unavailable`，不改变供给；gap 之后，集成只在收到带新 `generation` 的 `route` 之后才推送。核心不另判：集成从不以 `Routed` 回答旧 `generation`，集成→核心按发送顺序处理，gap 之前送出的 `Routed` 都先于它到达。`read` 与 `backfill` 仍由核心按自己记下的发出 epoch 处置。
+- Q 场景后果：Q14/Q29：重连之后，一条 `Routed` 不会被记成新流 epoch 的供给确认，除非它回答的是新 epoch；新 epoch 恰好发一次 `route`；序号覆盖只从新 epoch 自己的路由结论记录起计入。
+- 不选：核心按发出 epoch 过滤迟到的 `Routed`、把它完成为 `Unavailable`（这次路由是否属于当前 epoch，这一件事有核心与集成两个判定者；集成已答 `Routed` 而核心不认，供给就在两边分叉）；集成上报 gap 之后，等核心回一条确认再处理 `route`（多一种 IDL 消息和一段等待状态；它要表达的“核心已接受这条 gap”，调用所带的 `generation` 本来就说出了）。
+- 证据：§0.1“权威源头与生命周期”（机制即信号）；§7.2 生命周期表；§8.3 流 epoch 结束之前先完成它的调用。
 
 ## 10.2 风险 / 敏感点 / 权衡点
 
@@ -730,7 +737,7 @@
 35. **受控停止能确认全部内层结束**（§7.2 受控停止）：某个目标 OS 上核心在停止时无法确认子进程已退出（例如服务管理器在超时后直接结束核心、不留确认时间），使受控停止在实践中总是失败 → 受控停止退化为崩溃路径，结束锚点与“停止后无孤儿”的验收在该 OS 上须重定，或改由 OS 的作业对象 / 进程组保证子进程随核心结束。
 36. **程序按钉住的内容装载**（§8.6 程序的活动集合与失败抑制）：程序作者的工作流要求改了程序值文件即在重启后生效，而每次 `load_program` 的代价不可接受 → 须另定按清单引用而不钉内容的装载，并说明重启装载的是哪份内容由谁确认。
 37. **推送按状态次序送达**（§2.2 `push_ordered`、§8.1 来源顺序）：声明 `push_ordered` 的某上游被观测到，同一会话 epoch、同一流 epoch 内同一身份的两条推送里后送达的反映了更早的状态（例如终态推送之后又送达未结或较小的累计成交量，且没有更大的 venue 序号或 `order_revision` 说明它是修正），或该流的推送实为多路上游 feed 的合并、由轮询合成，或上游推送通道重连而集成没有上报 `Gap{origin: Source}`（重连两侧的推送因此落在同一流 epoch 里）→ 该流的声明不成立，须撤回，该流上不带序号也不带 `order_revision` 的推送之间回到不可比；若范围内的 venue 普遍如此，`push_ordered` 不能作为来源顺序证据，依赖推送之间先后的检查项在这些 venue 上 fail-closed。
-38. **流上的调用在流 epoch 结束之前完成**（§8.3 流 epoch 结束之前先完成它的调用、§8.4 会话内开的新流 epoch）：本设计假设集成察觉供给中断的时刻不晚于它送出任何一条已落在新坐标上的回答，所以在上报 `Gap{origin: Source}` 之前以 `Unavailable` 完成在途的 `read`、`backfill`、`route`，就把每条回答放在了正确的流 epoch 里。某在范围内的上游被观测到：推送通道重连之后序号空间改变，而集成在察觉重连之前已把按新序号空间取得的 `Covered`（或按新连接确认的 `Routed`）送出，于是它落在旧 epoch 里、按旧 epoch 的序号计入（fixture 以重连后重置序号的上游复现）→ “先完成、再上报”不足以划清 epoch：须要求这类上游的回答随带上游给出的连接或序号空间身份，由集成据它判定回答属于哪个 epoch，核心的“按发出 epoch 处置”随之改为按回答自带的身份；做不到的，该流不声明 `joinable_venue_seq`。
+38. **流上的调用在流 epoch 结束之前完成**（§8.3 流 epoch 结束之前先完成它的调用、§8.4 会话内开的新流 epoch）：本设计假设集成察觉供给中断的时刻不晚于它送出任何一条已落在新坐标上的回答，所以在上报 `Gap{origin: Source}` 之前以 `Unavailable` 完成在途的 `read`、`backfill`、`route`，就把每条回答放在了正确的流 epoch 里。某在范围内的上游被观测到：推送通道重连之后序号空间改变，而集成在察觉重连之前已把按新序号空间取得的 `Covered`（或按新连接确认的 `Routed`）送出，于是它落在旧 epoch 里、按旧 epoch 的序号计入（fixture 以重连后重置序号的上游复现）→ “先完成、再上报”不足以划清 epoch：须要求这类上游的回答随带上游给出的连接或序号空间身份，由集成据它判定回答属于哪个 epoch（`route` 的 `generation` 随之由这一身份确定），核心对 `read`、`backfill` 的“按发出 epoch 处置”随之改为按回答自带的身份；做不到的，该流不声明 `joinable_venue_seq`。
 
 ## 10.5 验收标准
 
@@ -917,9 +924,9 @@
     - fixture 明确拒绝一个主体：该流上一条路由结论记录列出它与原因，选中它的订阅逐主体显示“来源拒绝”，该主体仍计入配额，本会话内核心不自动重发；
     - `route` 返回 `Unavailable`：不 append 路由结论记录，按 pacing 重发，需求未变时是同一全集，直到 `Routed`；重连后每条需求非空的流再恰收到一次全集；
     - 某流的 `route` 在途时需求再变：fixture 在上一次返回之前收不到下一次；之后收到的是新的全集，旧全集不在它之后生效；
-    - 以 `from` 订阅较早位置的订阅者，从路由结论记录看出每个主体从哪里起有记录；每条路由结论记录带这次生效的全集；握手以游标续接原 epoch 时，新会话的路由结论记录不改变已有主体的记录起点；会话内集成上报 `Gap{origin: Source}` 开新流 epoch 后核心为该流重发 `route`，新 epoch 有自己的路由结论记录；
+    - 以 `from` 订阅较早位置的订阅者，从路由结论记录看出每个主体从哪里起有记录；每条路由结论记录带这次生效的全集；握手以游标续接原 epoch 时，新会话的路由结论记录不改变已有主体的记录起点；会话内集成上报 `Gap{origin: Source}` 开新流 epoch 后，核心为该流重发 `route`，所带 `generation` 等于这条 gap 所带的值，新 epoch 有自己的路由结论记录；每个会话里各流的第一次 `route` 所带 `generation` 为 0，不沿用上一会话的值；
     - 健康把 `route` 的结果计在该逻辑流上；
-    - 集成一致性：只推送最近一次 `route` 给出且未拒绝的主体；续接原 epoch 时等待 `route` 期间的上游记录在 `route` 后补送、不丢，补不上则上报 `Gap{origin: Source}`；已路由主体的供给中断时（含上游推送通道重连）上报 `Gap{origin: Source}`，之后在收到核心为新 epoch 重发的 `route` 之前不推送该流。
+    - 集成一致性：只推送最近一次 `route` 给出且未拒绝的主体；续接原 epoch 时等待 `route` 期间的上游记录在 `route` 后补送、不丢，补不上则上报 `Gap{origin: Source}`；已路由主体的供给中断时（含上游推送通道重连）上报 `Gap{origin: Source}`，会话内的每条带 `generation`，从 0 起、每条加一；之后在收到带这个新 `generation` 的 `route` 之前不推送该流；带旧 `generation` 的 `route` 得 `Unavailable`，供给与推送都不变。
 48. **多流订阅与执行事实的新 lane**（§8.5 订阅组）：（对应 Q13/Q15/Q29）
     - 一个观察流订阅选中两个来源的三条流：一条来源未登记、一条超配额、一条可接纳：返回 `Subscription`，逐项结果依次为拒绝、`QuotaExceeded`、活；三项都不可接纳时返回 `Rejected{items}`、不建订阅；
     - 投递在每条流内按位置有序；对不同流不断言投递先后；cursor 每条流一个位置，断连重连后每条流各自从已确认位置续；
@@ -1090,11 +1097,12 @@
     - fixture 程序在某次 `Output` 里交出 `state_version` 不在其接受集合内的 `checkpoint`：该 `Output` 的 `EffectRequest`、派生记录、`checkpoint` 与 cursor 都不持久化；同一事务 `ProgramHalted{Trap}` + `ProgramFailed`，之后宿主被终止；此前的 `Checkpoint` 与 cursor 不变；
     - 任意次重启、失败抑制后的重新装载与沿用的替换之后，`Load` 交回的 `Checkpoint` 的 `state_version` 都在当时成员的接受集合内，没有 `ProgramReset` 出现在替换的 `Applied` 事务之外；
     - 替换时新程序不接受旧版本：`ProgramReset{Replace}` 在该 `Applied` 事务里；该事务提交之后、新宿主第一个 `Checkpoint` 之前反复注入崩溃：重启后没有第二条 `ProgramReset`、程序流没有第二个新 epoch，`Tail` 输入的 cursor 仍是该 `Applied` 所定的位置。
-87. **流上的调用跨过会话内的流 epoch 更替**（§8.2 `read`、`backfill`、`route` 的“错误”，§8.1 来源顺序第 1 条与 `dispatch_end`，§8.3 流 epoch 结束之前先完成它的调用，§8.4 会话内开的新流 epoch 与计入）：fixture 集成在一个已建立的会话里，某条声明 `joinable_venue_seq` 的订单状态流处于 epoch e1，e1 的回填任务有一个窗口在途、一次一次性读在途、一次 `route`（`All`）在途，另有一笔 `submit` 在途；fixture 上游推送通道断开重连：（对应 Q1/Q11/Q14/Q15）
-    - 合格集成：fixture 观测到三次读侧调用（`read`、`backfill`、`route`）的 `Unavailable` 都先于 `Gap{origin: Source}` 送出；`read` 与 `backfill` 各一条 `Gap{origin: Channel}` 落在 e1 里，`route` 没有记录；每次调用恰计一次失败；核心为 e2 恰发一次 `route`；
-    - fixture 集成违约（先送出 `Gap{origin: Source}` 开 e2，再对三次调用分别返回 `Answered`、`Covered`、`Routed{refused: ∅}`）：`read` 与 `backfill` 各在 e2 上恰一条 `Gap{origin: Channel}`，没有它们的 item 记录、结果记录与读结论记录；`route` 没有路由结论记录、没有 `Gap{origin: Channel}`，核心随后为 e2 恰发一次 `route`；e2 上在 e2 自己的路由结论记录之前到达的推送不计入序号覆盖；e1 回填任务的进度不再变化，e2 的回填进度与 `covered_to` 里没有这次 `Covered` 的内容；每次调用恰计一次失败；该读此前得 `Pending{from}` 的发起方以只投递项从 `from` 订阅，越过 `Gap{origin: Source}` 恰收到 e2 上的那条 `Gap{origin: Channel}`；
-    - `submit` 的回执在 e2 开始之后到达：回执观察记录照常 append 在 e2 上并进 `Evidence`、带 e1 里的 `dispatch_end`，结果照常确立；它带的 venue 序号不与 e2 的推送定序、不计入序号覆盖：e2 上一条带序号的推送与它内容不同时，流不声明 `order_revision` 的，`orders` 并列二者并标出顺序未确立（声明 `query_not_lagging` 时回执也只取代它 `dispatch_end` 及之前 append 的记录，不取代 e2 上的这条推送）；取证调用（`list_open`）的回答跨过更替时同样如此；
-    - 集成一致性：以上违约顺序被一致性测试判为不合格。
+87. **流上的调用跨过会话内的流 epoch 更替**（§8.2 `read`、`backfill` 的“错误”与 `route` 的 `generation`，§8.1 来源顺序第 1 条与 `dispatch_end`，§8.3 流 epoch 结束之前先完成它的调用、按 `generation` 划分流 epoch，§8.4 会话内开的新流 epoch 与计入）：fixture 集成在一个已建立的会话里，某条声明 `joinable_venue_seq` 的订单状态流处于 epoch e1（`generation` g），e1 的回填任务有一个窗口在途、一次一次性读在途、一次 `route`（`All`，带 g）在途，另有一笔 `submit` 在途；fixture 上游推送通道断开重连：（对应 Q1/Q11/Q14/Q15）
+    - 合格集成：fixture 观测到三次读侧调用（`read`、`backfill`、`route`）的 `Unavailable` 都先于 `Gap{origin: Source}` 送出，这条 gap 带 g + 1；`read` 与 `backfill` 各一条 `Gap{origin: Channel}` 落在 e1 里，`route` 没有记录；每次调用恰计一次失败；核心为 e2 恰发一次 `route`，带 g + 1；
+    - 跨越的 `route`：同一场景里，该流的需求在集成送出 gap 之后、核心接受它之前变了，核心发出一次带 g 的 `route`（此前的 `route` 已返回）：集成答 `Unavailable`，供给不变，fixture 上游没有收到新的订阅请求，e2 在带 g + 1 的 `route` 之前没有推送；核心不 append 路由结论记录，这次计一次失败；随后核心恰发一次带 g + 1、全集为最新需求的 `route`，它的 `Routed` 在 e2 上 append 路由结论记录，e2 的推送在它之后才计入序号覆盖；
+    - fixture 集成违约（先送出 `Gap{origin: Source}` 开 e2，再对 `read`、`backfill` 分别返回 `Answered`、`Covered`）：二者各在 e2 上恰一条 `Gap{origin: Channel}`，没有它们的 item 记录、结果记录与读结论记录；e1 回填任务的进度不再变化，e2 的回填进度与 `covered_to` 里没有这次 `Covered` 的内容；每次调用恰计一次失败；该读此前得 `Pending{from}` 的发起方以只投递项从 `from` 订阅，越过 `Gap{origin: Source}` 恰收到 e2 上的那条 `Gap{origin: Channel}`；
+    - `submit` 的回执在 e2 开始之后到达，含订单状态与一笔成交：两条观察记录照常分别 append 在该作用域的订单状态流与成交流上并进 `Evidence`，`provenance` 相同，各带自己那条流在调用发出时的 `dispatch_end`；订单状态记录的 `dispatch_end` 在 e1 里，结果照常确立；它带的 venue 序号不与 e2 的推送定序、不计入序号覆盖：e2 上一条带序号的推送与它内容不同时，流不声明 `order_revision` 的，`orders` 并列二者并标出顺序未确立（声明 `query_not_lagging` 时回执也只取代它 `dispatch_end` 及之前 append 的记录，不取代 e2 上的这条推送）；成交流没有更替，成交记录的序号照常作来源顺序证据；取证调用（`list_open`）的回答跨过更替时同样如此；
+    - 集成一致性：以上 `read`、`backfill` 的违约顺序被一致性测试判为不合格；集成对带旧 `generation` 的 `route` 答 `Routed`、或在收到带新 `generation` 的 `route` 之前推送 e2，被一致性测试判为不合格（核心不另判，§8.2 `route`）。
 
 ## 10.6 明确不做
 
