@@ -384,13 +384,13 @@
 
 **环境一：无子系统（装载期拒绝）。**
 
-1. 程序含 `DerivationNode::Pooled{input, window}`（§4.5、§2.5）。子系统未安装 → 该程序在**装载期被拒绝**（§8.7），错误指出依赖未安装子系统；其余不含 `Pooled` 的程序不受影响（核心层最小验收，§8.7）。
-   - 恢复者：装载器（输出类型 fold，§2.5）。
+1. 程序含 `DerivationNode::Pooled{input, window}`（§4.5、§2.5）。结构校验不看子系统，`load_program` 照常得 `Applied`；本实例没有子系统 → 声明校验不成立（§8.6 装载期校验、§8.7 失败语义），同一事务 `ProgramHalted{LoadRejected(reason)}` + `ProgramFailed`，错误指出依赖本实例没有的子系统；其余不含 `Pooled` 的程序不受影响（核心层最小验收，§8.7）。
+   - 恢复者：程序宿主元素的声明校验（§8.6）；该程序停在失败抑制，直到以位置引用这条 `ProgramHalted` 的 `load_program` `Applied` 重新装载。
    - 对外可见：含 `Pooled` 程序被拒，其余程序照常装载运行。
 
 **环境二：有子系统且 op 崩溃。**
 
-2. 四条前置条件由输出类型 fold 在装载期判定（定长 / 位置线性 / 无指针 / 可容忍 ring 回收，§8.7）；满足则 `Pooled` 输入交子系统物化为段视图（一次洗入，§8.7；实现见 hpc-derivation/design.md §1.4–§1.5、§5）。
+2. 四条前置条件由声明校验以输出类型 fold 判定（定长 / 位置线性 / 无指针 / 可容忍 ring 回收，§8.7）；满足则 `Pooled` 输入交子系统物化为段视图（一次洗入，§8.7；实现见 hpc-derivation/design.md §1.4–§1.5、§5）。
    - 行动者：子系统洗入器；段身份由子系统契约表标定（hpc-derivation/design.md §5.2）。
 3. 原生 op 借用只读段计算，输出是普通节点值；下游节点像读任何节点值一样读它，经 `outputs` 导出时才落在程序流上（§8.7、§4.3）。
    - op 进程 panic/OOM → 只死计算进程，核心记失败观察（观察 J 派生失败记录），**不改名**为 `Gap{origin: Source}` 或 `NoResponse`（§8.7；hpc-derivation/design.md §5.3/§6.3）。

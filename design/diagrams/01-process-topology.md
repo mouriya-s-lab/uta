@@ -176,7 +176,7 @@ flowchart LR
     STS["STS 规则链（含授权步否决时的安全事件）"]
     IOE["IO 壳：SendBarrier（写操作 · 键 · 键角色）/ VenueAccepted / VenueRejected / NotSent / Undetermined / Expired / Abandoned /<br/>ResolutionEvidence / ReconciliationReopened{SessionRestored} / CapabilityObserved / 取证 Gap{Channel}"]
     ATTR["效应侧归因处理器：ResolutionEvidence{Attributed}"]
-    CTL["控制面：控制记录（bypass_lane 随其 lane 流，其余都在控制流；解除 Halted 的 Applied 引用 IntegrationHalted；restart_integration 的 Applied 带文件 hash 与 instance_id；load_program 的 Applied 钉内容 hash、以值记下输出契约、记下沿用的 Checkpoint，解除失败抑制时引用 ProgramHalted）· 越权安全事件 · ReconciliationReopened{Manual}"]
+    CTL["控制面：控制记录（bypass_lane 随其 lane 流，其余都在控制流；解除 Halted 的 Applied 引用 IntegrationHalted；restart_integration 的 Applied 带文件 hash 与 instance_id；load_program 的 Applied 钉内容 hash、以值记下执行事实输入、引用的原生 op 名集合与输出契约、记下沿用的 Checkpoint，解除失败抑制时引用 ProgramHalted；install_native_op 的 Applied 以值记下 op 名、签名与 artifact 内容 hash，remove_native_op 的记下 op 名）· 越权安全事件 · ReconciliationReopened{Manual}"]
     SESS["会话入口：未完成握手请求的安全事件"]
     OUT["出站请求处理器：EffectRequest · EffectResponse"]
     SUBEL["持久订阅元素"]
@@ -295,7 +295,7 @@ flowchart TB
     CKREF0["程序订阅的项在本成员内的部分：开始成员的 Applied 同事务建立或沿用 · 替换的 Applied 里，新程序不再声明的输入：项与 cursor 都结束；共有输入里主体集或用途变了的项，以及被拒的项（从不沿用）：项结束、同事务建立新项并重新接纳，cursor 接着走；不沿用时全部重建"]
     CKREF["Checkpoint 的保留引用：进入活动集合后第一个 Checkpoint 登记 · unload_program 或不沿用旧状态的替换 Applied 解除；Unload 与失败抑制不解除"]
   end
-  PSUB["程序订阅（每个活动程序 id 一个；程序的 cursor 只在这里）：让 id 进入活动集合的 Applied 同事务建立（持久订阅元素）· unload_program 的 Applied 结束；替换保留它，principal 换成新成员的装载 principal；共有输入的 cursor 原样沿用，项只在主体集与用途也相同、且不是被拒的项时沿用；未确认的投递缺口随 cursor，不随项；提交的 Advance 是它的确认，只确认交出的投递事件"]
+  PSUB["程序订阅（每个活动程序 id 一个；程序的 cursor 只在这里）：让 id 进入活动集合的 Applied 同事务建立（持久订阅元素）· unload_program 的 Applied 结束；替换保留它，principal 换成新成员的装载 principal；共有输入的 cursor 原样沿用，项只在主体集与用途也相同、且不是被拒的项时沿用；未确认的投递缺口随 cursor，不随项；提交的 Advance 是它的确认，只确认交出的投递事件；Origin 输入的 cursor 建为 Start{from}，前导在第一次提交的 Advance 时确认、cursor 成为 At，在它之前崩溃则前导重交"]
   PSUB -.->|"跨替换延续，其项在各成员里建立、沿用或重建"| CKREF0
   MEMBER -.->|"每个实例一个宿主执行（未被失败抑制，且按“等待的先后”不等待、程序值的内容 hash 相符、声明校验成立时）"| HEXEC
   EPOCH["流 epoch（集成来源的每条逻辑流，不嵌在实例或会话里）：该流开 epoch 的 Gap{Source} 开始（握手时集成会话 append，或会话内集成上报）· 下一条开 epoch 的 Gap{Source} 结束（backfill_incomplete 是 epoch 内的记录，不结束也不开 epoch）；边界由集成确认，身份由核心分配；握手以游标续接时跨会话、跨实例延续"]

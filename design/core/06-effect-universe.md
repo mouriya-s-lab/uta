@@ -11,6 +11,7 @@
 ```rust
 enum DecisionStep { On(Pattern, Box<DecisionStep>), Emit(EffectRequest), Require(Guard, OnFail), Expire(Deadline, Box<DecisionStep>) }
 Emit(EffectRequest { effect_kind: EffectKind, payload: Bytes, basis: Basis })
+// 解释②读的执行事实输入由 Program.facts 的 FactDecl { source, scope, start } 声明（§4.3）
 ```
 
 ### 规则
@@ -50,7 +51,7 @@ Emit(EffectRequest { effect_kind: EffectKind, payload: Bytes, basis: Basis })
 - `EffectResponse` 与产生它的读结论记录 / `Gap` / `Draft` 同一事务 append；`NotCalled` 与 `NotDrafted` 没有伴随记录，`EffectResponse` 单独 append。
 - **落点**：`EffectRequest` 与它的 `EffectResponse`（全部结果，含 `NotCalled` 与 `NotDrafted`）都在该程序的**请求流**上：按程序 id 各成一条的执行事实流。它们是 UTA 关于这个程序自己生命周期的事实，不属任何来源、lane 或作用域，所以没有有效 lane 或未登记来源的请求也有落点（§8.5 执行事实流）。
 - **发出成员**：每条 `EffectRequest` 记下发出它的程序成员 `member`，即开始该成员的 `load_program` 或替换 `Applied` 在控制流上的位置。核心在 `Advance` 的输出事务里写下它：哪个成员在运行是核心自己的控制事实（§8.6）。
-  - 该 `Applied` 以值记下成员的事实：装载 principal（该控制动作的 principal）、声明的执行事实输入集合、输出契约、钉住的内容 hash 与接受的 `state_version` 集合（§8.5 `load_program`）。
+  - 该 `Applied` 以值记下成员的事实：装载 principal（该控制动作的 principal）、`facts` 声明的执行事实输入集合、值树引用的原生 op 名集合、输出契约、钉住的内容 hash 与接受的 `state_version` 集合（§8.5 `load_program`）。
   - 写处理器与重启重派只读发出成员的这些事实，不读当前成员的，也不重读程序值文件。请求可以在发出成员结束之后才被处理（§8.6 卸载与替换）；`Applied` 是控制流上的执行事实，成员结束、程序值文件被改或删去之后照样可读。
   - 不选：**按处理时的当前成员判定**：替换或卸载之后分派的请求会以另一成员的 principal 开单、按另一份声明判定作用域，卸载之后则无成员可读；**按请求与 `Applied` 的位置先后推断成员**：请求流与控制流之间没有可比的序（§2.3）；**结束成员之前处理完它的全部请求**：`Unhandled` 请求永远没有响应，在途读没有上界。
 - 理由：观察记录可压缩（§2.4），`EffectRequest` 永存（§7.5）；“是否已处理”必须能从与请求同寿命的事实重建。
@@ -58,7 +59,7 @@ Emit(EffectRequest { effect_kind: EffectKind, payload: Bytes, basis: Basis })
 - `Unhandled` 请求没有 `EffectResponse`，也不重派。
 - **程序看得到自己的请求的结果** [设计]：程序只经它声明的输入得知结果，与其他输入同一套 cursor（§4.2、§8.6）：
   - 它的请求流是隐含的输入：同一条流上先有它自己的 `EffectRequest`（位置由此得知；程序按自己放进载荷的内容认出它们），后有指回这些位置的 `EffectResponse`，同流有序；
-  - 要看写请求之后的单据与尝试，程序在值树里声明执行事实输入 `(来源, WriteScope?)`，与执行事实订阅同一个 selector（§8.5 订阅组）：该作用域各 lane 流上的单据记录（含 `Close` 的结局；放行时 `Close(Prepared(p))` 给出尝试位置 `p`）与 `p` 这次尝试的记录（`SendBarrier`、回执、`NotSent`、`Undetermined`、`ResolutionEvidence`、`ReconciliationReopened`、`Expired`、`Abandoned`，§6.5）按位置投给它；
+  - 要看写请求之后的单据与尝试，程序在程序值的 `facts` 里声明执行事实输入 `FactDecl { source, scope, start }`（§4.3）：`(source, scope)` 与执行事实订阅同一个 selector `(来源, WriteScope?)`（§8.5 订阅组），`start` 是它的起点（§8.6 程序的输入）。该作用域各 lane 流上的单据记录（含 `Close` 的结局；放行时 `Close(Prepared(p))` 给出尝试位置 `p`）与 `p` 这次尝试的记录（`SendBarrier`、回执、`NotSent`、`Undetermined`、`ResolutionEvidence`、`ReconciliationReopened`、`Expired`、`Abandoned`，§6.5）按位置投给它；
   - 解释②在程序内按自己的锚点（`Drafted(ticket_id)` 所指单据、`Close(Prepared(p))` 所给的 `p`）挑出属于自己的事实；宿主与投递不做关联，只按位置搬运。请求流与 lane 流之间不定投递顺序（§8.5）：`Draft` 与 `Drafted` 同事务提交，程序可能先看到单据记录、后看到指向它的 `Drafted`，解释②按 `ticket_id` 两种次序都能匹配。解释①的节点不消费这些事实。
   - **构造规则**：写请求意图的 `WriteLaneKey` 所属的 `(来源, 作用域)` 不被发出成员的 `Applied` 所记的任何执行事实输入选中时，写处理器不开单，记 `NotDrafted(ScopeNotObserved)`（在 `Malformed` 判定之后）。它只由 UTA 自己的事实（发出成员的 `Applied` 与请求锚点）判定，所以程序不会写进一个自己看不到结果的作用域。
   - 理由：未调用与 `NotDrafted` 都不产生观察记录，程序只有经响应才看得到它们，而伪造观察记录去承载它们会把效应侧结论放进观察宇宙；程序若要组合多次写（例如先撤单、确认后再下单，§6.2 改单），它自己的尝试有没有结局只能从这些事实得知。撤单的回执或 `Found` 只说明撤单请求到达，不说明目标订单已结束：目标订单的状态要从订单状态观察读（§6.6 撤单的取证）。

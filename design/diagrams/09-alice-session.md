@@ -61,7 +61,7 @@ flowchart LR
     S2["read(targets = (来源, 流, request_schema 身份, request, range?), deadline)"]
     S3["read_model(kind, as_of?)"]
     S4["draft / revise / submit_for_decision / decide / send_back / withdraw / transfer"]
-    S5["load_program(manifest_ref, cold_start?) · unload_program · reload_config · rotate_credential · restart_integration · request_snapshot · advance_retention · rewind_cursor · bypass_lane"]
+    S5["load_program(manifest_ref, cold_start?) · unload_program · install_native_op · remove_native_op · reload_config · rotate_credential · restart_integration · request_snapshot · advance_retention · rewind_cursor · bypass_lane"]
     S6["abandon(attempt: AttemptRef, note)"]
     S6b["retry_reconciliation(attempt: AttemptRef)"]
     S7["health()"]
@@ -132,6 +132,7 @@ flowchart LR
     A2["rotate_credential(integration)"]
     A3["restart_integration(id)"]
     A4["load_program / unload_program"]
+    A4n["install_native_op(artifact) / remove_native_op(name)"]
     A5["request_snapshot"]
     A6["advance_retention(to)"]
     A7["rewind_cursor(subscription, to)"]
@@ -143,9 +144,10 @@ flowchart LR
   A2 --> F2["凭据链 文件 → 核心 → 集成；该集成新 session_seq<br/>各流强制新 epoch Gap{Source, credential_rotated}"]
   A3 --> F3["终止并重新拉起集成进程；新 session_seq；各流按游标证明决定续接或新 epoch"]
   A4 --> F4["宿主 Load / Unload（D4.2）<br/>load_program，id 不在活动集合里：新成员每条程序流 Gap{Source, start}，不是 Reset<br/>load_program，id 已在活动集合里：沿用的替换（非 cold_start、输出契约相同、无旧 Checkpoint 或接受其 state_version）不写程序流；不沿用的替换：ProgramReset{cold_start 为 Operator，否则 Replace} + 新成员每条程序流 Gap{Source, program_upgrade}<br/>新成员不声明的流不写记录；unload_program 不写程序流，epoch 都不结束"]
+  A4n --> F4n["install：读 artifact，Applied 以值记下 op 名、声明的签名、artifact 内容 hash；同名已安装 → Rejected(AlreadyInstalled)<br/>remove：活动成员的 Applied 所记原生 op 名集合含它 → Rejected(InUse)；未安装 → Rejected(NotInstalled)<br/>已安装 op 集合 = 这些 Applied 的 fold，声明校验读它（§8.7）；不看本实例有没有子系统"]
   A5 --> F5["写快照（仅加速重建，不改 append-only）"]
   A6 --> F6["D8.2"]
-  A7 --> F7["cursor 退回；已确认区间重投（显式控制动作，不是恢复路径）"]
+  A7 --> F7["消费方订阅的 cursor 退回为 At{to}（to 算作已确认）；from 高于新 cursor 的未确认投递缺口同一次写删除；此后重投，重新跳过时再记缺口，被删的段按逐段规则重新成为 compacted 缺口（显式控制动作，不是恢复路径）"]
   A8 --> F8["控制记录 Applied（自觉违反，不是 Decision）：记单据当时的 current_version 与阻塞头位置集；单据不在 AwaitingDecision → Rejected<br/>lane 步只对这些阻塞头不等待，其余各步照常 → Prepared；阻塞头成集合（D5.4）"]
 ```
 

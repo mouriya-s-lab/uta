@@ -14,7 +14,7 @@ sequenceDiagram
   participant J as 观察 Journal
   participant EJ as 执行 Journal
   participant H as 处理器注册表
-  participant D as 派生 DAG
+  participant D as 程序宿主元素
   participant T as 单据 fold
   participant S as 投递调度
   V-->>I: 上游事件（成交 / 报价 / 余额）；集成在此消费上游
@@ -29,7 +29,7 @@ sequenceDiagram
     opt attribution: FromAttempt(r)（集成依上游关联证据填写；核心不凭键字节归因），且 r 处于 Undetermined、结果未确立（已 Abandoned 的同样可补）
       H->>EJ: 同事务 append ResolutionEvidence{r, Attributed, Found{observation: 该记录, evidence: 载荷 + 原始负载}}
     end
-    J->>D: 受影响节点增量重算（cutoff）；派生记录写回观察 J
+    J->>D: 记录落在某程序订阅的 cursor 之后：程序宿主元素调度 Advance（D4.1）
     J->>T: 引用该流的单据重算 basis_validity / alignment
     J->>S: 按订阅表投递给已确认 cursor 在该记录之前的订阅者（记录位于 cursor 之后）
   end
@@ -146,15 +146,15 @@ sequenceDiagram
   alt 执行事实 / 控制：mode ≠ ordered，或执行事实的来源是 Program(_)（只收集成来源），或执行事实的 WriteScope.key 不在该来源任何声明版本里（不看采纳集合）
     SUB-->>C: 拒绝
   else 观察流：逐项判定（各项独立，按项在请求里的次序）
-    Note over SUB: 每项（集成来源）：来源不在采纳集合且从未有声明 → 拒绝；在采纳集合而从未有声明 → 待接纳；供给项：来源不在采纳集合 → 拒绝（来源未登记），流不在最近声明 / 配额池里不带主体集 → 拒绝，放不下 → QuotaExceeded（集成不收到超限主体）；只投递项：流在该来源任何一个声明版本里出现过 → 接纳（不看采纳集合、不要求最近声明、不要求会话；不进需求、不占配额），从未声明过 → 拒绝。每项（程序来源 Program(p)，依据是 p 历代开始成员的 Applied 所记输出契约）：p 没有这种 Applied → 拒绝（来源未登记）；供给项 → 拒绝（ProgramStreamNotRouted，程序流不经 route）；带主体集 → 拒绝（程序流的记录不带 subject）；整条流的只投递项：流在任一条这种 Applied 的输出契约里出现过 → 接纳且为活（不要求 p 此刻在活动集合里），从未出现过 → 拒绝。from < 保留边界 → 该项 BeyondRetention
+    Note over SUB: 每项（集成来源）：来源不在采纳集合且从未有声明 → 拒绝；在采纳集合而从未有声明 → 待接纳；供给项：来源不在采纳集合 → 拒绝（来源未登记），流不在最近声明 / 配额池里不带主体集 → 拒绝，放不下 → QuotaExceeded（集成不收到超限主体）；只投递项：流在该来源任何一个声明版本里出现过 → 接纳（不看采纳集合、不要求最近声明、不要求会话；不进需求、不占配额），从未声明过 → 拒绝。每项（程序来源 Program(p)，依据是 p 历代开始成员的 Applied 所记输出契约）：p 没有这种 Applied → 拒绝（来源未登记）；供给项 → 拒绝（ProgramStreamNotRouted，程序流不经 route）；带主体集 → 拒绝（程序流的记录不带 subject）；整条流的只投递项：流在任一条这种 Applied 的输出契约里出现过 → 接纳且为活（不要求 p 此刻在活动集合里），从未出现过 → 拒绝。from < 保留边界 → 该项 BeyondRetention（只在建立时对 from 判定）
     alt 没有任何一项被接纳或待接纳
       SUB-->>C: Rejected{items}
     else 至少一项被接纳或待接纳
-      SUB->>SUB: 写订阅表，cursor 每条选中流一个位置 = from（缺省 = 当前流末，不补历史）；订阅归属 principal，持久
+      SUB->>SUB: 写订阅表，每条选中流一个 cursor：from = 保留边界 → Start{from}（先交前导）；from 高于边界 → At（从 from 起投递）；缺省 → At{当前流末}（不补历史）；订阅归属 principal，持久
       SUB-->>C: Subscription{id, items}（逐项结果；整体状态由逐项派生）
     end
   else 执行事实 / 控制：接受
-    SUB->>SUB: 写订阅表；执行事实的 selector 是成员规则：此后出现的 lane 流自动加入，从其首条记录起；控制订阅只有控制流一条；from 可为起点
+    SUB->>SUB: 写订阅表；执行事实的 selector 是成员规则：此后出现的 lane 流自动加入，cursor 为 Start{其首条记录}；控制订阅只有控制流一条；from 可为起点（cursor 为 Start{第一条记录}，执行事实不压缩，没有前导）
     SUB-->>C: Subscription{id, items}
   end
   opt 某流的需求（各供给项主体之并 ∪ 核心自己的需求；只投递项与挂起项不计）变了，且该集成会话已建立
@@ -165,6 +165,11 @@ sequenceDiagram
     else Unavailable（上游没有完整结论；或 generation 早于集成为该流最近上报的：集成先已上报 Gap{Source}，这次调用问的是已结束的 epoch，供给不变）
       I-->>SUB: Unavailable（不 append；该流的 route 义务未了，本会话内按 pacing 再发，带其时的目标全集；会话结束时随会话丢弃；同一流至多一次 route 在途；核心不另判 epoch 更替）
     end
+  end
+  opt cursor 为 Start{from}（从边界订阅）：每次挂接先交前导
+    DL->>C: 按位置交出该流此刻在 from 之下留下的记录（健康流各键基线；程序流各流 epoch 基线与原位置的开 epoch Gap{Source}），from 之下被删的段不是损失、不记缺口；再交 from 及以上被删段的 Gap{Delivery, compacted} 与 from 起的记录
+    C->>SUB: ack(subscription, cursor = c)
+    SUB->>SUB: c 不低于前导里每一条 → cursor 成为 At{c 与 from 前一位置中较大者}；c 落在前导中间 → 仍为 Start{from}，下次挂接前导整段重交（按 LogPosition 去重）
   end
   loop 记录到达
     J->>DL: 新记录 pos（观察流订阅）
@@ -185,7 +190,7 @@ sequenceDiagram
     C--xDL: 连接断
     Note over SUB: 订阅 owner 是核心，订阅、cursor 与未确认的投递缺口保留
     C->>SUB: 重连：同一 principal 重新 handshake → 自动挂接其持久订阅（不需再 subscribe）
-    DL->>C: 先交出未确认的投递缺口，再从 cursor 之后重投；未确认区间可能重复，按 LogPosition 去重
+    DL->>C: 先交出未确认的投递缺口，再从 cursor 之后重投（cursor 仍为 Start{from} 的，前导整段重交）；未确认区间可能重复，按 LogPosition 去重
   end
   opt 重新握手（新会话建立）使某流进入配额池
     SUB->>SUB: 该流上整条流的供给项挂起（WholeStreamInPool），核心自己的 All 撤去；离开所有配额池时恢复
@@ -201,12 +206,12 @@ sequenceDiagram
 
 读法：
 
-- 确认语义唯一：`ack` = 已处理。已投未确认的记录在崩溃后会再见一次；已确认的永不重投（退回只经控制面 `rewind_cursor`）。
-- 程序是同一种订阅者：它经自己的程序订阅消费，cursor 在订阅表里，由提交的 `Advance` 确认，与 `Checkpoint` 同事务持久化（D4.1），所以程序永远不会看到已折入状态的记录；消费方会话不挂接、不确认程序订阅（§8.6 程序的输入）。
+- 确认语义唯一：`ack` = 已处理。已投未确认的记录在崩溃后会再见一次；已确认的永不重投（退回只经控制面 `rewind_cursor`，退回的 cursor 是 `At{to}`）。cursor 是 `Start{from} | At{pos}`：从保留边界（或执行事实、控制流的起点）订阅的 cursor 为 `Start{from}`，每次挂接先交前导，直到第一次覆盖整段前导的确认才成为 `At`，所以确认之前断连或崩溃不会丢掉边界之下安静键的当前值；前导之下被删的段不是损失（§4.2 cursor 与确认）。
+- 程序是同一种订阅者：它经自己的程序订阅消费，cursor 在订阅表里，由提交的 `Advance` 确认（第一次提交即使 `Start` 成为 `At`），与 `Checkpoint` 同事务持久化（D4.1），所以程序永远不会看到已折入状态的记录；消费方会话不挂接、不确认程序订阅（§8.6 程序的输入）。
 - 需求按流的全集下发：多个订阅对同一主体只路由一次，配额在核心计量。序号覆盖只看记录：推送只在该流 epoch 上同会话、确认供给 `All` 且 `refused` 为空的路由结论记录之后才计入；之后一条不确认这一点的路由结论记录使计入停住，直到下一条确认的记录（§8.4）。订阅表与核心自己的需求都不是它的输入。
 - `route` 跨过会话内流 epoch 更替只有一个判定者，就是集成。`generation` 由集成创建，随 `Gap{Source}` 送来；核心只带上它最后接受的那个，不另按发出 epoch 过滤 `Routed`。集成→核心按发送顺序处理，所以更替之前送出的 `Routed` 先于 gap 到达，落在它确认的那个 epoch 里。集成在 gap 之前以 `Unavailable` 完成已收到的 `route`，这个 `Unavailable` 先于 gap 到达，核心在接受 gap 之前按 pacing 再发的仍带旧 `generation`，同样得 `Unavailable`，无害；更替之后才到集成的旧 `generation` 调用得 `Unavailable`、供给不变。每条流至多一项未了的 `route` 义务，嵌在集成会话里：按 pacing 的重试与接受 gap 触发的重发是同一项，gap 并入它而不另起，第一次 `Routed` 了结它，所以新 epoch 的第一条路由结论记录来自一次带新 `generation` 的 `route`；会话结束时未了的义务丢弃，不带进下一个会话（§8.2 `route`“谁调、何时调”）。
 - 投递按主体：数据记录只看信封上的 `subject`，不论来自推送、回填、一次性读还是回执；控制记录投给该流每一项。只投递项不改变需求与配额，一次性读得 `Pending{from, instance_id}` 后从 `from` 订阅一个只投递项，即收到那条结论或 gap（同一核心实例内）。
-- 投递缺口是订阅的状态，不是流上的记录：投递调度要跳过时先请持久订阅写进订阅表，写下之后才跳过；每次投递与重新挂接都先交出它；确认不低于 `to` 的 cursor 时与 cursor 推进同一次写删除。它属于（订阅，流）的 cursor，不属于某一项：只在 cursor 确认它、该流离开订阅（取消订阅，或该流的项与 cursor 一起结束）或 `Reset` 重建该流的 cursor 时删除，项的挂起、重建或重新接纳失败都不动它。`compacted` 只覆盖压缩删去的位置，每一段连续被删的位置一项；健康流与程序流在各段之间留下的基线照常按位置投递，原样不改（§2.4）。`subscriptions` 读模型逐项列出消费方订阅未确认的缺口；其他订阅者看不到它。程序订阅的缺口在 `Advance` 的投递事件里交给程序，由覆盖它的 `Advance` 提交删除（§8.6）。
+- 投递缺口是订阅的状态，不是流上的记录：投递调度要跳过时先请持久订阅写进订阅表，写下之后才跳过；每次投递与重新挂接都先交出它；确认不低于 `to` 的 cursor 时与 cursor 推进同一次写删除。它属于（订阅，流）的 cursor，不属于某一项：只在 cursor 确认它、该流离开订阅（取消订阅，或该流的项与 cursor 一起结束）、`Reset` 重建该流的 cursor，或 `rewind_cursor` 把 cursor 退到低于它的 `from` 时删除（`At{to}` 把 `to` 算作已确认；此后重新跳过时照常再记），项的挂起、重建或重新接纳失败都不动它。`compacted` 只覆盖压缩删去的位置，每一段连续被删的位置一项；健康流与程序流在各段之间留下的基线照常按位置投递，原样不改（§2.4）。`subscriptions` 读模型在该流的各项下列出消费方订阅未确认的缺口（按（订阅，流）记，不按项存）；其他订阅者看不到它。程序订阅的缺口在 `Advance` 的投递事件里交给程序，由覆盖它的 `Advance` 提交删除（§8.6）。
 - 执行事实订阅走同一套 cursor 与 ack，但只能 `ordered`：执行事实不压缩、不合并，所以慢消费者只背压自己，没有投递缺口；投递经存储按位置读出已提交的记录、原样搬运，不经读模型、不解析，所以观察侧的订阅与投递元素不依赖效应侧类型（§7.3 uses 图）。它不经 `route`，不受声明与会话影响。
 
 核出：无。

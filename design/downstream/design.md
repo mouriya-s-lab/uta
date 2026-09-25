@@ -106,7 +106,7 @@ flowchart LR
 | 单据草稿、送审中 | 待审 |
 | `Close(DecisionRejected)` | 审批驳回（附原因） |
 | STS `Rejection` | 被规则拒绝（附原因与违反项，如参数不合该来源 schema、冷却未过） |
-| 参数有效性 `TargetNotAccepted` | 该账户不能按这种订单身份撤单 / 改单（来源只接受另一种身份）；换用来源接受的身份另起单据 |
+| 参数有效性 `TargetNotAccepted` | 该账户不能按这种订单身份撤单 / 改单（来源只接受另一种身份）；换用来源接受的身份重新发起撤单／改单请求 |
 | 参数有效性 `NotSupported`（改单） | 该账户不支持改单；可以先撤单、确认原单已结束后再下新单 |
 | 参数有效性 `CapabilityNotEstablished` | 待审：等待来源能力确认 / 等待来源恢复连接 |
 | `Close(Expired)`；未发出的尝试 `Expired(deadline)` | 已过期，未发送 |
@@ -214,4 +214,4 @@ flowchart LR
 - 不持有状态、不做决策、不重试写、不补全缺失。
 - 不含业务（§0.1）：仓位计算、组合下单、策略都在下游或程序里。
 
-**合格。** 解释层合格，当且仅当通过 §10.5 #23 的每一条。其中泄露检查用的**核心概念词表**是：§11.1 规范词表里用反引号写出的类型、记录、状态与字段名（如 `LogPosition`、`AttemptRef`、`Undetermined`、`Abandoned`、`NotSent`、`Verdict`、`WriteLaneKey`、`SessionEpoch`、`dispatch_end`、`Snapshot`）；§11.3 同名异义表里各概念的名字；本文第 5 节“核心里”一列出现的全部名字（记录、状态、变体、字段与操作名，如 `SendBarrier`、`Prepared`、`bypass_lane`、`CapabilityNotEstablished`、`Unmapped`）；加上 cursor、retention、epoch、venue 序号、序号覆盖、完整界、覆盖检查点、最近声明、会话有效声明、采纳集合、请求流、控制流、链、单据版本、principal、await-all。完整性令牌以不透明编码给出，其中的周期与界同样不以可读形式出现。检查对象是全部命令帮助与 fixture 驱动下的全部输出；对外概念（本文第 2 节）与公共、扩展 schema 的字段名不在词表内。
+**合格。** 解释层合格，当且仅当通过 §10.5 #23 的每一条。其中泄露检查用的**核心概念词表**是：§11.1 规范词表里用反引号写出的类型、记录、状态与字段名（如 `LogPosition`、`AttemptRef`、`Undetermined`、`Abandoned`、`NotSent`、`Verdict`、`WriteLaneKey`、`SessionEpoch`、`dispatch_end`、`Snapshot`）；§11.3 同名异义表里各概念的名字；本文第 5 节“核心里”一列出现的全部名字（记录、状态、变体、字段与操作名，如 `SendBarrier`、`Prepared`、`bypass_lane`、`CapabilityNotEstablished`、`Unmapped`）；加上 cursor、retention、epoch、venue 序号、序号覆盖、完整界、覆盖检查点、最近声明、会话有效声明、采纳集合、请求流、控制流、链、单据、单据版本、principal、await-all。完整性令牌以不透明编码给出，其中的周期与界同样不以可读形式出现。检查对象是全部命令帮助与 fixture 驱动下的全部输出；对外概念（本文第 2 节）与公共、扩展 schema 的字段名不在词表内。

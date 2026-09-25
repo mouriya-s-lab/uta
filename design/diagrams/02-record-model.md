@@ -81,8 +81,11 @@ flowchart TB
     F5["说明<br/>为审批人生成为何否决"]
   end
   ENUM --> F1 & F2 & F3 & F4 & F5
-  F1 --> CMP{"与所引用集成来源的最近声明比对<br/>程序：inputs 声明的各输入及其字段访问器（§8.6）"}
-  CMP -->|"缺字段 / 缺流 / 输入来源是 Program(_)"| FC["fail-closed：拒绝装载 / 启动"]
+  F1 --> CMP{"与所引用集成来源的最近声明比对<br/>处理器：启动期；程序：Applied 之后的声明校验，inputs 声明的各输入及其字段访问器（§8.6）"}
+  F2 --> STRUCT{"程序：结构校验<br/>load_program 读到程序值时、任何 Applied 之前，只看程序值（§8.6）"}
+  STRUCT -->|"输入来源是 Program(_) · 两个输入同在一个 (source, stream) · facts 里同一来源的起点不同 · §8.6 所列其余违反项"| SREJ["控制记录 Rejected<br/>没有 Applied、epoch 与程序订阅"]
+  STRUCT -->|"成立：append Applied，之后才做声明校验"| CMP
+  CMP -->|"缺字段 / 缺流"| FC["fail-closed：处理器拒绝启动；程序同一事务 ProgramHalted{LoadRejected} + ProgramFailed"]
   CMP -->|"齐"| OK["可运行"]
   CMP -->|"所引用的集成来源还没有声明版本（程序）"| WAIT["不判定：程序留在活动集合，不拉起宿主、不 append ProgramHalted<br/>该来源第一次握手成功后再比对（§8.6）"]
   subgraph USES["五处使用（同一 enum，不同构造者与校验期）"]
@@ -185,7 +188,7 @@ flowchart LR
 | 观察 | `Gap{origin: Channel, channel}`（回填 / 一次性读） | 持久订阅元素（回填）/ 一次性读元素（调用后 `Unavailable`；无会话不调用、不记） | 流、渠道 | — |
 | 执行 | `EffectRequest` | 出站请求处理器（随 `Advance` 输出提交） | 程序 id（即所在请求流）、`member`（发出成员：开始该成员的 `load_program` / 替换 `Applied` 的位置，核心在输出事务里写下）、`effect_kind`、`basis`、载荷；不带调用方键（键由核心在发出时按 `AttemptRef` 铸造，§6.5） | `basis` → 观察位置；`member` → 控制流上的 `Applied`（处理器与重派读它所记的装载 principal 与执行事实输入，§6.1） |
 | 执行 | `EffectResponse{request, outcome}` | 出站请求处理器 | 同一请求流；读：`Concluded(读结论记录位置)` / `Unavailable(gap)` / `NotCalled(reason)`；写：`Drafted(ticket)` / `NotDrafted(Malformed{reason} \| ScopeNotObserved)`（§6.1） | → `EffectRequest` |
-| 执行 | 控制记录 `Applied(position)` / `Rejected(reason)` | 控制面 | principal、动作、配置版本 hash；落控制流（`bypass_lane` 的除外，见下）；`restart_integration` 的 `Applied` 带本实例的 `instance_id`；解除 `Halted` 的 `restart_integration` / `rotate_credential` 的 `Applied` 带被解除的 `IntegrationHalted` 位置；`load_program` 的 `Applied` 记下装载 principal（即其 principal）、内容 hash、预算、接受的 `state_version` 集合、声明的执行事实输入集合、输出契约（`outputs` 各项的 `(name, 值类型)`，以值记下，供沿用判定、程序流的 epoch 与程序来源的接纳）、沿用的 `Checkpoint`（位置或无），解除失败抑制时带被解除的 `ProgramHalted` 位置 | — |
+| 执行 | 控制记录 `Applied(position)` / `Rejected(reason)` | 控制面 | principal、动作、配置版本 hash；落控制流（`bypass_lane` 的除外，见下）；`restart_integration` 的 `Applied` 带本实例的 `instance_id`；解除 `Halted` 的 `restart_integration` / `rotate_credential` 的 `Applied` 带被解除的 `IntegrationHalted` 位置；`load_program` 的 `Applied` 记下装载 principal（即其 principal）、内容 hash、预算、接受的 `state_version` 集合、`facts` 声明的执行事实输入集合、值树引用的原生 op 名集合、输出契约（`outputs` 各项的 `(name, 值类型)`，以值记下，供沿用判定、程序流的 epoch 与程序来源的接纳）、沿用的 `Checkpoint`（位置或无），解除失败抑制时带被解除的 `ProgramHalted` 位置；`install_native_op` 的 `Applied` 以值记下 op 名、声明的签名、artifact 内容 hash，`remove_native_op` 的记下 op 名，这两种的 fold 是已安装 op 集合（§8.7） | — |
 | 执行 | 安全事件 | 会话入口（未完成握手的请求）/ STS 授权步（写越权）/ 控制面（控制动作、`abandon` 与 `retry_reconciliation` 越权） | principal（或未认证连接标识）、请求种类 | — |
 | 执行 | `bypass_lane` 的控制记录 `Applied`（不是 Decision） | 控制面 | principal、单据、该单据的 `WriteLaneKey`（随该 lane 的执行事实流投递）、生效时的 `current_version`、被绕过的阻塞头位置集 | → 被绕过的 `Prepared` 集合 |
 
