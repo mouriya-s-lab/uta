@@ -16,7 +16,7 @@ trait RetractableDelta: Delta { fn neg(&self) -> Self }            // 只有派�
 
 struct Journal<Record, D: Delta> { stream: StreamId, ops: Vec<(LogPosition, D)> }
 fn fold_state<Record, D: Delta>(journal: &Journal<Record, D>, at: LogPosition) -> State<Record>   // state = 前缀和 = fold
-fn compact_below_retention<Record, D: RetractableDelta>(journal: &mut Journal<Record, D>, retention: LogPosition)
+fn compact_below_retention<Record, D: RetractableDelta>(journal: &mut Journal<Record, D>, retention: LogPosition)   // 按该流的保留规则删边界之下的记录（§2.4）
 ```
 
 - **`Record`**：该流的记录词表，必须为具体类型；退化为 `dyn Any` 即违反解析边界。集成来源的流上，它由集成侧在边界处解析给出（§2.1）；程序流上，它是解释器产出的类型化值，类型是输出契约里该流的值类型（§4.3），不经任何集成解析。[证据：fp-04 命题 15/16]
@@ -27,7 +27,7 @@ fn compact_below_retention<Record, D: RetractableDelta>(journal: &mut Journal<Re
 
 - 派生侧使用 `Delta: RetractableDelta`（可撤回多重集、正负 diff）。
 - 执行事实侧的 append-only 记录链在存储上可复用同一原语（`Delta: Monoid`，无逆元，第一边界的第一层，§3.1），但它属于效应抽象，类型不与观察侧共享。由单向边 + crate 依赖方向保证（§3.2）。
-- `compact_below_retention` 仅对 `RetractableDelta` 表存在；压缩后仍被引用的位置 ≥ 保留边界（§2.4）。
+- `compact_below_retention` 仅对 `RetractableDelta` 表存在；压缩后仍被引用的位置 ≥ 保留边界，状态值的流（健康流按键、程序流按流 epoch）在边界之下留基线，`as_of ≥ 边界` 的 `fold_state` 不因压缩改变（§2.4）。
 
 ### 为什么
 
@@ -78,11 +78,11 @@ fn compact_below_retention<Record, D: RetractableDelta>(journal: &mut Journal<Re
 | `backfill_incomplete` | 回填穷尽（§8.4），持久订阅 append |
 | `program_upgrade` | 程序产出的派生流也是来源；不沿用旧状态的替换（程序升级、输出契约改变或运维冷启动，即 `Reset`）开新 epoch 时，控制面在替换的 `Applied` 事务里、在新成员的每条程序流上 append（§8.6 程序流的 epoch） |
 
-**`Gap{origin: Delivery, reason}`：某个订阅的投递有缺口。** `reason ∈ {slow_consumer, compacted, conflated}`（P3），分别是慢消费者被停投、订阅位置已被压缩到保留边界之下、`latest` 消费合并。程序是订阅消费者（输入 = 位置推进，§4.3），程序滞后被跳过的区间是它的 `Delivery` gap。
+**`Gap{origin: Delivery, reason}`：某个订阅的投递有缺口。** `reason ∈ {slow_consumer, compacted, conflated}`（P3），分别是慢消费者被停投、订阅位置已被压缩到保留边界之下、`latest` 消费合并。程序是订阅消费者（输入 = 位置推进，§4.3），经它的程序订阅消费（§8.6 程序的输入），程序滞后被跳过的区间是这个订阅上的 `Delivery` gap。
 
 - 它是订阅的状态，不是流上的记录：说的是“这个订阅在这条流上没有收到位置 `from` 到 `to`（两端都含）的记录”，流本身并不缺这些记录。源头是核心的投递，拥有者与唯一写者是持久订阅元素，存在订阅表里，按（订阅，流）记，与该流的 cursor 同一粒度（§7.5）：`{流, from, to, reason}`。
-- 开始锚点：投递调度要跳过一段时，请持久订阅写下这一项，写下之后才跳过，所以崩溃不会留下没有记下的跳过。`to` 是被跳过的最后一个位置：`slow_consumer` 与 `conflated` 为跳过时该流已交出范围的末位，`compacted` 为跳过时该流保留边界之下的最后一个位置。确认之前，每次投递与重新挂接都先交出它，再交 `to` 之后的记录。结束锚点：订阅者确认一个不低于 `to` 的 cursor，即显式确认这次损失：cursor 推进与该项删除在同一次写里；确认到 `to` 不确认任何尚未交出的记录。取消订阅，或该流的项从订阅里移除时，该项随之删除；项的挂起（如 `StreamUndeclared`）不是移除，缺口留着。
-- 执行事实订阅没有这种缺口（§8.5）。读模型直接 fold 日志、不经投递，所以它不出现在 `Snapshot.gaps` 里（§8.5）；订阅者在自己的投递里与 `subscriptions` 读模型里看到它。
+- 开始锚点：投递调度要跳过一段时，请持久订阅写下这一项，写下之后才跳过，所以崩溃不会留下没有记下的跳过。`to` 是被跳过的最后一个位置：`slow_consumer` 与 `conflated` 为跳过时该流已交出范围的末位。`compacted` 只覆盖压缩删去的位置：该订阅 cursor 之后、保留边界之下，每一段连续被删去的位置各记一项，`to` 是这一段的最后一个位置；各段之间留下的基线（健康流按键、程序流按流 epoch，§2.4）不在缺口里，与缺口一起按位置先后交出。确认之前，每次投递与重新挂接都先交出它，再交 `to` 之后的记录。结束锚点：订阅者确认一个不低于 `to` 的 cursor，即显式确认这次损失：cursor 推进与该项删除在同一次写里；确认到 `to` 不确认任何尚未交出的记录。程序订阅的确认是提交的 `Advance`：新 cursor 不低于 `to` 时，该项在那个 `Advance` 事务里由持久订阅元素删除（§8.6 程序的输入）。取消订阅，或该流的项从订阅里移除时，该项随之删除；项的挂起（如 `StreamUndeclared`）不是移除，缺口留着。
+- 执行事实订阅没有这种缺口（§8.5）。读模型直接 fold 日志、不经投递，所以它不出现在 `Snapshot.gaps` 里（§8.5）；消费方订阅者在自己的投递里与 `subscriptions` 读模型里看到它，程序在投递给它的记录之前看到它。
 
 **`Gap{origin: Channel, channel}`：读渠道不可用。** `channel` 为返回 `Unavailable` 的那个渠道：对账取证渠道（§6.6）、回填操作（§8.4）或一次性读 `read`（§8.2）。它是核心自己那次调用的结果（UTA 自有事实），不是流的断代：它不说来源少了什么记录，所以不计入读模型的 `gaps`（§8.5）。落点随发起者：
 
@@ -98,7 +98,7 @@ fn compact_below_retention<Record, D: RetractableDelta>(journal: &mut Journal<Re
 - **确认 = 消费方已处理**：消费者向核心提交“已处理到 `LogPosition` p”，核心把 cursor 推进到 p。已投递未确认的记录是消费者内存里的事。
 - **重投**：确认前崩溃或断连后，核心从已确认 cursor 之后重投，所以同一记录可能被同一订阅者重复看到。重复只发生在未确认区间；消费者按 `LogPosition` 去重，每条记录的 `(StreamId, Seq)` 唯一（§2.3）。这是投递去重，只认同一条记录；同一笔执行经不同渠道到达是不同的记录，它们按执行身份计数（§8.1“成交与订单状态的契约语义”），与投递去重互不替代。
 - **已确认区间不重投**。退回 cursor 是显式控制动作（§8.5），不是恢复路径。
-- **程序订阅同样受此约束**：程序的输入（观察流、声明的执行事实流与它自己的请求流，§8.6 程序的输入）各有一个 cursor 位置，程序状态 `Checkpoint` 与这组 cursor 同事务持久化（§7.5、§8.6）。因此程序重启后从其 checkpoint 对应的 cursor 续读，不会看到已折入状态的记录。
+- **程序订阅同样受此约束**：程序的输入（观察流、声明的执行事实流与它自己的请求流，§8.6 程序的输入）都在它的程序订阅里，各有一个 cursor 位置，这就是程序的 cursor，存在订阅表里；它不 `ack`，提交的 `Advance` 就是确认，程序状态 `Checkpoint` 与这组 cursor 同事务持久化（§7.5、§8.6）。因此程序重启后从其 checkpoint 对应的 cursor 续读，不会看到已折入状态的记录。
 
 ## 4.3 派生 DAG 与程序解释①
 
@@ -110,7 +110,7 @@ fn compact_below_retention<Record, D: RetractableDelta>(journal: &mut Journal<Re
 struct Program   { nodes: Vec<DerivationNode>, rules: Vec<DecisionStep>, inputs: Vec<InputDecl>, outputs: Vec<Output> }
 struct InputDecl { name: InputName, source: Source, stream: StreamName, subjects: Option<Set<Subject>>,
                    usage: Usage, mode: Consume, wait: Option<WaitWindow>, start: Start }
-    // 观察输入声明，Input(name) 节点指名它（§2.5）；source 只能是 Integration(_)，Program(_) 在装载期被拒（§8.6）；subjects 无 = 整条流；wait 是该输入声明的等待窗口（§4.2），无则不按时间截止，只与 Ordered、Latest 同用，与 AwaitAll 同给在装载期被拒（要求点与时间截止不能同时决定何时计算）
+    // 观察输入声明，Input(name) 节点指名它（§2.5）；source 只能是 Integration(_)，Program(_) 被 load_program 的结构校验拒绝（§8.6）；subjects 无 = 整条流；wait 是该输入声明的等待窗口（§4.2），无则不按时间截止，只与 Ordered、Latest 同用，与 AwaitAll 同给被结构校验拒绝（要求点与时间截止不能同时决定何时计算）
 enum Usage   { Supply, DeliveryOnly }                         // 缺省 Supply；与 §8.5 观察流订阅项的用途及接纳规则相同
 enum Consume { AwaitAll(RequirementPoint), Ordered, Latest }  // §4.2 三种消费方式；await-all 带要求点
 enum Start   { Tail, Origin }                                 // 缺省 Tail（§8.6 程序的输入）
@@ -123,16 +123,22 @@ struct Output    { name: StreamName, node: Id }   // 输出声明：节点 node 
 同一个程序值有两种解释。观察半边是**解释①（派生）**；解释②见 §6.1。
 
 - `nodes` → 增量 DAG，仅重算受影响节点，并通过 cutoff 截断。
-- **输入由 `inputs` 声明**：每个 `InputDecl` 是程序对一条集成来源观察流的消费声明：主体集、用途（与 §8.5 订阅项同一接纳规则）、消费方式与要求点、等待窗口（§4.2）与起点（§8.6 程序的输入）；`Input(name)` 节点给出该流 cursor 之后的记录，节点经 `Op1(Field(_), _)` 读其字段（§2.5）。`inputs` 里名字重复，或某项的来源是 `Program(_)`，装载期校验拒绝该程序值（§8.6）。程序之间的组合在编写程序值时完成：文本糖编译成同一棵值树（§8.6），一个程序要用另一个程序算出的值，就把那些节点写进自己的值（§10.1 程序的输入与输出）。执行事实输入与请求流不在 `inputs` 里（§8.6 程序的输入）。
-- **输出由 `outputs` 声明**：每个 `Output` 把节点 `node` 的值导出到流 `(Program(id), name)`（§2.3 `Source`）；其余节点的值是程序内部的，不落任何流。程序的**输出契约**是 `outputs` 每项的 `(name, 值类型)`，值类型由输出类型 fold（§2.5）从 `Output.node` 求出，只由程序值本身求得：字段的类型来自访问器的类型标签，不取任何声明，所以开始成员的 `Applied` 在来源还没有声明版本时也能记下它（§8.6 程序流的 epoch）；这些 `name` 的流就是程序流。装载期校验拒绝 `outputs` 里名字重复、`Output.node` 不存在、是 `Pooled` 节点（输出是段视图，§4.5），或它的类型要从 `payload_schema` 才能求出（`Input` 节点给出的整条记录，及未经字段访问器由它组成的值）的程序值（§8.6）。alert 本质上是派生观察，与外部观察同形。
+- **输入由 `inputs` 声明**：每个 `InputDecl` 是程序对一条集成来源观察流的消费声明：主体集、用途（与 §8.5 订阅项同一接纳规则）、消费方式与要求点、等待窗口（§4.2）与起点（§8.6 程序的输入）；`Input(name)` 节点给出该流 cursor 之后的记录，节点经 `Op1(Field(_), _)` 读其字段（§2.5）。`inputs` 里名字重复，或某项的来源是 `Program(_)`，`load_program` 的结构校验拒绝该程序值，控制记录为 `Rejected`，没有 `Applied`（§8.6 装载期校验）。程序之间的组合在编写程序值时完成：文本糖编译成同一棵值树（§8.6），一个程序要用另一个程序算出的值，就把那些节点写进自己的值（§10.1 程序的输入与输出）。执行事实输入与请求流不在 `inputs` 里（§8.6 程序的输入）。
+- **输出由 `outputs` 声明**：每个 `Output` 把节点 `node` 的值导出到流 `(Program(id), name)`（§2.3 `Source`）；其余节点的值是程序内部的，不落任何流。程序的**输出契约**是 `outputs` 每项的 `(name, 值类型)`，值类型由输出类型 fold（§2.5）从 `Output.node` 求出，只由程序值本身求得：字段的类型来自访问器的类型标签，不取任何声明，所以开始成员的 `Applied` 在来源还没有声明版本时也能记下它（§8.6 程序流的 epoch）；这些 `name` 的流就是程序流。`load_program` 的结构校验在 `Applied` 之前拒绝 `outputs` 里名字重复、`Output.node` 不存在、是 `Pooled` 节点（输出是段视图，§4.5），或它的类型要从 `payload_schema` 才能求出（`Input` 节点给出的整条记录，及未经字段访问器由它组成的值）的程序值（§8.6 装载期校验），所以每条 `Applied` 记下的输出契约都有定义。alert 本质上是派生观察，与外部观察同形。
 - **输出记录是节点的当前值** [设计]：一条程序流在一个流 epoch 内承载 `Output.node` 的当前类型化值，它的 `fold_state`（§4.1）就是这个值。每次 `Advance` 的输出事务按该节点在这批推进之后的值写：
   - 本流 epoch 第一次有定义的值：一条记录，只含这个值的正贡献；每个流 epoch 由此开始，新 epoch 不撤回上一 epoch 的值（§8.6 程序流的 epoch）；
   - 值变了：一条记录，原子地撤回此前仍生效的那个贡献（`neg`，指名它所在的位置）并加入新值的正贡献；
   - 值按其类型的语义相等：不写记录（这批推进的其余结果照常提交，§8.6 `Advance`）；
   - `Window` 节点导出的是它在这批推进之后的完整值，不是逐元素各一条记录。
+  - 记录里的值按 `V` 公开的类型化值编码写出：与值树里 `Const(V)` 的 `V` 同一 schema，不带 `Const` 包装；`Window` 的值是它的各元素值按位置先后排成的序列。字节级的规范化随 release 发布的 IDL 定形。
   - 记录不带 `subject`，程序流只能按整条流订阅（§8.5 订阅组）。
-- **每条输出记录带 `basis`**：同一事务提交的该程序各输入的 cursor。契约：在每条输出记录处，值 = 程序对各输入流到 `basis` 为止的前缀求得的值。这条等式对 `ordered` 与 `await-all` 输入成立；`latest` 与声明等待窗口的输入按实际投递给程序的记录求值，跳过的部分是投递上的 `Gap{origin: Delivery, reason: conflated}` 或等待窗口之外的记录（§4.2），`basis` 连同这些缺口说明实际用到了什么，不断言等于完整前缀的值。修正不改写已有位置：迟到记录使值改变时，照上面的“值变了”写一条新记录，撤回旧贡献；引用被撤回贡献的 `basis` 随之为 `Retracted`（§5.2；W16）。
-- **`Advance` 的分批不在契约里** [设计]：一批推进含哪些记录取决于记录何时到达，而流与流之间没有投递顺序（§4.2、§8.5），也没有来源证据给出跨流的切分（§4.2 `await-all`）。所以两份实现可以给出不同的中间记录序列，但每条记录都满足上面的 `basis` 契约，只有 `ordered` 与 `await-all` 输入的程序在同样的输入推进完之后值相等。理由：分批若进契约，就要替到达时间定一个来源从未给出的跨流顺序（§2.3）；`basis` 契约只由已提交的记录决定，两份实现都能按记录检验。要看到中间状态的消费方，自己消费这些输入。
+  - 压缩按流 epoch 进行：保留边界之下每个流 epoch 的最新一条值记录作为基线留下，去掉它指名已删记录的撤回部分（§2.4）。写“值变了”的记录所需的此前仍生效的值与位置，程序宿主元素从流上读出（当前流 epoch 的最新一条值记录），核心重启与沿用旧状态的替换之后也一样，不另存一份。
+- **每条输出记录带 `basis`**：同一事务提交的该程序各输入的 cursor。契约 [设计]：每条输出记录的值，是程序对到 `basis` 为止实际投递给它的记录求得的值。下面两条都成立时，这个值等于程序对各输入流到 `basis` 为止的前缀求得的值，两份实现在同样的输入推进完之后也给出相等的值：
+  - (a) 值树的每个节点都是各输入前缀的函数：没有 `Scan` 或 `Window` 作用在依赖不止一个输入的节点上。这是值树的静态性质，只看程序值即可判定；
+  - (b) 到 `basis` 为止的前缀里，没有任何输入有 `Gap{origin: Delivery}`（含 `latest` 输入的 `conflated`），也没有被跳过的等待窗口区间（等待窗口之外的记录，§4.2）。
+
+  任一条不成立时，值还取决于记录跨流投递给程序的交错次序，以及投递给它的这些缺口：跨流的投递次序不在契约里（§4.2、§8.5），设计写明这种依赖，不为它另定次序（§10.1 程序的输入与输出）。修正不改写已有位置：迟到记录使值改变时，照上面的“值变了”写一条新记录，撤回旧贡献；引用被撤回贡献的 `basis` 随之为 `Retracted`（§5.2；W16）。
+- **`Advance` 的分批不在契约里** [设计]：一批推进含哪些记录取决于记录何时到达，而流与流之间没有投递顺序（§4.2、§8.5），也没有来源证据给出跨流的切分（§4.2 `await-all`）。所以两份实现可以给出不同的中间记录序列，但每条记录都满足上面的 `basis` 契约；满足上面 (a)、(b) 两条的程序，在同样的输入推进完之后值相等。理由：分批若进契约，就要替到达时间定一个来源从未给出的跨流顺序（§2.3）；`basis` 契约只由已提交的记录决定，对 (a)、(b) 成立的程序两份实现都能按记录检验。(b) 是一次运行的性质：投递缺口在覆盖它的 `Advance` 提交时就删去（§4.2），事后不能从记录判定它是否成立，所以按记录检验只对事先保证 (b) 的程序进行（例如只用 `ordered` 或 `await-all`、不声明等待窗口、第一个 `Checkpoint` 之前不推进保留边界）。要看到中间状态的消费方，自己消费这些输入。
 - 程序状态就是 `Scan`/`Window` 节点的累加器（见下文“状态正交划分”），经 `Checkpoint` 持久化（§8.6），不另有状态声明。
 - **增量在节点粒度**（哪些节点因输入变化重跑），不在算法内部。一个节点被触发时可以看它声明的完整窗口，输出相等时 cutoff 仍成立。记录渐进不要求算法渐进。[证据：fp-01 M3 Mu `Work_`；fp-05 案例 7 Incremental；域 B3/P2]
 - **输入 = 位置推进**：`inputs` 各流 cursor 之后的记录，加上 `await-all` 输入上来源证据证明的覆盖（§4.2）。程序可见 gap 与两种时间。解释②另读声明的执行事实流与该程序的请求流（§6.1、§8.6 程序的输入），解释①的节点不消费它们。

@@ -57,11 +57,11 @@ flowchart TB
   CMP -->|"是"| WIN{"to(s) ≤ 该流配置窗口下界？"}
   WIN -->|"否"| RJ2["Rejected(InsideWindow{bound})"]
   WIN -->|"是，且各流都通过"| APPLY["写各流新边界；控制记录 Applied(position)"]
-  APPLY --> COMPACT["compact_below_retention：仅观察侧 RetractableDelta 表，逐流 DELETE 边界之下<br/>执行 J 没有保留边界：不压缩、不删除"]
+  APPLY --> COMPACT["compact_below_retention：仅观察侧 RetractableDelta 表，逐流按该流保留规则删边界之下<br/>一般观察流：边界之下全部删去<br/>健康流：只删被同键后续记录取代的，每键最新一条留作基线<br/>程序流：只删被同一流 epoch 里后续值记录取代的值记录，每个流 epoch 最新一条值记录留作基线（去掉指名已删记录的撤回部分），开 epoch 的 Gap{Source} 留下<br/>执行 J 没有保留边界：不压缩、不删除"]
   COMPACT --> INV["不变量 §6.9-3：所有已登记引用 ≥ 其所在观察流的边界"]
 ```
 
-读法：边界按观察流分别维持、只前进（`LogPosition` 只在同一 `StreamId` 内有序）；执行事实永不删除；派生历史的 `DELETE` 只在各流边界之下。
+读法：边界按观察流分别维持、只前进（`LogPosition` 只在同一 `StreamId` 内有序）；执行事实永不删除；派生历史的 `DELETE` 只在各流边界之下。健康流与程序流是状态值的流，按键 / 按流 epoch 留基线，所以任一 `as_of ≥ 边界` 的 fold 与压缩前相等，从边界订阅的消费者先收到基线；cursor 落在边界之下的订阅者得到的 `Gap{Delivery, compacted}` 只覆盖被删去的位置（每一段连续被删的位置一项），各段之间的基线照常按位置投递（§2.4、§4.2）。
 
 核出：边界是逐流的位置集、越过留存窗口的拒绝名 `InsideWindow{bound}`、执行事实侧没有边界，原文未写——已并入 §2.4、§8.5、§7.5。
 

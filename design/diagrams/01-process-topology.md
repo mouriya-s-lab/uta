@@ -80,7 +80,7 @@ sequenceDiagram
   N->>I: 在这条通道上 handshake()
   alt 合法 Projection
     I-->>N: Projection（scopes / streams / capabilities）
-    N->>DB: 同事务：声明版本 + Established{epoch} 健康观察；开新 epoch 的流由集成会话 append Gap{Source}（与持久订阅的 None{epoch} 同事务）；required_inputs 比对（等待该来源首个声明版本的程序随之做装载期校验，D4.2）；既有订阅按新声明重算路由
+    N->>DB: 同事务：声明版本 + Established{epoch} 健康观察；开新 epoch 的流由集成会话 append Gap{Source}（与持久订阅的 None{epoch} 同事务）；required_inputs 比对；待接纳的订阅项（含等待该来源首个声明版本的程序订阅的项）按新声明转为接纳或被拒，那些程序随之按“等待的先后”判定（D4.2）；既有订阅按新声明重算路由
   else 投影不合法 / 契约版本不兼容 / Refused(reason)
     N->>DB: Halted{cause}：同一事务 append IntegrationHalted（P14，控制流；开始 Halted 抑制）与健康观察
     N->>I: 提交之后：结束会话、关闭通道、请求进程退出（超时强制终止）
@@ -99,8 +99,8 @@ sequenceDiagram
   N->>N: STS 链按记录重新评估待决单据（RuleState 由记录 fold 出）；按 deadline 重装过期计时器
   Note over N,H: 第 5 步 恢复观察侧与消费面
   N->>I: 为已建立会话的集成，持久订阅按订阅表与核心自己的需求（非配额池作用域的订单状态流与成交流恒为 All）合成全集经 route 下发，按需 backfill（不等回填完成）
-  N->>H: 活动集合（控制流的 fold）中未被失败抑制、所引用的集成来源都已有声明版本的程序：读程序值并核对 Applied 所钉的内容 hash，拉起宿主并登记；交回本成员可交回的最近 checkpoint（Applied 沿用的或之后持久化的）→ Load(program, checkpoint?, budget)；所引用的集成来源还没有声明版本的程序留在活动集合里等待，不拉起、不 ProgramHalted
-  H-->>N: Loaded 或 LoadRejected（→ ProgramHalted）；交回的 checkpoint 的 state_version 总在本成员接受的集合内（替换 Applied 比对或 Output 检查，§8.6 状态迁移），Load 不比对版本
+  N->>H: 活动集合（控制流的 fold）中未被失败抑制的程序，按 §8.6 装载期校验的“等待的先后”：有观察项初次接纳已被最终拒绝的 → 同事务 ProgramHalted{LoadRejected} + ProgramFailed；否则所引用的集成来源还没有声明版本的留在活动集合里等待，不拉起、不 ProgramHalted；其余做声明校验（最近声明取自集成会话，接纳结果取自持久订阅），不成立 → ProgramHalted{LoadRejected} + ProgramFailed；成立的读程序值并核对 Applied 所钉的内容 hash，拉起宿主并登记；交回本成员可交回的最近 checkpoint（Applied 沿用的或之后持久化的）→ Load(program, checkpoint?, budget)
+  H-->>N: Loaded；交回的 checkpoint 的 state_version 总在本成员接受的集合内（替换 Applied 比对或 Output 检查，§8.6 状态迁移），Load 不比对版本
   N->>A: 开放下游会话；此前 health() 返回 Starting
 ```
 
@@ -190,7 +190,7 @@ flowchart LR
     EJ[("执行事实 Journal<br/>纯 append；lane 流 · 声明流 · 请求流 · 控制流")]
     SUB[("订阅表 / cursor")]
     CAP[("能力证据")]
-    CK[("Checkpoint + 程序 cursor")]
+    CK[("Checkpoint")]
     PT[("进程表 (instance_id, pid, start_time, role)：OS 进程的索引")]
     RB[("保留边界 + 引用登记")]
     SN[("快照")]
@@ -207,7 +207,7 @@ flowchart LR
   CTL -->|"程序流开 epoch 的 Gap{Source}（start / program_upgrade），与开始不沿用旧状态之成员的 Applied 同事务"| OJ
   SESS --> EJ
   OUT --> EJ
-  SUBEL -->|"需求 · cursor · 逐项状态 · 投递缺口 Gap{Delivery}"| SUB
+  SUBEL -->|"需求 · cursor · 逐项状态 · 投递缺口 Gap{Delivery}；程序订阅：开始 / 替换 / 卸载成员的 Applied 同事务建立、沿用、重建或结束它及其项，Advance 事务里写它的 cursor 并删被覆盖的缺口"| SUB
   SUBEL -->|"回填的结果项与读结论记录 · 回填进度健康观察 · 覆盖检查点 · 路由结论记录"| OJ
   ISESS --> CAP
   ISESS -->|"登记的采纳记录 · IntegrationHalted（控制流）· 声明版本"| EJ
@@ -215,7 +215,7 @@ flowchart LR
   ISESS -->|"会话健康观察 · 调用计数（计数由发起方同事务提交）· 握手时新流 epoch 的 Gap{Source}（与持久订阅的 None{epoch} 同事务）"| OJ
   HOSTP -->|"程序宿主进程的行"| PT
   IOE --> CAP
-  HOSTP --> CK
+  HOSTP -->|"Checkpoint（与持久订阅写在程序订阅上的 cursor 同一 Advance 事务）"| CK
   HOSTP -->|"Advance 输出的派生记录（解释①）· 程序观察 ProgramReset / ProgramFailed"| OJ
   HOSTP -->|"ProgramHalted（控制流，与 ProgramFailed 同事务）"| EJ
   FENCE -->|"新实例一行、instance_id += 1（与 fence 同事务）；受控停止的结束锚点"| IID
@@ -224,14 +224,13 @@ flowchart LR
   IOE -.->|"ResolutionEvidence 自动登记引用"| RB
   ATTR -.->|"ResolutionEvidence 自动登记引用"| RB
   CTL -.->|"unload_program 与不沿用旧状态的替换的 Applied 解除程序 cursor 引用（在宿主 OS 确认退出之后 append）"| RB
-  CTL -->|"load_program 的 Applied 同事务定下程序 cursor（替换沿用时原样沿用）"| CK
   HOSTP -.->|"进入活动集合后每个 Checkpoint 自动登记 cursor"| RB
 ```
 
 读法：
 
 - 观察 J 有七类写者（含一次性读元素的读结果、集成会话的会话健康观察与握手时的新 epoch `Gap{Source}`、持久订阅的回填结果、回填进度与路由结论、程序宿主元素写的派生记录与程序观察、控制面的程序流开 epoch 的 `Gap{Source}`），执行 J 有九类（含会话入口的安全事件、集成会话的采纳记录、声明版本与 `IntegrationHalted`、程序宿主元素的 `ProgramHalted`）；两侧共享存储原语但类型宇宙不共享（§4.1）。采纳记录、`IntegrationHalted`、`ProgramHalted` 与除 `bypass_lane` 外的控制记录都在一条控制流上（§7.3），采纳集合、`Halted`、活动集合与失败抑制都只按这条流上的位置 fold。
-- 进程表有两个写者，按 `role` 分行：集成会话写集成进程的行，程序宿主元素写宿主进程的行（§7.5）。
+- 进程表有两个写者，按 `role` 分行：集成会话写集成进程的行，程序宿主元素写宿主进程的行（§7.5）。订阅表只有持久订阅元素一个写者：消费方订阅与程序订阅都在其中，程序的 cursor 只存在这里；程序宿主元素编排 `Advance` 事务、写 `Checkpoint` 表，控制面的 `Applied` 事务里的程序订阅变更也由持久订阅元素写（§7.5 订阅表）。
 - 读模型不写任何表：它是按种类对执行 J、观察 J 的只读 fold（`subscriptions` 读订阅表当前态，§8.5），供 `read_model` 读取。
 - 引用登记不是独立写者动作：随 `Prepared`/`Checkpoint`/`ResolutionEvidence` 的 append 自动写入，随尝试等待结束（结果确立、`Expired`、`Abandoned`）、下一 checkpoint、`unload_program` 或不沿用旧状态的替换自动解除（D8.1）。
 - 核心不写统一路径下的任何文件（§7.6）。
@@ -253,7 +252,7 @@ flowchart LR
 | 一次取证命中：`ResolutionEvidence{Found}`（含 `Evidence`）+ `provenance: Reconciliation` 的该回应观察记录 | §6.5 | #7：该次取证不存在；fold 显示本轮该渠道未取证，重做（读可重试） |
 | 推送归因命中：观察记录 + `ResolutionEvidence{Attributed}` | §6.6、§8.1 | 推送未 append：核心崩溃即集成成孤儿被回收，重启握手后该流续接（集成以 venue 游标证明）或新 epoch + `Gap{Source}`；续接则记录重到，仍处 `Undetermined` 且结果未知的尝试照常归因 |
 | `Undetermined` append + 回查已到达的归因观察 | §6.6 | 二者同事务，不存在"归因已到但未匹配"的持久态 |
-| `Advance` 输出：`EffectRequest` 记录 + 派生记录 + `Checkpoint` + 程序 cursor | §8.6 | #16：整批不存在，从同一组已提交 cursor 重新推进 |
+| `Advance` 输出：`EffectRequest` 记录 + 派生记录 + `Checkpoint` + 程序订阅上的程序 cursor（持久订阅元素写）+ 新 cursor 覆盖的 `Gap{Delivery}` 的删除 | §8.6 | #16：整批不存在，从同一组已提交 cursor 重新推进，未确认的缺口仍在 |
 | fence 取得 + 实例表新一行（`instance_id += 1`） | §7.2 第 1 步 | 未提交则旧 `instance_id` 仍有效，重来 |
 | 单条观察 append + `LogPosition` 分配 | §7.4 | #9：半写不可见 |
 | 调用结果的记录（回执、取证、读结论、`Gap{Channel}`、`Undetermined`）+ 该调用的计数健康观察 | §7.3、§8.4 | 二者皆无：调用结果未落，计数不前进；不存在“计了数却无结果”的持久态 |
@@ -261,8 +260,8 @@ flowchart LR
 | `IntegrationHalted` + `Halted` 健康观察（进程的终止在提交之后，另由 OS 确认） | §7.2 第 3 步 | 二者皆无：仍在上一状态，重启按执行事实重判；已提交而进程未确认退出：继任实例第 1 步回收 |
 | 解除 `Halted` 的控制记录 `Applied`（引用 `IntegrationHalted`）+ `Connecting` 健康观察；只在上一次集成运行结束（进程 OS 确认退出、行已清除）之后提交 | §7.2 第 3 步 | 二者皆无：仍 `Halted`，没有握手发生 |
 | `restart_integration` 采纳本实例尚未运行的 id：`Applied`（带文件 hash 与 `instance_id`）+ `Connecting` 健康观察 | §7.2 第 3 步、§8.5 | 二者皆无：该 id 不在采纳集合里，没有运行、没有进程 |
-| `load_program` 的 `Applied`（钉内容 hash、以值记下输出契约、记下沿用的 `Checkpoint`）+ 程序全部输入的 cursor 与观察输入的订阅项；让 id 进入活动集合的（首次装载、卸载之后再装载）另加新成员每条程序流新 epoch 的 `Gap{Source, start}`；替换不沿用旧状态时（`cold_start`、不接受旧 `state_version`，或开始旧成员的 `Applied` 所记的输出契约与新成员的不同）另加 `ProgramReset`、新成员每条程序流新 epoch 的 `Gap{Source, program_upgrade}`、旧保留引用的解除；新成员不声明的流不写记录 | §8.5、§8.6 卸载与替换、程序流的 epoch | 二者皆无：id 不在活动集合里的，程序仍不在集合里，程序流没有新 epoch；替换的，旧成员照旧（替换时旧宿主已结束，重启照常装载旧成员）；已提交：按 `Applied` 所记沿用或不携带装载，不重复 `Reset`，不再开 epoch |
-| `unload_program` 的 `Applied` + 程序 cursor 与观察输入订阅项的结束 + 保留引用的解除（宿主已 OS 确认退出之后）；程序流上不写记录，它的 epoch 不结束 | §8.6 卸载与替换 | 二者皆无：程序仍在活动集合里，重启照常装载 |
+| `load_program` 的 `Applied`（钉内容 hash、以值记下输出契约、记下沿用的 `Checkpoint`）+ 程序订阅上全部输入的 cursor 与观察输入的订阅项；让 id 进入活动集合的（首次装载、卸载之后再装载）另加程序订阅本身的建立与新成员每条程序流新 epoch 的 `Gap{Source, start}`；替换保留程序订阅，共有输入的项只在主体集与用途也相同时沿用，否则同事务结束旧项、建立并接纳新项；替换不沿用旧状态时（`cold_start`、不接受旧 `state_version`，或开始旧成员的 `Applied` 所记的输出契约与新成员的不同）另加 `ProgramReset`、新成员每条程序流新 epoch 的 `Gap{Source, program_upgrade}`、项与 cursor 的重建、旧保留引用的解除；新成员不声明的流不写记录。结构校验不成立的程序值只有控制记录 `Rejected`，不在这个集合里 | §8.5、§8.6 卸载与替换、程序流的 epoch、装载期校验 | 二者皆无：id 不在活动集合里的，程序仍不在集合里，没有程序订阅，程序流没有新 epoch；替换的，旧成员照旧（替换时旧宿主已结束，重启照常装载旧成员）；已提交：按 `Applied` 所记沿用或不携带装载，不重复 `Reset`，不再开 epoch |
+| `unload_program` 的 `Applied` + 程序订阅（cursor 与观察输入订阅项）的结束 + 保留引用的解除（宿主已 OS 确认退出之后）；程序流上不写记录，它的 epoch 不结束 | §8.6 卸载与替换 | 二者皆无：程序仍在活动集合里，重启照常装载 |
 | `ProgramHalted` + `ProgramFailed` 观察（宿主的终止在提交之后） | §8.6 | 二者皆无：重启时程序仍在活动集合里且未被抑制，按 `Checkpoint` 重新装载；超预算或 trap 若再发生，再记一次 |
 
 读法：`SendBarrier` 不在任何集合里——它单独 durable append（fsync）后才允许该尝试的写调用，这正是把崩溃窗口二分的屏障（D6.1）。
@@ -292,10 +291,12 @@ flowchart TB
     HEXEC["程序宿主执行：拉起 + 行 + Load 开始 · Unload 或终止后 OS 确认退出结束"]
   end
   subgraph MEMBER["程序成员（跨实例）：load_program Applied 开始（钉内容 hash，以值记下输出契约）· unload_program 或替换的 Applied 结束，只在宿主执行结束之后 append；替换的同一个 Applied 开始新成员，沿用判定比较开始旧成员的 Applied 所记输出契约"]
-    CUR["输入 cursor 与观察输入的订阅项：开始成员的 Applied 同事务建立 · unload_program 或替换的 Applied 结束（沿用时共有输入原样转给新成员）"]
+    CKREF0["程序订阅的项在本成员内的部分：开始成员的 Applied 同事务建立或沿用 · 替换的 Applied 里，新程序不再声明的输入与主体集或用途变了的项结束（cursor 接着走），不沿用时全部重建"]
     CKREF["Checkpoint 的保留引用：进入活动集合后第一个 Checkpoint 登记 · unload_program 或不沿用旧状态的替换 Applied 解除；Unload 与失败抑制不解除"]
   end
-  MEMBER -.->|"每个实例一个宿主执行（未被失败抑制、所引用的集成来源都有声明版本时）"| HEXEC
+  PSUB["程序订阅（每个活动程序 id 一个；程序的 cursor 只在这里）：让 id 进入活动集合的 Applied 同事务建立（持久订阅元素）· unload_program 的 Applied 结束；替换保留它，principal 换成新成员的装载 principal；共有输入的 cursor 原样沿用，项只在主体集与用途也相同时沿用；提交的 Advance 是它的确认"]
+  PSUB -.->|"跨替换延续，其项在各成员里建立、沿用或重建"| CKREF0
+  MEMBER -.->|"每个实例一个宿主执行（未被失败抑制，且按“等待的先后”不等待、声明校验成立时）"| HEXEC
   EPOCH["流 epoch（集成来源的每条逻辑流，不嵌在实例或会话里）：该流开 epoch 的 Gap{Source} 开始（握手时集成会话 append，或会话内集成上报）· 下一条开 epoch 的 Gap{Source} 结束（backfill_incomplete 是 epoch 内的记录，不结束也不开 epoch）；边界由集成确认，身份由核心分配；握手以游标续接时跨会话、跨实例延续"]
   PEPOCH["流 epoch（程序产出的每条派生流；不嵌在实例或程序成员里）：开始不沿用旧状态之成员的 Applied 事务里、该成员每条程序流上的 Gap{Source} 开始（让 id 进入活动集合的 load_program：start；不沿用旧状态的替换：program_upgrade；该 id 下第一次被声明的流无前驱）· 该流下一条开 epoch 的 Gap{Source} 结束，它写在同一 id 此后第一个声明该流、不沿用旧状态的成员开始的 Applied 里；unload_program、不声明该流的成员开始、沿用旧状态的替换（输出契约相同）与实例更替都不结束它；控制面确认，身份由核心分配"]
   CALLR -.->|"问的是 · 结果按它准入（不是嵌套）：发出 epoch 是调用的属性（read 由 dispatch_end 记下，backfill 为任务所在 epoch，route 由 generation 指名）；read / backfill 的结果到达时它已结束，核心记 Unavailable；route 带旧 generation，集成答 Unavailable、供给不变"| EPOCH

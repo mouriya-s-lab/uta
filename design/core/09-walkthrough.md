@@ -535,7 +535,7 @@
 | 15 | 旧核心已退出但其集成/宿主进程仍存活（孤儿），新核心接管 | 孤儿进程持已退出核心的通道、可能有在途回执 | 新实例：见表下 | 不产生双写；已结束的会话化身的消息不进入核心 | §7.2；§8.3；§6.6 | §10.5 #8(c) |
 | 16 | 程序宿主崩溃（trap），或核心在 `Advance` 输出持久化前崩溃 | 程序 state 依最近已提交的 `Checkpoint`；未提交的 `Output` 整体不存在；trap 时同事务有 `ProgramHalted{Trap}` 与 `ProgramFailed` | 核心：trap → 失败抑制，只有引用它的 `load_program` `Applied` 才从最近 `Checkpoint` 重新装载；核心在 `Advance` 提交前崩溃 → 重启第 5 步从与 cursor 同事务持久化的 `Checkpoint` 重新 `Load`，重放该 cursor 之后的记录；`Load` 不比对版本：本成员可交回的 `Checkpoint` 的 `state_version` 总在它接受的集合内（`Output` 时已检查，§8.6） | 程序从 checkpoint 续跑，不重复 `Emit`；trap 后在重新装载前不运行 | §4.3；§7.5；§8.6 程序的活动集合与失败抑制 | §10.5 #16 |
 | 17 | 可选子系统 op 崩溃 | 段借用未释放 | 子系统回收借用 + H10 fence；核心记失败观察 | op 失败观察；核心与其他消费者不受影响 | §8.7；hpc-derivation/design.md §5.3/§6.5 | hpc §10 #3/#4 |
-| 18 | 可选子系统 op 已产生结果、核心在结果持久化前崩溃/断连 | 输出段在段池、未接入派生流持久点 | 核心：段池不持久，重启由 `Pooled` 重洗重算；未发布结果不半接入下游 | 结果重算；下游只见成功发布的派生流 | §8.7；hpc-derivation/design.md §1.5/§5.3 | hpc §10 #7/#13 |
+| 18 | 可选子系统 op 已产生结果、核心在结果持久化前崩溃/断连 | 输出段在段池，op 的输出值还没有随 `Advance` 的输出事务提交 | 核心：段池不持久，重启由 `Pooled` 重洗重算；op 的输出是普通节点值，只有 `outputs` 导出它时才随 `Advance` 的输出事务写上程序流（§4.5），未提交的不半接入下游 | 结果重算；下游只见已提交的程序流记录 | §8.7；hpc-derivation/design.md §1.5/§5.3 | hpc §10 #7/#13 |
 | 19 | 核心崩溃时可选子系统 op 孤儿 | op 进程存活、核心死 | 新核心 + fence：op 为孤儿由 H10 fence 回收；重连后重新握手 | 无双写；孤儿被回收 | §7.2；hpc-derivation/design.md §6.5 | hpc §10 #3 |
 | 20 | Alice（或其他下游）或解释层崩溃 | 核心订阅/程序/lane 完整；解释层无持久状态 | 核心：独立存活；下游凭续传令牌重连，解释层代它握手取 principal，读模型取 `as_of`，从已确认 cursor 之后订阅原始记录（§8.5） | 断连损失以缺失通知给出，不伪造补发 | §7.1；§8.5；H5/C5；`design/downstream/design.md` 3.3 | §10.5 #23 |
 | 21 | `EffectRequest` 记录已随 `Advance` 输出提交，处理器未执行或其 `EffectResponse` 未持久化 | `EffectRequest` 有、无 `EffectResponse` | 核心：见表下 | 每条请求最终恰一条 `EffectResponse`；写至多一张单据；`Unhandled` 不重派；读结论等观察记录被压缩不影响判定 | §6.1；§8.6；§3.4 | §10.5 #16 |
