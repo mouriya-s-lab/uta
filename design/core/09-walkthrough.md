@@ -45,7 +45,7 @@
    - 回执观察记录（观察 J，`provenance: Receipt{AttemptRef}`，记录模型，§6.5）：订单状态一条，由 IO 壳填 `attribution: FromAttempt(AttemptRef)`；回执已含成交时，每笔可识别的执行另落一条带 `execution_id` 的成交记录（§8.1“成交与订单状态的契约语义”），其归因按该条自己的关联证据填写（§5.3）。
 7. 部分成交、成交依次到达 → 集成推送带 `attribution` 的订单状态 / 成交观察记录（观察 J，§8.3、P2、P9）；成交记录带 `execution_id`，数量与价格是本笔执行的量，订单状态带累计量（§8.1）。读模型 fold 出最终成交状态（§4.4、§8.5）。
    - 对外可见：订阅者依次收到受理、部分成交、成交，字段与原生身份保真（C13）；读模型最终 = 成交。
-   - 程序看自己的结果（§6.1）：它的解释②按自己的 `EffectResponse{Drafted(ticket_id)}` 找到单据的 `Close(Prepared(p))`，再按 `p` 看这次尝试的 `VenueAccepted` 与归因到它的订单状态、成交记录，不需要另订什么。
+   - 程序看自己的结果（§6.1、§8.6 程序的输入）：它在请求流上读到自己的 `EffectResponse{Drafted(ticket_id)}`；它为该账户的作用域声明了执行事实输入，该 lane 流上的记录按位置投给它，解释②在其中按 `ticket_id` 找到单据的 `Close(Prepared(p))`，再按 `p` 认出这次尝试的 `VenueAccepted`；归因到 `p` 的订单状态与成交记录经它的观察输入到达。没有声明该作用域时，写处理器不开单，得 `NotDrafted(ScopeNotObserved)`。
 
 **扩展路径（同一笔执行经多个渠道，Q1/Q5）。**
 
@@ -232,11 +232,11 @@
 
 **扩展路径（集成登记改动）。**
 
-6. Alice 在集成登记文件里新加一个集成 Y、删去一个集成Z，核心不重读文件（§7.6）。
+6. Alice 在集成登记文件里新加一个集成 Y、删去一个集成 Z，核心不重读文件（§7.6）。
    - 运维 `restart_integration(Y)`：核心重读文件中 Y 的条目，`Applied` 带文件 hash（采纳），拉起 Y 的进程并握手（§7.2 第 3 步）。
    - 运维 `restart_integration(Z)`：Z 已不在文件里，得 `Rejected(UnknownIntegration)`；Z 本实例的运行照常继续。
-   - 下一次启动：第 3 步的采纳记录不含 Z；Z 没有运行、没有会话，`health()` 不再列它；它的流记录、声明历史、健康观察与订阅都在，核心不为它补写记录；新的读与订阅项对它得“来源未登记”（§8.5）。
-   - 对外可见：Z 显示为已移除的来源，历史与订阅保留（`design/downstream/design.md` 第 5 节）。
+   - 下一次启动：第 3 步的采纳记录不含 Z；Z 没有运行、没有会话，`health()` 不再列它；它的流记录、声明历史、健康观察与订阅都在，核心不为它补写记录；新的一次性读与供给项对它得“来源未登记”；以只投递项或执行事实 selector 订它历史上声明过的流与作用域仍被接纳，从 `from` 收到已 append 的记录（§8.5 订阅组）。
+   - 对外可见：Z 显示为已移除的来源，历史与订阅保留，历史仍可订阅审计（`design/downstream/design.md` 第 5 节）。
 
 **扩展 / 失败路径（重载失败）。**
 
@@ -244,7 +244,7 @@
 - 重载失败保留上一有效版本，控制记录 `Rejected(reason)`（§7.6、§8.5）。
 - 对外可见：控制记录可读；生效配置版本 hash 未变。
 
-**走通**（验收 §10.5 #36、#81、#82）。
+**走通**（验收 §10.5 #36、#79、#80）。
 
 ### W9（Q20）双实例
 
@@ -271,7 +271,7 @@
    - 有进程得不到 OS 确认退出时，原持有者不写结束锚点、不释放 fence，停止以失败报告；之后它被外力结束，按变体 2 接管。
    - 对外可见：受控停止之后没有孤儿进程；每个在途调用都有结果；实例表显示上一实例有结束锚点。
 
-**走通**（验收 §10.5 #80、#83）。
+**走通**（验收 §10.5 #78、#81）。
 
 ### W10（Q25）程序超预算隔离
 
@@ -290,7 +290,7 @@
    - 另一变体：活动集合里的程序值文件被作者改过，重启时内容 hash 与 `Applied` 所钉的不符 → 不装载，append `ProgramHalted{ContentUnavailable}` 与 `ProgramFailed`；运维以 `load_program` 钉住新内容后装载。
    - 对外可见：程序显示为“失败，待重新装载”（附原因），重启不会把它悄悄装回来，也不会装入另一份内容。
 
-**走通**（三 OS 预算与隔离验收 §10.5 #15；状态跨重启验收 §10.5 #16；活动集合与失败抑制验收 §10.5 #84）。
+**走通**（三 OS 预算与隔离验收 §10.5 #15；状态跨重启验收 §10.5 #16；活动集合与失败抑制验收 §10.5 #82）。
 
 ### W11（Q26）单据并发编辑与 SendBack
 
@@ -508,7 +508,7 @@
 6. X 上一张单据送审、另一次尝试进入 `Undetermined`：两条执行事实经解释层的执行事实订阅到达，翻成“待审事项”“结果未知，正在核实，请勿重下”；取证确立结果的 `ResolutionEvidence` 到达时翻成“已确认发生 / 未发生”。运维对那次尝试 `abandon` 时，`Abandoned` 到达，翻成“已放弃跟踪，结果未知”；之后若被动归因或 `retry_reconciliation` 补上结果，再翻成该结果，放弃记录仍在。待审事项此刻是否偏离，解释层在呈现时读 `tickets`（§8.5）。
    - 对外可见：推送经执行事实订阅，重连后从已确认 cursor 续，没有投递损失。
 
-**走通**（验收 §10.5 #25–#29、#48、#49）。
+**走通**（验收 §10.5 #25–#29、#47、#48）。
 
 ## 9.2 崩溃矩阵（#1–#21）
 
@@ -522,10 +522,10 @@
 | 2 | `Prepared` 已持久、`SendBarrier` 未持久 | `Prepared` 有、无 `SendBarrier` | IO 壳：确未发出 → 过发出前门（§6.5）：`deadline` 未过且该集成会话已建立、意图对会话有效能力可执行，则 durable append `SendBarrier` 后调用写操作；会话或能力条件不成立则等待（不 append 记录）；`deadline` 已过则 append `Expired(deadline)`，等待结束 | 崩溃窗口不产生 venue 调用；不误升 `Undetermined`；末态为“已发”（可能先等待）或 `Expired` | §6.7；不变量 §6.9-8 | §10.5 #8(a)/#14 |
 | 3 | `SendBarrier` 已 fsync、写调用未发 | `SendBarrier` 有、无后继 | IO 壳：可能已发出 → append `Undetermined(CrashWindow)` 进对账 | 尝试 = `Undetermined`；lane 阻塞；无第二 `SendBarrier` | §6.7；不变量 §6.9-1/8 | §10.5 #8(b)(c) |
 | 4 | 写调用已发、回执未到 | `SendBarrier` 有、无回执 | IO 壳：同 #3，对账驱动按渠道取证收敛 | `Undetermined` → found/absent，或停等后由 principal 放弃跟踪 | §6.6；C1/C2 | §10.5 #3/#17 |
-| 5 | 回执或 `NotSent` 已到、未 append | `SendBarrier` 有、结果丢在内存 | IO 壳：视为无后继 → `Undetermined(CrashWindow)` → 对账（按键回读会重得同一状态；集成当时未交出的，按键回读在唯一期内得 `Absent`） | `Undetermined` 经 `ResolutionEvidence{ByKey, Found / Absent}` 收敛；`Evidence` 在执行 J，该回应的观察记录在观察 J | §6.6；§3.4（读可重试） | §10.5 #3/#17/#61 |
+| 5 | 回执或 `NotSent` 已到、未 append | `SendBarrier` 有、结果丢在内存 | IO 壳：视为无后继 → `Undetermined(CrashWindow)` → 对账（按键回读会重得同一状态；集成当时未交出的，按键回读在唯一期内得 `Absent`） | `Undetermined` 经 `ResolutionEvidence{ByKey, Found / Absent}` 收敛；`Evidence` 在执行 J，该回应的观察记录在观察 J | §6.6；§3.4（读可重试） | §10.5 #3/#17/#59 |
 | 6 | 记录已 append 提交，投递/cursor 推进前崩溃 | 记录已提交、cursor 未推进 | 核心：`fold_state` 重建；订阅者从已确认 cursor 之后重收，未确认的记录可重复可见，按 `LogPosition` 去重 | 记录不丢；重复只出现在未确认区间 | §4.2；§7.4 | — |
 | 7 | 对账取证中途 | 部分 `ResolutionEvidence` 已 append | IO 壳：取证是读副作用、可重放；等待仍 `Active` 者继续按渠道取证（下一渠道由 fold 重建） | 收敛进度不丢；渠道穷尽仍 `Inconclusive` 停等 | §6.5；§6.6 | §10.5 #17 |
-| 8 | `abandon` 进行中：IO 壳已停发新取证、在途取证已完成或未完成，`Abandoned` 未 append | 在途取证已提交的 `ResolutionEvidence` 有或无；无 `Abandoned` | IO 壳：见表下 | 不出现“放弃中”的中间态；尝试仍 `Active`、仍占阻塞头；principal 未收到返回，可重发 `abandon` | §6.6 放弃跟踪；§6.7 | §10.5 #60 |
+| 8 | `abandon` 进行中：IO 壳已停发新取证、在途取证已完成或未完成，`Abandoned` 未 append | 在途取证已提交的 `ResolutionEvidence` 有或无；无 `Abandoned` | IO 壳：见表下 | 不出现“放弃中”的中间态；尝试仍 `Active`、仍占阻塞头；principal 未收到返回，可重发 `abandon` | §6.6 放弃跟踪；§6.7 | §10.5 #58 |
 | 9 | 观察 append 中途 | 半写事务未提交 | 核心：单写者原子回滚；半写不可见；`fold_state` 重建 | 无半条记录；订阅者按 cursor 续接 | §4.1；§7.4 | §10.5 #8(d) |
 | 10 | 派生 DAG 重算中途 | 派生记录部分 append（`RetractableDelta`） | 核心：派生侧可重算，未提交贡献重建；无自反馈环 | 派生结果最终一致；可撤回可压缩 | §4.1；§4.3 | — |
 | 11 | 快照写入中途 | 快照部分写、原记录完整 | 核心：快照仅加速；半写快照丢弃，从保留边界 `fold_state` 重建 | 不改 append-only 语义；重启延迟增大 | §7.4；§7.5 | — |
@@ -565,7 +565,7 @@
 
 **可进验收（§10.5）的可测项：**
 
-- #2/#3 的 fsync 崩溃注入，证明“`Prepared` 无 `SendBarrier` 确未发、`SendBarrier` 无后继升 `Undetermined`”（§10.5 #8/#14）；#8 的崩溃注入证明放弃跟踪没有中间态（§10.5 #60）；
+- #2/#3 的 fsync 崩溃注入，证明“`Prepared` 无 `SendBarrier` 确未发、`SendBarrier` 无后继升 `Undetermined`”（§10.5 #8/#14）；#8 的崩溃注入证明放弃跟踪没有中间态（§10.5 #58）；
 - #3 的 fixture venue 调用 ≤ 1；
 - #9 半写不可见、无半条记录；
 - #1 同事务原子回滚；

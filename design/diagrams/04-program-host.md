@@ -14,7 +14,7 @@ sequenceDiagram
   participant DB as SQLite（同一事务）
   participant O as 出站请求处理器
   participant I as 集成
-  J->>C: 程序 cursor 之后有新记录 / frontier 推进
+  J->>C: 程序 cursor 之后有新记录
   C->>H: Advance(records, to = cursor')
   Note over H: 解释①：nodes 增量 DAG，cutoff<br/>解释②：rules fold → On / Require / Expire / Emit
   H-->>C: Output{effects, derivations, checkpoint{bytes, state_version}}
@@ -24,7 +24,7 @@ sequenceDiagram
     Note over C: 程序进入失败抑制，本批输出不落
   else 正常
     C->>DB: BEGIN
-    C->>DB: append EffectRequest 记录（执行 J）× effects
+    C->>DB: append EffectRequest 记录（执行 J，该程序的请求流）× effects
     C->>DB: append 派生记录（观察 J，程序流）× derivations
     C->>DB: 写 Checkpoint + 程序 cursor = cursor'；登记 cursor 引用
     C->>DB: COMMIT
@@ -33,7 +33,7 @@ sequenceDiagram
     alt 读处理器（一次执行，不自行重试）
       alt 未调用集成（按 §8.2 read 的判定顺序：来源未登记 / 从未有声明 / 流未声明 / 最近声明 read 为 Unsupported 或 Unknown / 请求不合 schema / 来源无会话）
         O->>DB: EffectResponse{request: pos, NotCalled(reason)}（不调用集成、不 append 观察记录）
-        Note over C: 程序决策半边从自己请求的 EffectResponse 看到它（§6.1）
+        Note over C: 程序的解释②在自己的请求流上看到这条 EffectResponse（§6.1）
       else 调用
         O->>I: read(stream, request, range)
         alt Answered（含空）或 Refused
@@ -47,7 +47,12 @@ sequenceDiagram
         end
       end
     else 写处理器
-      O->>DB: 同事务 Draft{by: 装载 principal, basis ∋ pos} + SubmitForDecision + EffectResponse{Drafted(ticket)}（D5.1）
+      alt 意图的 (来源, 作用域) 不在程序声明的执行事实输入之内
+        O->>DB: EffectResponse{NotDrafted(ScopeNotObserved)}（请求流；不开单）
+      else 在声明之内
+        O->>DB: 同事务 Draft{by: 装载 principal, basis ∋ pos}（lane 流）+ SubmitForDecision + EffectResponse{Drafted(ticket)}（请求流）（D5.1）
+        Note over C: 单据与尝试的记录经程序声明的执行事实输入投给它，解释②按 ticket_id 与 p 认出自己的
+      end
     else 未注册
       Note over O: Unhandled：记录留在日志，无 EffectResponse，不重派
     end
@@ -56,7 +61,7 @@ sequenceDiagram
 
 读法：
 
-- 程序看到的只有位置之后的记录与 frontier；它的输出是值（`EffectRequest`、派生记录、`Checkpoint`），不是调用。
+- 程序看到的只有 cursor 之后的记录；它的输出是值（`EffectRequest`、派生记录、`Checkpoint`），不是调用。
 - 事务边界在 `COMMIT`：`Emit` 是否"发生"以 `EffectRequest` 记录是否持久为准；处理器执行在其后，通过位置引用与请求关联（D4.3）。
 - `fetch.bars`（读）与 `trade.place`（写）对程序是同一构造子；差别在注册表。
 
@@ -74,7 +79,7 @@ stateDiagram-v2
   state "Reset 处理中" as RST
   Loading --> RST : 核心 Load 前比对：checkpoint 的 state_version 不被程序接受 → 不携带装载，Reset(StateVersionMismatch)；替换时 Reset(Replace)
   Loading --> RST : load_program(…, cold_start = true) → 不携带 checkpoint 装载，Reset(Operator)
-  RST --> Running : append ProgramReset；程序流新 epoch Gap{Source, program_upgrade}；按 H9 回填
+  RST --> Running : append ProgramReset，同事务按各输入声明的起点重建全部输入 cursor（含请求流）；程序流新 epoch Gap{Source, program_upgrade}；按 H9 回填
   Running --> Running : Advance 循环（D4.1）
   Running --> Halted : 超预算 / trap（宿主异常退出）→ 同事务 ProgramHalted + ProgramFailed，提交后终止宿主、OS 确认退出后清除登记
   Running --> Stopped : 受控停止第 2 步 → Unload；活动集合不变，下一实例第 5 步重新 Load
@@ -104,14 +109,16 @@ stateDiagram-v2
 
 ```mermaid
 flowchart TB
-  ER[("EffectRequest 记录 @pos（执行 J，永存）<br/>effect_kind · basis · key · 载荷")]
+  ER[("EffectRequest 记录 @pos（执行 J，该程序的请求流，永存）<br/>effect_kind · basis · key · 载荷")]
   REG{"effect_kind 注册为？"}
   ER --> REG
   REG -->|"读处理器"| RD["一次执行：按 §8.2 read 的判定顺序"]
   RD -->|"Answered（含空）/ Refused"| R1["同事务：item 观察记录 × N + 读结论记录，OneShot{origins ∋ Request(pos), request}（观察 J，可压缩）<br/>+ EffectResponse{pos, Concluded(结论)}（执行 J）"]
   RD -->|"Unavailable"| R2["同事务：Gap{Channel}（观察 J）<br/>+ EffectResponse{pos, Unavailable(gap)}"]
   RD -->|"未调用集成"| R3["EffectResponse{pos, NotCalled(reason)}（不支持 / 未确认 / 无会话（含从未有声明）/ 请求不合法 / 来源未登记）"]
-  REG -->|"写处理器"| WR["同事务 Draft{responsible = 装载 principal, basis ∋ pos}<br/>+ SubmitForDecision + EffectResponse{pos, Drafted(ticket)}"]
+  REG -->|"写处理器"| WSC{"意图的 (来源, 作用域) 在程序声明的执行事实输入之内？"}
+  WSC -->|"否"| WN["EffectResponse{pos, NotDrafted(ScopeNotObserved)}（请求流；不开单）"]
+  WSC -->|"是"| WR["同事务 Draft{responsible = 装载 principal, basis ∋ pos}<br/>+ SubmitForDecision + EffectResponse{pos, Drafted(ticket)}（请求流）"]
   REG -->|"未注册"| UH["Unhandled：留在日志，无 EffectResponse"]
   subgraph RESTART["重启（§7.2 第 4 步）：fold 出已注册且无 EffectResponse 的 EffectRequest"]
     Q1{"有 EffectResponse{request = pos}？"}

@@ -110,7 +110,7 @@ flowchart TB
   Q -->|"宿主进程异常退出（trap）"| T1["核心终止宿主，append ProgramFailed{Trap}<br/>程序 Failed，等 load_program"]
   Q -->|"核心在 Advance 输出 COMMIT 前"| T2["整批不存在；重启从最近 Checkpoint Load<br/>重放 cursor 之后同一批记录，不重复 Emit（#16）"]
   Q -->|"核心在 COMMIT 后、EffectResponse 持久化前"| T3["fold 出无 EffectResponse 的已注册请求（D4.3）<br/>读：重新执行一次；写：重新开单（Draft 与 EffectResponse{Drafted} 同事务，不存在有 Draft 无响应）（#21）"]
-  Q -->|"Load 前比对：checkpoint 的 state_version 不被程序接受"| T4["不携带 checkpoint 装载，Reset(StateVersionMismatch)：ProgramReset 记录<br/>程序流新 epoch Gap{Source, program_upgrade}，按 H9 回填"]
+  Q -->|"Load 前比对：checkpoint 的 state_version 不被程序接受"| T4["不携带 checkpoint 装载，Reset(StateVersionMismatch)：ProgramReset 记录，同事务按声明的起点重建全部输入 cursor<br/>程序流新 epoch Gap{Source, program_upgrade}，按 H9 回填"]
   Q -->|"派生 DAG 重算中途（#10）"| T5["持久：派生记录部分 append（RetractableDelta）<br/>恢复：派生侧可重算，未提交贡献重建；无自反馈环 → 最终一致"]
   Q -->|"快照写入中途（#11）"| T6["持久：快照部分写、原记录完整<br/>恢复：半写快照丢弃，从保留边界 fold_state 重建；只增加重启延迟"]
 ```

@@ -46,12 +46,20 @@ Emit(EffectRequest { effect_kind: EffectKind, payload: Bytes, basis: Basis })
 - 每条被处理的 `EffectRequest` 恰有一条执行事实记录 `EffectResponse{request: LogPosition, outcome}`。
 - `outcome` 按处理器分：
   - 读处理器：`Concluded(conclusion: LogPosition)`（读结论记录，含零条结果与上游拒绝）| `Unavailable(gap: LogPosition)` | `NotCalled(reason)`，`reason ∈ {Unsupported, Unconfirmed, NoSession, InvalidRequest, UnknownTarget}`（§8.5 一次性读；来源从未有过声明版本与此刻无已建立会话同为 `NoSession`，对应 §8.5 的 `Unavailable{source_state}`）；
-  - 写处理器：`Drafted(ticket_id)` | `NotDrafted(Malformed{reason})`。
+  - 写处理器：`Drafted(ticket_id)` | `NotDrafted(Malformed{reason} | ScopeNotObserved)`。
 - `EffectResponse` 与产生它的读结论记录 / `Gap` / `Draft` 同一事务 append；`NotCalled` 与 `NotDrafted` 没有伴随记录，`EffectResponse` 单独 append。
+- **落点**：`EffectRequest` 与它的 `EffectResponse`（全部结果，含 `NotCalled` 与 `NotDrafted`）都在该程序的**请求流**上：按程序 id 各成一条的执行事实流。它们是 UTA 关于这个程序自己生命周期的事实，不属任何来源、lane 或作用域，所以没有有效 lane 或未登记来源的请求也有落点（§8.5 执行事实流）。
 - 理由：观察记录可压缩（§2.4），`EffectRequest` 永存（§7.5）；“是否已处理”必须能从与请求同寿命的事实重建。
 - `Concluded` 引用的读结论记录落到保留边界下后，`EffectResponse` 仍成立，不钉住保留。
 - `Unhandled` 请求没有 `EffectResponse`，也不重派。
-- **程序看得到自己的请求的结果** [设计]：程序解释②可以匹配该程序自己发出的请求的 `EffectResponse`，以及从它经位置可达的执行事实：`Drafted(ticket_id)` 所指单据的记录（含 `Close` 的结局；放行时 `Close(Prepared(p))` 给出尝试位置 `p`），与 `p` 这次尝试的记录（`SendBarrier`、回执、`NotSent`、`Undetermined`、`ResolutionEvidence`、`Expired`、`Abandoned`，§6.5）。它们与 `EffectResponse` 同属该程序自己的请求在效应侧留下的事实，决策半边本就是对日志的 fold，不另设输入种类或订阅。解释①的节点不消费它们。理由：未调用与 `NotDrafted` 都不产生观察记录，程序只有经响应才看得到它们，而伪造观察记录去承载它们会把效应侧结论放进观察宇宙；程序若要组合多次写（例如先撤单、确认后再下单，§6.2 改单），它自己的尝试有没有结局只能从这些事实得知。撤单的回执或 `Found` 只说明撤单请求到达，不说明目标订单已结束：目标订单的状态要从订单状态观察读（§6.6 撤单的取证）。
+- **程序看得到自己的请求的结果** [设计]：程序只经它声明的输入得知结果，与其他输入同一套 cursor（§4.2、§8.6）：
+  - 它的请求流是隐含的输入：同一条流上先有它自己的 `EffectRequest`（位置由此得知；程序按自己放进载荷的内容认出它们），后有指回这些位置的 `EffectResponse`，同流有序；
+  - 要看写请求之后的单据与尝试，程序在值树里声明执行事实输入 `(来源, WriteScope?)`，与执行事实订阅同一个 selector（§8.5 订阅组）：该作用域各 lane 流上的单据记录（含 `Close` 的结局；放行时 `Close(Prepared(p))` 给出尝试位置 `p`）与 `p` 这次尝试的记录（`SendBarrier`、回执、`NotSent`、`Undetermined`、`ResolutionEvidence`、`ReconciliationReopened`、`Expired`、`Abandoned`，§6.5）按位置投给它；
+  - 解释②在程序内按自己的锚点（`Drafted(ticket_id)` 所指单据、`Close(Prepared(p))` 所给的 `p`）挑出属于自己的事实；宿主与投递不做关联，只按位置搬运。请求流与 lane 流之间不定投递顺序（§8.5）：`Draft` 与 `Drafted` 同事务提交，程序可能先看到单据记录、后看到指向它的 `Drafted`，解释②按 `ticket_id` 两种次序都能匹配。解释①的节点不消费这些事实。
+  - **构造规则**：写请求意图的 `WriteLaneKey` 所属的 `(来源, 作用域)` 不被该程序声明的任何执行事实输入选中时，写处理器不开单，记 `NotDrafted(ScopeNotObserved)`（在 `Malformed` 判定之后）。它只由 UTA 自己的事实（程序值与请求锚点）判定，所以程序不会写进一个自己看不到结果的作用域。
+  - 理由：未调用与 `NotDrafted` 都不产生观察记录，程序只有经响应才看得到它们，而伪造观察记录去承载它们会把效应侧结论放进观察宇宙；程序若要组合多次写（例如先撤单、确认后再下单，§6.2 改单），它自己的尝试有没有结局只能从这些事实得知。撤单的回执或 `Found` 只说明撤单请求到达，不说明目标订单已结束：目标订单的状态要从订单状态观察读（§6.6 撤单的取证）。
+  - 代价：声明的作用域里其他 principal 的单据与尝试同样投给程序，每批都唤起一次 `Advance`、计入它的预算；这是接受的代价。
+  - 不选：**宿主按锚点动态关联、只投递程序自己的单据与尝试**：宿主要按已看到的 `EffectResponse` 维护一份可达集合决定投递资格，是一个新的关联索引机制（§0.1“机制即信号”）；**为程序另设结果订阅种类**：同一事实两条投递路径。
 
 **请求与响应的关联是引用，不是事务。** `EffectRequest` 记录随程序 `Advance` 输出持久化（§8.6），处理器在其后执行。核心重启时 fold 出**无 `EffectResponse`** 的已注册请求（§9.2 #21）：
 
@@ -480,7 +488,7 @@ trait Rule {
   - 任一停下的点：该单据 `deadline` 的计时器到期（过期步对停在任一点的 `AwaitingDecision` 单据生效，见“过期步”），`reload_config(rules)`。
 - **原子性。** 一步产生的全部记录同一事务 append；放行时 `Prepared` 与 `Close(Prepared)` 同事务（§6.2）。没有“记录 + 状态表”的双写。
 - **恢复。** 重启后对每张 `AwaitingDecision` 单据按记录重新求值（§7.2 第 4 步）：停在哪一步、等什么，都由记录与当时的会话、能力、时钟重新得出。
-- 理由：这些成员都是 UTA 自己的记录的函数；另存一份就是在源头之外的副本，它的写者（STS）看不到改变它的全部输入（阻塞头由 IO 壳的记录改变），会陈旧而误放或误挡（§0.1 近处副本）。没有实测的性能需要，不加缓存；需要时按近处副本的纪律另加，写清派生、失效与刷新（会推翻它的观测见 §10.4 #29）。
+- 理由：这些成员都是 UTA 自己的记录的函数；另存一份就是在源头之外的副本，它的写者（STS）看不到改变它的全部输入（阻塞头由 IO 壳的记录改变），会陈旧而误放或误挡（§0.1 近处副本）。没有实测的性能需要，不加缓存；需要时按近处副本的纪律另加，写清派生、失效与刷新（会推翻它的观测见 §10.4 #28）。
 - 不选：**持久化 `RuleState` 表并与决策同事务更新**：两个源头（表与记录的 fold）并存，IO 壳 append 的记录不经 STS 就改变阻塞头，表随之陈旧，还要一个没有归属的唤醒者。
 
 ### 顺序固定链：授权 → 输入约束 → 审批 → lane → 过期
@@ -785,7 +793,7 @@ venue 对我方写的响应是执行事实：C13 原始负载完整保留，执�
 
 - 编码随 IDL 发布（§8.2），是 `attempt_position` 的定长文本编码：不取哈希、不截断，所以不同尝试的键不同。
 - 集成只在上游在该作用域逐字接受这一编码的每个值（字符集、长度）时声明订单键或请求键，否则声明 `None`（§8.3）。键装不进上游约束时不压缩、不改写，而是没有键。
-- 键登记（§8.1）是 `SendBarrier` 所记键到 `AttemptRef` 的唯一索引。编码单射只保证 UTA 自己的尝试互不冲突，**不证明**上游一条带同样字节的记录属于这次尝试：同一作用域里别的写者可以发同样的字节，上游也可以在它自己的周期后复用键。核心因此从不凭键字节归因，也从不断定一条记录是 `External`；按键归因由集成在它声明的键作用域与唯一期内填 `FromAttempt`，其外是 `Unattributed`（§8.3）。同一作用域没有别的写者使用这一编码，是运维义务，UTA 观察不到它被违反（§10.4 #26）。
+- 键登记（§8.1）是 `SendBarrier` 所记键到 `AttemptRef` 的唯一索引。编码单射只保证 UTA 自己的尝试互不冲突，**不证明**上游一条带同样字节的记录属于这次尝试：同一作用域里别的写者可以发同样的字节，上游也可以在它自己的周期后复用键。核心因此从不凭键字节归因，也从不断定一条记录是 `External`；按键归因由集成在它声明的键作用域与唯一期内填 `FromAttempt`，其外是 `Unattributed`（§8.3）。同一作用域没有别的写者使用这一编码，是运维义务，UTA 观察不到它被违反（§10.4 #25）。
 - 意图不带键：`EffectRequest` 没有键字段（§6.1），键只在发出时由核心产生。
 
 尝试是线性阶段链：
@@ -825,7 +833,7 @@ venue 对我方写的响应是执行事实：C13 原始负载完整保留，执�
 
 **取证渠道与轮次。**
 
-- 一次尝试的取证渠道集取自当前会话有效能力（§7.5）：当前声明的写证明与 `SendBarrier` 所记的写操作、键角色都相同时，是它声明的渠道；否则为空，尝试停等（§6.6）。渠道顺序固定（§6.6）。渠道集按当前能力求，所以某次尝试停等之后，能力变更使集合出现本轮尚未取证的渠道，它就是下一渠道。
+- 一次尝试的取证渠道集取自当前会话有效能力（§7.5）：会话有效声明的写证明与 `SendBarrier` 所记的写操作、键角色都相同时，是它声明的渠道；否则为空，尝试停等（§6.6）。渠道顺序固定（§6.6）。渠道集按当前能力求，所以某次尝试停等之后，能力变更使集合出现本轮尚未取证的渠道，它就是下一渠道。
 - 本轮已取证渠道 = `round` 等于当前轮（最近一条 `ReconciliationReopened` 的位置）的 `ResolutionEvidence`。因此“渠道穷尽”与“下一渠道”都由 fold 重建（§9.2 #7）。
 - IO 壳自动取证只为等待是 `Active` 的 `Undetermined`；等待是 `Abandoned` 的尝试只在 principal 的 `retry_reconciliation` 开出的那一轮里取证，渠道穷尽即停（§6.6）。
 

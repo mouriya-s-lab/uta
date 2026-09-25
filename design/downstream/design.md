@@ -124,7 +124,7 @@ flowchart LR
 | 会话 Established | 在线 |
 | 会话 Halted{Refused} | 需要处理：凭据或配置被来源拒绝 |
 | 会话 Halted{ProjectionInvalid / ContractIncompatible} | 需要处理：集成不合格（需重启集成） |
-| 来源不在核心采纳的集成登记里（登记被移除，§7.2） | 来源已移除：不再连接，已有的历史与订阅保留 |
+| 来源不在核心采纳的集成登记里（登记被移除，§7.2） | 来源已移除：不再连接，已有的历史与订阅保留；它历史上提供过的数据与订单记录仍可订阅查阅，新的读取与需要来源推送的订阅不再受理 |
 | 一次性读 `Unsupported` | 该来源 / 账户不支持此数据 |
 | 一次性读 `Unconfirmed` | 能力未确认，暂不能读取 |
 | 一次性读 `Unavailable{source_state}` | 按来源状态：来源离线，正在重连 / 需要处理（见连接状态）；来源此刻没有连接（或从未连接过）时一律答这一项，先于“不支持”“能力未确认”，这时是否支持要等来源连上后才知道 |
@@ -198,4 +198,4 @@ flowchart LR
 - 不持有状态、不做决策、不重试写、不补全缺失。
 - 不含业务（§0.1）：仓位计算、组合下单、策略都在下游或程序里。
 
-**合格。** 解释层合格，当且仅当通过 §10.5 #23 的每一条。其中泄露检查用的**核心概念词表**是：§11.1 规范词表里用反引号写出的类型、记录、状态与字段名（如 `LogPosition`、`AttemptRef`、`Undetermined`、`Abandoned`、`NotSent`、`Verdict`、`WriteLaneKey`、`Snapshot`）；§11.3 同名异义表里各概念的名字；本文第 5 节“核心里”一列出现的全部名字（记录、状态、变体、字段与操作名，如 `SendBarrier`、`Prepared`、`bypass_lane`、`CapabilityNotEstablished`、`Unmapped`）；加上 cursor、frontier、retention、epoch、链、单据版本、principal。检查对象是全部命令帮助与 fixture 驱动下的全部输出；对外概念（本文第 2 节）与公共、扩展 schema 的字段名不在词表内。
+**合格。** 解释层合格，当且仅当通过 §10.5 #23 的每一条。其中泄露检查用的**核心概念词表**是：§11.1 规范词表里用反引号写出的类型、记录、状态与字段名（如 `LogPosition`、`AttemptRef`、`Undetermined`、`Abandoned`、`NotSent`、`Verdict`、`WriteLaneKey`、`SessionEpoch`、`dispatch_end`、`Snapshot`）；§11.3 同名异义表里各概念的名字；本文第 5 节“核心里”一列出现的全部名字（记录、状态、变体、字段与操作名，如 `SendBarrier`、`Prepared`、`bypass_lane`、`CapabilityNotEstablished`、`Unmapped`）；加上 cursor、retention、epoch、序号覆盖、覆盖检查点、最近声明、会话有效声明、采纳集合、请求流、链、单据版本、principal。检查对象是全部命令帮助与 fixture 驱动下的全部输出；对外概念（本文第 2 节）与公共、扩展 schema 的字段名不在词表内。

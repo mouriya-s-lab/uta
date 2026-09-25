@@ -195,7 +195,7 @@ sequenceDiagram
   I->>OJ: 观察记录（attribution FromAttempt(p)，cumulative_filled_quantity；成交记录带 execution_id）
   OJ-->>A: 依次投递：受理、部分成交、成交（字段与原生身份保真；orders 对同一 execution_id 只计一次）
   A->>A: read_model(orders) 或自 fold → 最终 = 成交
-  H->>H: 解释②经 EffectResponse{Drafted(ticket)} → Close(Prepared(p)) → p 的记录看到自己的结果
+  H->>H: 解释②在请求流上读到 EffectResponse{Drafted(ticket)}，在声明的执行事实输入上按 ticket_id → Close(Prepared(p)) → p 的记录认出自己的结果
 ```
 
 读法：从 `Emit` 到 `VenueAccepted` 是一串各自原子的事务（D1.5）、1 次 fsync 屏障、1 次 venue 写调用；此后一切都是观察推送。

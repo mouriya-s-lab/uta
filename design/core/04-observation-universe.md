@@ -98,7 +98,7 @@ fn compact_below_retention<Record, D: RetractableDelta>(journal: &mut Journal<Re
 - **确认 = 消费方已处理**：消费者向核心提交“已处理到 `LogPosition` p”，核心把 cursor 推进到 p。已投递未确认的记录是消费者内存里的事。
 - **重投**：确认前崩溃或断连后，核心从已确认 cursor 之后重投，所以同一记录可能被同一订阅者重复看到。重复只发生在未确认区间；消费者按 `LogPosition` 去重，每条记录的 `(StreamId, Seq)` 唯一（§2.3）。这是投递去重，只认同一条记录；同一笔执行经不同渠道到达是不同的记录，它们按执行身份计数（§8.1“成交与订单状态的契约语义”），与投递去重互不替代。
 - **已确认区间不重投**。退回 cursor 是显式控制动作（§8.5），不是恢复路径。
-- **程序订阅同样受此约束**：程序状态 `Checkpoint` 与其 cursor 同事务持久化（§7.5、§8.6）。因此程序重启后从其 checkpoint 对应的 cursor 续读，不会看到已折入状态的记录。
+- **程序订阅同样受此约束**：程序的输入（观察流、声明的执行事实流与它自己的请求流，§8.6 程序的输入）各有一个 cursor 位置，程序状态 `Checkpoint` 与这组 cursor 同事务持久化（§7.5、§8.6）。因此程序重启后从其 checkpoint 对应的 cursor 续读，不会看到已折入状态的记录。
 
 ## 4.3 派生 DAG 与程序解释①
 
@@ -118,7 +118,7 @@ struct Program { nodes: Vec<DerivationNode>, rules: Vec<DecisionStep>, state: Ve
 - `nodes` → 增量 DAG，仅重算受影响节点，并通过 cutoff 截断。
 - 输出写回派生侧 `Journal`。alert 本质上是派生观察，与外部观察同形。
 - **增量在节点粒度**（哪些节点因输入变化重跑），不在算法内部。一个节点被触发时可以看它声明的完整窗口，输出相等时 cutoff 仍成立。记录渐进不要求算法渐进。[证据：fp-01 M3 Mu `Work_`；fp-05 案例 7 Incremental；域 B3/P2]
-- **输入 = 位置推进**：cursor 之后的记录，加上 `await-all` 输入上来源证据证明的覆盖（§4.2）。程序可见 gap 与两种时间。
+- **输入 = 位置推进**：`required_inputs` 各流 cursor 之后的记录，加上 `await-all` 输入上来源证据证明的覆盖（§4.2）。程序可见 gap 与两种时间。解释②另读声明的执行事实流与该程序的请求流（§6.1、§8.6 程序的输入），解释①的节点不消费它们。
 - **输出 = (effect 请求集, 派生记录集)**：锚点经处理器成为 Intent 或读结果。
 
 **`Window` 与 `Pooled{window}`。** 两者都以窗口为入口，但语义与物化策略不同：

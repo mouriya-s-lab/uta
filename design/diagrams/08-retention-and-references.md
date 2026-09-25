@@ -53,7 +53,7 @@ flowchart TB
   MONO -->|"否"| RJ0["Rejected(NotForward)"]
   MONO -->|"是"| MIN["核心算该流已登记引用的最早位置 min(s)"]
   MIN --> CMP{"to(s) ≤ min(s)？"}
-  CMP -->|"否"| RJ["Rejected(ReferencedBelow{min})<br/>要越过只能先让持有者解除：Attempt 链 Resolved / 程序推进 checkpoint 或 unload_program"]
+  CMP -->|"否"| RJ["Rejected(ReferencedBelow{min})<br/>要越过只能先让持有者解除：该尝试等待结束（结果确立、Expired、Abandoned）/ 程序推进 checkpoint 或 unload_program"]
   CMP -->|"是"| WIN{"to(s) ≤ 该流配置窗口下界？"}
   WIN -->|"否"| RJ2["Rejected(InsideWindow{bound})"]
   WIN -->|"是，且各流都通过"| APPLY["写各流新边界；控制记录 Applied(position)"]
@@ -79,7 +79,7 @@ flowchart TB
   D1 -->|"否"| BR["BeyondRetention(pos)"]
   D1 -->|"是"| D2{"该位置的贡献被撤回？"}
   D2 -->|"是"| RT["Retracted(pos)"]
-  D2 -->|"否"| D3{"同 epoch 且 Seq ≥ 该流完备位置 − Lag？<br/>完备位置 = 核心最近一次推进该流完备进度时的流末位置；Lag 以 Seq 距离计<br/>Lag = 0：不早于最近一次完备位置；epoch 早于当前 → Stale"}
+  D2 -->|"否"| D3{"同 epoch 且依据之后该流已提交的记录数 ≤ Lag？<br/>Lag 以同一 StreamId 上的 Seq 距离计；只比较核心自己的位置<br/>Lag = 0：依据位置就是该流当前流末；epoch 早于当前 → Stale"}
   D3 -->|"否"| ST["Stale(Lag)"]
   D3 -->|"是"| DOK["有效"]
   EOK --> AGG
@@ -91,6 +91,6 @@ flowchart TB
   ST --> AGG
 ```
 
-读法：`Lag = 0`（缺省）时 `Fresh` 是"决定至少看到了所有之前不再变的记录"；策略声明正 `Lag` 时允许落后完备位置至多 `Lag` 个 `Seq`。空 `basis` 空真为 `Fresh`，此时能不能放行由第二层必要项决定（D5.5）。
+读法：`Lag = 0`（缺省）时 `Fresh` 是"决定看到了核心此刻已有的该流全部记录"；策略声明正 `Lag` 时允许依据之后该流再提交至多 `Lag` 条记录。判定不读完备进度，也不读收到时间：完备是来源的性质，本门不用它（§5.2）。空 `basis` 空真为 `Fresh`，此时能不能放行由第二层必要项决定（D5.5）。
 
-核出：默认窗口语义已改为"不早于最近一次完备位置"（§5.2，`Lag = 0` 限定）；逐位置顺序与集合值的严重度取法原文未写——已并入 §5.2。
+核出：默认窗口语义为"依据位置就是当前流末"（§5.2，`Lag = 0` 限定）；逐位置顺序与集合值的严重度取法原文未写——已并入 §5.2。
