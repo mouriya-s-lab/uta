@@ -143,6 +143,7 @@ stateDiagram-v2
     state "Accepted / Rejected / NotSent / Found / Absent" as KNOWN
     [*] --> UNK
     UNK --> KNOWN : 回执 / NotSent / 第一条 Found 或 Absent（Active 或 Abandoned 时都可以补上）
+    UNK --> UNK : Abandoned 后 retry_reconciliation 那一轮得 Inconclusive → 什么都不变（等待仍 Abandoned，结果仍未知；渠道穷尽即停）
   }
   note right of O
     Abandoned 之后：
@@ -301,7 +302,7 @@ sequenceDiagram
     IO->>I: list_open(scope)
     I-->>IO: Listing 未见目标 → Inconclusive（F10）→ 下一渠道；穷尽仍停等，或 principal abandon(p1)
   end
-  Note over S: 集合清空 → lane 步重新求值 → T2 放行，先过期步再过门 → Prepared @p2
+  Note over S: 集合清空 → lane 步重新求值 → T2 过冷却、过期步，再过门 → Prepared @p2
   Note over UI,I: 另一 lane（不同账户）的写全程不等待
 ```
 

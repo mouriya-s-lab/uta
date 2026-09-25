@@ -83,10 +83,12 @@ sequenceDiagram
   IA->>V: 上游下单仍可能送达
   NEW->>J: 取 fence；instance_id = n+1（旧会话 epoch 全部作废）
   NEW->>IA: 按进程表回收：请求退出 → 超时强制终止
-  NEW->>J: SendBarrier(p) 无后继 → Undetermined(p, CrashWindow)
-  NEW->>IB: 拉起并 handshake(epoch (n+1, 1))
-  V-->>IA: 迟到回执（若 A 尚存）
+  V-->>IA: 迟到回执（A 在回收完成之前仍可能收到）
   IA--xNEW: A 的通道只通向已退出的旧核心，回执不进入新核心
+  Note over NEW,IA: OS 确认 A 已退出 → 清除 A 的进程表行；第 1 步到此完成，之后才有第 2 步
+  NEW->>J: SendBarrier(p) 无后继 → Undetermined(p, CrashWindow)（第 2 步，不接触集成）
+  Note over NEW: 第 3 步：拉起 B 时核心为它的通道分配 SessionEpoch (n+1, 1)（核心内部，集成不知道也不回填）
+  NEW->>IB: 拉起并 handshake()
   par 两条并入路径（各自 append 前检查 p 仍 Undetermined；先到者确立结果，后到者不改结果）
     NEW->>IB: query_by_key(K(p), key_role, scope, barrier_at) → Found → ResolutionEvidence{p, ByKey, Found}
   and
@@ -96,7 +98,7 @@ sequenceDiagram
   Note over NEW,J: 该意图恰一条 SendBarrier；fixture venue 调用 ≤ 1；不产生双写
 ```
 
-读法：安全不依赖 A 的回执到达；三条不变量（`SendBarrier` 可能已发出、阻塞头集合非空时同 lane 无新普通写、对账经 B 独立取证）共同保证。核心重启必然换 `instance_id`；同核心内重连只换 `session_seq`。
+读法：安全不依赖 A 的回执到达；三条不变量（`SendBarrier` 可能已发出、阻塞头集合非空时同 lane 无新普通写、对账经 B 独立取证）共同保证。同一集成任何时刻至多一个进程：A 的 OS 确认退出与进程表行的清除是第 1 步的结束，之后才有第 2 步的恢复与第 3 步拉起 B；A 在回收完成之前收到的迟到回执只能送进通向旧核心的通道。`SessionEpoch` 由核心在拉起 B 时为通道分配，`handshake()` 不带参数，集成从不知道它。核心重启必然换 `instance_id`；同核心内重连只换 `session_seq`。
 
 核出：无。
 
@@ -107,7 +109,7 @@ sequenceDiagram
 ```mermaid
 flowchart TB
   Q{"崩在哪？"}
-  Q -->|"宿主进程异常退出（trap）"| T1["核心终止宿主，append ProgramFailed{Trap}<br/>程序 Failed，等 load_program"]
+  Q -->|"宿主进程异常退出（trap）"| T1["核心同一事务 append ProgramHalted{Trap}（执行 J）+ ProgramFailed{Trap}（观察 J，只供展示）<br/>提交之后终止宿主，OS 确认退出后清除登记；程序 Halted（失败抑制，跨重启保持），等引用该 ProgramHalted 的 load_program"]
   Q -->|"核心在 Advance 输出 COMMIT 前"| T2["整批不存在；重启从最近 Checkpoint Load<br/>重放 cursor 之后同一批记录，不重复 Emit（#16）"]
   Q -->|"核心在 COMMIT 后、EffectResponse 持久化前"| T3["fold 出无 EffectResponse 的已注册请求（D4.3）<br/>读：重新执行一次；写：重新开单（Draft 与 EffectResponse{Drafted} 同事务，不存在有 Draft 无响应）（#21）"]
   Q -->|"Load 前比对：checkpoint 的 state_version 不被程序接受"| T4["不携带 checkpoint 装载，Reset(StateVersionMismatch)：ProgramReset 记录，同事务按声明的起点重建全部输入 cursor<br/>程序流新 epoch Gap{Source, program_upgrade}，按 H9 回填"]
@@ -115,7 +117,7 @@ flowchart TB
   Q -->|"快照写入中途（#11）"| T6["持久：快照部分写、原记录完整<br/>恢复：半写快照丢弃，从保留边界 fold_state 重建；只增加重启延迟"]
 ```
 
-读法：程序状态只有一条持久边界（`Checkpoint` 与 cursor 同事务）；一切恢复都从它开始重放。请求的完成事实在执行 J（`EffectResponse`），读结论等观察记录被压缩不影响重派判定。派生记录与快照都不是权威：前者可重算，后者只加速重建。
+读法：程序状态只有一条持久边界（`Checkpoint` 与 cursor 同事务）；一切恢复都从它开始重放。请求的完成事实在执行 J（`EffectResponse`），读结论等观察记录被压缩不影响重派判定。派生记录与快照都不是权威：前者可重算，后者只加速重建。trap 的顺序与 D4.2 相同：失败抑制的执行事实 `ProgramHalted` 先提交，核心才终止宿主；程序的状态是 `Halted`，`ProgramFailed` 是可压缩的展示观察，不承载状态（§8.6 失败抑制）。
 
 核出：以可压缩观察记录判断"请求已响应"会在压缩后误重派——已并入 §6.1（`EffectResponse`）。
 

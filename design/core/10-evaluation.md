@@ -186,7 +186,7 @@
 
 **能力未确立时的单据**（§6.2 参数合规、§6.3 等待与重入）。已定（验收 §10.5 #60）。
 
-- 选中：`ParameterValidity` 增 `CapabilityNotEstablished(Unknown | NoSession)`，非终结：单据停在输入约束步或放行门等待，不产生记录；声明版本、`CapabilityObserved` 或会话进入 / 离开 `Established` 时重新求值，`deadline` 到期由过期步关闭。已确立的 `Unsupported` 仍是终结的否决。
+- 选中：`ParameterValidity` 增 `CapabilityNotEstablished(Unknown | NoSession)`，非终结：单据停在输入约束步或放行门等待，不产生记录；声明版本、`CapabilityObserved` 或会话进入 / 离开 `Established` 时重新求值，`deadline` 到期由过期步关闭。从任一等待恢复都重过 lane 步：停在放行门前（或审批、lane）的单据从 lane 步起依次过 lane、冷却、过期与门，停在输入约束步的从输入约束步起。已确立的 `Unsupported` 仍是终结的否决。
 - Q 场景后果：Q16/Q18：来源断线或能力未知时，待审单据不被当作“不支持”关闭，也不凭离线时的声明副本放行。
 - 不选：`Unknown` 视同 `Unsupported`（把“未确立”当作来源的否定）；离线时按最近声明判定（以副本代替源头此刻的结论）；另设等待标志（等待是记录的 fold，§6.3）。
 - 证据：§6.2、§6.3、§7.5；§0.1。
@@ -820,7 +820,7 @@
     - 意图所带 schema 身份不是声明的那个：得 `SchemaMismatch`；该操作不是 `Supported` 时得 `NotSupported`；三者与参数违反可区分；已放行的单在握手换了 schema 后停在发出前门，到 `deadline` 记 `Expired`，从不带旧版参数 `submit`；
     - 锚点构造不出的请求：会话 `draft` 得 `Rejected(Malformed)`、无任何 append；程序请求得唯一一条 `EffectResponse{NotDrafted(Malformed)}`，重启后不重派；`IdemKey` 目标不是该作用域内任何尝试记为订单键的键时同样 `Malformed`；`revise` 的 diff 使下一版构造不出时得 `Rejected(Malformed)`，无 append，`current_version` 不变。
 31. **规则词汇与实现无关**（§6.2 检查目录、§6.3、§7.6）：对同一规则文件与同一组记录（覆盖每项检查的边界：情景值等于 `ratio · E`、`E ≤ 0`、币种不同、没有该主体的观察、多空分仓；允许集合缺省 / 空集；名义阈值等于 N、以数量定量），两个独立实现（各用随 IDL 发布的参考 schema 校验器）逐单给出相同的放行 / 否决与相同的检查结果；冷却间隔按 `(WriteLaneKey, OperationKind)` 共享，多个 principal 交替下单时按同一间隔判定；不合法的规则文件（未知键、`ratio ≤ 0`、给 `Close` 配冷却、列出需参数的项而缺参数、把“原单仍在”列为必要）被整体拒绝。（对应 Q8/Q9）
-32. **冷却**（§6.3 冷却、C12）：`SendBarrier` 持久化即设 `(WriteLaneKey, instrument)` 的时钟；未发即 `Expired` 的 `Prepared` 不设；在 `SendBarrier` 之后、调用之前崩溃仍计时，集成返回 `NotSent` 也不撤销；冷却只在 lane 步放行时判定一次，时刻等于时钟 + 间隔时放行，早于则 `Rejection::Cooldown`；`bypass_lane` 不豁免，且绕过产生的、尚未越过屏障的同键下单写使本次判定否决、在它越过屏障或 `Expired` 后不再阻碍；间隔为 0 等同不设；撤单与平仓既不设也不受；重启后判定结果与不重启时相同。（对应 Q7/Q9）
+32. **冷却**（§6.3 冷却、C12）：`SendBarrier` 持久化即设 `(WriteLaneKey, instrument)` 的时钟；未发即 `Expired` 的 `Prepared` 不设；在 `SendBarrier` 之后、调用之前崩溃仍计时，集成返回 `NotSent` 也不撤销；冷却在单据经 lane 步放行时判定、不是等待条件，单据从等待重入时随 lane 步重判，时刻等于时钟 + 间隔时放行，早于则 `Rejection::Cooldown`；`bypass_lane` 不豁免，且绕过产生的、尚未越过屏障的同键下单写使本次判定否决、在它越过屏障或 `Expired` 后不再阻碍；间隔为 0 等同不设；撤单与平仓既不设也不受；重启后判定结果与不重启时相同。（对应 Q7/Q9）
 33. **平仓**（§6.2 交易协议）：fixture 上游在持仓读取与执行之间改变持仓：声明 `(scope, Close)` 为 `Supported` 的集成，执行后目标持仓的绝对数量从不变大、从不反向；只支持有界 reduce-only 的来源，其 schema 使省略 `quantity` 的平仓在输入约束步被否决；只能以反向普通单模拟的来源声明 `Unsupported`，对它的平仓意图送审即以 `NotSupported` 被否决，无 `Prepared`；每次平仓的上游写调用数 ≤ 1。（对应 Q27 同类伤害）
 34. **写资格**（§6.2 可交易性）：目录观察把某 instrument 标为不可写时，可交易性列为必要项的单据在放行门 `PredicateFailure`，无 `SendBarrier`；没有该 instrument 的目录观察时为 `Undecidable`，必要则不放行；未列可交易性时，单子照常发出，上游的明确拒绝记为 `VenueRejected`；能力证据不因 instrument 而变。（对应 Q16）
 35. **发出前门**（§6.5、§6.6）：以 fixture 上游驱动，对已放行、尚无 `SendBarrier` 的尝试观测：（对应 Q2/Q4/Q7）
@@ -946,7 +946,7 @@
 58. **放弃跟踪**（§6.5 等待与结果、§6.6 放弃跟踪、§8.5 结果未知组）：以 fixture 上游驱动一次停等的 `Undetermined`：（对应 Q3/Q7）
     - principal `abandon`：在途的一次 `query_by_key` 照常完成并 append 自己的结果之后才出现 `Abandoned{principal, note, rule_version}`；在途调用给出 `Found`/`Absent` 时没有 `Abandoned`，返回 `Rejected(NotUndetermined)`；越权得 `Unauthorized` 与安全事件；对非 `Undetermined`、已有结果或已 `Abandoned` 的尝试得 `Rejected(NotUndetermined)`；
     - `Abandoned` 之后该尝试移出阻塞头集合，同 lane 等待中的单据放行；它不再有自动取证调用，会话重建也不出现它的 `ReconciliationReopened{SessionRestored}`；它引用的保留钉释放；
-    - 之后 fixture 推送一条归因到它的记录：append `ResolutionEvidence{Attributed, Found}`，结果确立而等待仍是 `Abandoned`，lane 不再被它阻塞；principal `retry_reconciliation` 开出的一轮依序取证一遍、渠道穷尽即停；
+    - 之后 fixture 推送一条归因到它的记录：append `ResolutionEvidence{Attributed, Found}`，结果确立而等待仍是 `Abandoned`，lane 不再被它阻塞；principal `retry_reconciliation` 开出的一轮依序取证一遍、渠道穷尽即停；这一轮里得 `Inconclusive` 的渠道不改变任何状态：等待仍是 `Abandoned`、结果仍未知、lane 不被重新阻塞；
     - 在停发之后、`Abandoned` 之前注入崩溃：日志中没有任何“放弃中”的记录，重启后该尝试等待仍 `Active`、仍在阻塞头集合里，按本轮进度续跑；
     - 不存在由 principal 写 `Found`/`Absent` 的操作；`read_model(lanes)` 与下游对它显示“已放弃跟踪，结果未知”，结果补上后显示该结果。
 59. **`NotSent` 与写调用时限**（§6.5 `NotSent`、§8.2、§8.3）：以 fixture 上游与 fixture 集成驱动：（对应 Q2/Q7/Q17）
@@ -956,7 +956,8 @@
     - `NotSent` 返回之后、append 之前注入崩溃：重启后该尝试为 `Undetermined(CrashWindow)`，按键回读在唯一期内得 `Absent`。
 60. **能力未确立**（§6.2 参数合规、§6.3 等待与重入）：（对应 Q16/Q18）
     - 来源对某 `(scope, OperationKind)` 声明 `Unknown`，或该来源此刻没有已建立的会话：单据 `parameter_validity` 为 `CapabilityNotEstablished`，送审后停在输入约束步，不产生 `Rejection` 与 `Close`；能力确立为 `Supported` 后链继续并照常放行，确立为 `Unsupported` 后得 `NotSupported` 否决；一直未确立则到 `deadline` 由过期步关闭；
-    - 单据已过输入约束步、停在 lane 或审批时会话断开：放行门的能力项未确立，单据停在门前，不 `PredicateFailure`；会话恢复后先过过期步再过门；
+    - 单据已过输入约束步、停在 lane 或审批时会话断开：放行门的能力项未确立，单据停在门前，不 `PredicateFailure`；会话恢复后从 lane 步起重跑，依次过 lane（阻塞头）、冷却、过期与门，从不由门前的等待直接 `Prepared`；
+    - 同一 lane 的两张 `Place` 单据在离线期间都已过 lane 步、停在放行门前：会话恢复后恰有一张 `Prepared`，另一张停在 lane 步（阻塞头集合为先放行的那次尝试），不产生第二个 `Prepared`；该 `(WriteLaneKey, instrument)` 配了冷却时，后一张在阻塞头结束等待后照常受冷却判定；
     - 离线期间最近一次声明的 `Supported` 不使任何单据放行，最近一次声明的 `Unsupported` 也不使任何单据被否决。
 61. **调用方键由核心铸造**（§6.5、§8.2、§8.3）：（对应 Q2/Q6）
     - 每次键角色不是 `None` 的尝试，`SendBarrier` 所记的键等于 `AttemptRef` 的固定编码，且原样到达 fixture 上游；不同尝试的键两两不同；重启恢复后同一尝试的取证用同一个键；`EffectRequest` 与意图里没有键字段；

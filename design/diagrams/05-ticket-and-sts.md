@@ -30,7 +30,7 @@ stateDiagram-v2
   note right of AwaitingDecision
     期间 Revise 被拒（决定绑定 current_version）
     basis_validity 与 alignment 照常重算（偏离是状态）
-    停在审批步或 lane 步都在此态
+    停在输入约束步、审批步、lane 步或放行门前都在此态
   end note
   note left of CR
     决定者否决，或 STS 链否决：
@@ -78,7 +78,7 @@ flowchart LR
 
 ## D5.3 STS 顺序固定链（从 `AwaitingDecision` 到 `Prepared`）
 
-对照：§6.3 五步表、放行门、规则版本变更；§6.2 门只看必要项；§5.2 `basis_validity`。
+对照：§6.3 五步表、等待与重入、放行门、规则版本变更；§6.2 门只看必要项；§5.2 `basis_validity`。
 
 ```mermaid
 flowchart TB
@@ -96,9 +96,9 @@ flowchart TB
   C -->|"否：以 rule_version 为依据通过"| D
   D{"lane<br/>该 WriteLaneKey 阻塞头集合非空？"}
   D -->|"非空，且本笔既不是以阻塞头中某次尝试记为订单键的调用方键为 target 的撤单，也没有覆盖当前全部阻塞头的 bypass_lane 控制记录"| WAITD["停在 lane 步，单据仍 AwaitingDecision<br/>期间 alignment 照常重算"]
-  WAITD -->|"集合清空，或 bypass_lane Applied 覆盖当前全部阻塞头（fold 变化）"| CD
+  WAITD -->|"该 lane 执行事实或 bypass_lane 提交：重跑 lane 步"| D
   D -->|"空 / 是撤阻塞头意图 / bypass_lane 控制记录（本版本、所记阻塞头）覆盖当前全部阻塞头"| CD
-  CD{"冷却（只判一次；bypass 不豁免）<br/>Place / Replace 且 now < (WriteLaneKey, instrument) 最近下单写 SendBarrier 时间 + 该 (WriteLaneKey, OperationKind) 的间隔？<br/>或同键有绕过产生、尚未越过屏障的下单写？"}
+  CD{"冷却（经 lane 步放行时判定，重入时重判；bypass 不豁免）<br/>Place / Replace 且 now < (WriteLaneKey, instrument) 最近下单写 SendBarrier 时间 + 该 (WriteLaneKey, OperationKind) 的间隔？<br/>或同键有绕过产生、尚未越过屏障的下单写？"}
   CD -->|"是"| RJ6["Rejection::Cooldown{until}<br/>Close(DecisionRejected)"]
   CD -->|"否 / 未配置"| E
   E{"过期步<br/>deadline（UTC）已过？"}
@@ -107,7 +107,7 @@ flowchart TB
   G{"依据有效性门<br/>basis_validity == Fresh ∧ 必要项 alignment == Aligned（能力项恒必要，按同一可执行性谓词核对会话有效能力）∧ 决定绑定版本 == current_version"}
   G -->|"否"| RJ4["PredicateFailure（fail-closed）<br/>Rejection 带 rule_version + checked_as_of<br/>Close(DecisionRejected)"]
   G -->|"能力项未确立（Unknown 或无会话）"| WAITG["停在放行门，单据仍 AwaitingDecision，不产生记录；同 WAITB 的事件重新求值"]
-  WAITG -->|"能力确立：先过期步再过门"| E
+  WAITG -->|"能力确立：从 lane 步起重跑（lane → 冷却 → 过期 → 门），不直接进 Prepared"| D
   G -->|"是"| OUT[("同事务 append Prepared + Close(Prepared(position))<br/>+ Outcome（带 rule_version、checked_as_of）")]
   TMR["deadline 计时器"] -.->|"AwaitingDecision 任一等待点到期（审批、lane、能力未确立）"| RJ5
   RL["reload_config(rules)"] -.->|"待决单据放行时按当时规则从授权步重过五步：已有 Decision 仍绑定版本，决定者授权与是否需人工按新规则重判"| A
@@ -116,8 +116,9 @@ flowchart TB
 读法（假想运行时）：
 
 - 链是事件驱动的：`SubmitForDecision` 跑到第一个等待点；`decide`、该 lane 上的新执行事实、能力或会话变化、`deadline` 到时各自让它重新求值（§6.3 等待与重入）；每推一步只持久化该步产生的记录（`Vec<Outcome>` 或 `NonEmpty<Rejection>`）。规则判断所用的状态（`RuleState`）每次由记录 fold 出，不另存。
-- 审批、lane 与能力未确立的等待都发生在 `Prepared` 之前：单据在等，不是已放行的记录在等；所以正常路径下同 lane 至多一次等待中的尝试。已放行的尝试只会在发出前门等会话或能力（D6.1）。
-- 过期步是第五步：等待结束后先看 `deadline` 再进门；计时器只是让等待中的单据也能到期，不是让过期单据仍能 `Prepared` 的旁路。
+- 重入都经过 lane 步：停在审批步、lane 步或放行门前的单据从 lane 步起重跑，停在输入约束步的从输入约束步起重跑，依次过 lane（阻塞头）→ 冷却 → 过期 → 门；没有从放行门前的等待直达 `Prepared` 的边。同 lane 两张单据离线时都停在门前，会话恢复后先放行的那张成为阻塞头，另一张停在 lane 步（§6.3 等待与重入）。
+- 审批、lane 与能力未确立的等待都发生在 `Prepared` 之前：单据在等，不是已放行的记录在等；停在门前的单据也不是阻塞头，所以才要重过 lane 步。已放行的尝试只会在发出前门等会话或能力（D6.1）。
+- 过期步是第五步：每次重跑都先看 `deadline` 再进门；计时器只是让等待中的单据也能到期，不是让过期单据仍能 `Prepared` 的旁路。
 - 门读的是单据 fold 已算好的字段，规则自己不算；世界变了单据先变 `Diverged`，审批人看得到，放行时门自然失败。
 - 重启后链按记录重新求值：停在审批步的仍等 `decide`；停在 lane 步的等集合清空；停在能力未确立的等能力确立；计时器按 `deadline`（UTC）重装（D1.2 第 4 步）；冷却时钟由 `SendBarrier` 记录 fold 出。
 - 冷却的时钟在 `SendBarrier` 持久化时设（D6.1），不在检查通过时设；撤单与平仓既不设也不受。
