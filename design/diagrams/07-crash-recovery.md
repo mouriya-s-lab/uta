@@ -112,11 +112,11 @@ flowchart TB
   Q -->|"宿主进程异常退出（trap），或 Output 的 checkpoint 版本不在本成员接受的集合内（视同 trap）"| T1["核心同一事务 append ProgramHalted{Trap}（执行 J）+ ProgramFailed{Trap}（观察 J，只供展示）；版本违例的 Output 不落<br/>提交之后终止宿主，OS 确认退出后清除登记；程序 Halted（失败抑制，跨重启保持），等引用该 ProgramHalted 的 load_program"]
   Q -->|"核心在 Advance 输出 COMMIT 前"| T2["整批不存在；重启从最近 Checkpoint Load<br/>从同一组已提交 cursor 重新推进，不重复 Emit（#16）"]
   Q -->|"核心在 COMMIT 后、EffectResponse 持久化前"| T3["fold 出无 EffectResponse 的已注册请求（D4.3）<br/>读：重新执行一次；写：按 member 所指发出成员的 Applied 重新开单，发出成员已被替换或卸载亦然（Draft 与 EffectResponse{Drafted} 同事务，不存在有 Draft 无响应）（#21）"]
-  Q -->|"派生 DAG 重算中途（#10）"| T5["持久：派生记录部分 append（RetractableDelta）<br/>恢复：派生侧可重算，未提交贡献重建；无自反馈环 → 最终一致"]
+  Q -->|"派生 DAG 重算中途（#10）"| T5["核心崩溃：这批 Advance 的输出事务未提交，派生记录、EffectRequest、Checkpoint 与 cursor 一条也没有落<br/>恢复：同 T2，从最近 Checkpoint Load，从已提交的 cursor 重新推进（#16）<br/>只有宿主进程崩溃：trap，同 T1 失败抑制"]
   Q -->|"快照写入中途（#11）"| T6["持久：快照部分写、原记录完整<br/>恢复：半写快照丢弃，从保留边界 fold_state 重建；只增加重启延迟"]
 ```
 
-读法：程序状态只有一条持久边界（`Checkpoint` 与 cursor 同事务）；一切恢复都从它开始重放。本成员可交回的 `Checkpoint` 总被本成员接受（沿用的由替换的 `Applied` 比对，其后持久化的由 `Output` 检查，§8.6 状态迁移），所以重启 `Load` 不比对版本，也没有装载时的 `Reset` 可以重复。请求的完成事实在执行 J（`EffectResponse`），读结论等观察记录被压缩不影响重派判定。派生记录与快照都不是权威：前者可重算，后者只加速重建。trap 的顺序与 D4.2 相同：失败抑制的执行事实 `ProgramHalted` 先提交，核心才终止宿主；程序的状态是 `Halted`，`ProgramFailed` 是可压缩的展示观察，不承载状态（§8.6 失败抑制）。
+读法：程序状态只有一条持久边界（`Checkpoint` 与 cursor 同事务）；一切恢复都从它开始重放。本成员可交回的 `Checkpoint` 总被本成员接受（沿用的由替换的 `Applied` 比对，其后持久化的由 `Output` 检查，§8.6 状态迁移），所以重启 `Load` 不比对版本，也没有装载时的 `Reset` 可以重复。请求的完成事实在执行 J（`EffectResponse`），读结论等观察记录被压缩不影响重派判定。派生记录与 `EffectRequest`、`Checkpoint`、cursor 同批提交，没有提交的批次不留任何记录，所以 DAG 重算中途的崩溃（T5）不留半批；快照不是权威，只加速重建。trap 的顺序与 D4.2 相同：失败抑制的执行事实 `ProgramHalted` 先提交，核心才终止宿主；程序的状态是 `Halted`，`ProgramFailed` 是可压缩的展示观察，不承载状态（§8.6 失败抑制）。
 
 核出：以可压缩观察记录判断"请求已响应"会在压缩后误重派——已并入 §6.1（`EffectResponse`）。
 
@@ -133,7 +133,7 @@ flowchart TB
 | #7 | D7.1 DRV、D6.2 | 下一渠道由 fold 重建 |
 | #8 | D7.1 Q0/Q4、D6.4 | `abandon` 没有中间记录：未 append `Abandoned` 则仍 `Active`，落进对账桶 |
 | #9 | D1.5 末行 | 半写不可见 |
-| #10 | D7.4 T5 | 派生重算，未提交贡献重建 |
+| #10 | D7.4 T5 | 批次未提交即不存在；核心崩溃同 #16 重放，宿主崩溃是 trap |
 | #11 | D7.4 T6 | 半写快照丢弃，fold 重建 |
 | #12 | D9.4 | 原子替换 |
 | #13 | D3.6 S、D3.2 | `Gap{Source}` |
