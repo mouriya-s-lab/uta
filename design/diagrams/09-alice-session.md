@@ -1,4 +1,4 @@
-# 09 下游会话（经解释层）、操作集落点、人工决议、控制动作
+# 09 下游会话（经解释层）、操作集落点、放弃等待、控制动作
 
 对照：§8.5、§7.1 信任边界、§7.6、W14、W19、W8、W20；`design/downstream/design.md`。索引见 `README.md`。
 
@@ -29,19 +29,24 @@ sequenceDiagram
   Note over L,C: 请求体伪造 principal 不参与授权：只取会话绑定的 principal（W19 步 2）
   L->>RM: read_model(sources)（声明：账户、流、能力；D9.5）
   L->>RM: read_model(kind, as_of?)
-  RM-->>L: Snapshot{value, as_of?, gaps?}（orders / positions / lanes / health / sources 带 as_of 与 gaps，可按历史 as_of 读；gaps 只含观察输入的缺口，lanes、sources 为空；tickets、subscriptions 只给当前态）
+  RM-->>L: Snapshot{value, as_of?, gaps?}（orders / positions / lanes / health / sources 带 as_of 与 gaps，可按历史 as_of 读；gaps 只列连续性缺口：所依观察流上生效、未被来源证据闭合的 Gap{Source}；Gap{Channel} 是调用结果、Gap{Delivery} 属订阅，都不列；lanes、sources 为空；tickets、subscriptions 只给当前态，subscriptions 逐项列出未确认的投递缺口）
   L-->>D: 翻成对外概念（账户、订单、持仓、审批…）
-  L->>C: subscribe(selector, mode, from?)（观察流：一组 (来源, 流, 主体集?) 项，可跨来源；或执行事实；新订阅 from 缺省 = 各流当前流末）
-  C-->>L: cursor 之后记录（未确认区间可能重复，按 LogPosition 去重）
-  L-->>D: 推送；附续传令牌；Gap 翻成缺失通知
+  L->>C: subscribe(selector, mode, from?)（观察流：一组 (来源, 流, 主体集?, 用途) 项，可跨来源；或执行事实；新订阅 from 缺省 = 各流当前流末）
+  C-->>L: 未确认的投递缺口先交出，再交 cursor 之后记录（未确认区间可能重复，按 LogPosition 去重）
+  L-->>D: 推送；附续传令牌；投递缺口翻成缺失通知
+  opt 一次性读（D9.2）得 Pending{from, instance_id}
+    L->>C: subscribe 该流的只投递项，from = Pending.from（主体集取所问的主体或整条流）
+    C-->>L: 调用结束后照常 append 的读结论记录或 Gap{Channel}
+  end
   Note over D,L: 下游或解释层崩溃 / 重启：核心不变（订阅、程序、lane、日志 owner 是核心）；解释层无状态可丢
   D->>L: 重连，交回续传令牌
   L->>C: 重连：handshake（同一 principal）→ 持久订阅自动挂接，投递从已确认 cursor 续 → read_model 取 as_of
-  C-->>L: 断连期间损失以 Gap{Delivery} 显式标记，不伪造补发
+  C-->>L: 断连期间的损失是订阅上的 Gap{Delivery}，重新挂接时先于记录交出，不伪造补发
+  Note over L,C: 握手得到的 instance_id 与某个 Pending 的不同 → 那次等待的保证已失效：结论若已在旧实例退出前 append，照样从 from 收到；没有收到的，重新 read
   L-->>D: 缺失通知
 ```
 
-读法：`actor` 是审计与 scope 的键，不是信任来源；信任来自 OS 对端凭据。`as_of` 与 cursor 在解释层与核心之间比对，下游只见续传令牌与缺失通知。
+读法：`actor` 是审计与 scope 的键，不是信任来源；信任来自 OS 对端凭据。`as_of` 与 cursor 在解释层与核心之间比对，下游只见续传令牌与缺失通知。等一次在途读的结果用只投递项（不增加需求、不占配额，按历代声明接纳），“一定收到”只限发出调用的那个核心实例。
 
 核出：无。
 
@@ -52,23 +57,23 @@ sequenceDiagram
 ```mermaid
 flowchart LR
   subgraph OPS["核心↔解释层操作（同一 JSON-RPC，§8.5）"]
-    S1["subscribe(观察流 {(来源, 流, 主体集?)} 或 执行事实 (来源, 作用域?)) / ack / unsubscribe"]
+    S1["subscribe(观察流 {(来源, 流, 主体集?, 用途：供给 | 只投递)} 或 执行事实 (来源, WriteScope?)) / ack / unsubscribe"]
     S2["read(targets = (来源, 流, request_schema 身份, request, range?), deadline)"]
     S3["read_model(kind, as_of?)"]
     S4["draft / revise / submit_for_decision / decide / send_back / withdraw / transfer"]
     S5["load_program(manifest_ref, cold_start?) · unload_program · reload_config · rotate_credential · restart_integration · request_snapshot · advance_retention · rewind_cursor · bypass_lane"]
-    S6["resolve(attempt: AttemptRef, Found(obs) 或 Absent, note)"]
+    S6["abandon(attempt: AttemptRef, note)"]
     S6b["retry_reconciliation(attempt: AttemptRef)"]
     S7["health()"]
   end
   subgraph EL["核心元素"]
     SUB["持久订阅 / 投递调度"]
-    RDP["一次性读（§7.3）→ 判定 → 同一集成会话 epoch 内同一 identity 的在途调用并入 → 集成 read（经集成会话）→ item 观察记录 + 读结论记录或 Gap{Channel} + 计数观察，OneShot{origins ∋ Session, request}"]
+    RDP["一次性读元素（§7.3）→ 判定 → 同一集成会话 epoch 内同一 identity 的在途调用并入 → 集成 read（经集成会话）→ item 观察记录 + 读结论记录（均带 dispatch_end）或 Gap{Channel} + 计数观察，OneShot{origins ∋ Session(principal), request}"]
     RM["读模型（只读 fold；含 sources：执行 J 声明版本的 fold）"]
     TK["单据（TicketAction）→ STS 链"]
     CTL["控制面（控制记录 Applied / Rejected）"]
-    IOR["控制面 append ResolutionEvidence{Manual} → 腿终结 → 链重算（D9.3）"]
-    RRO["控制面 append ReconciliationReopened{Manual} → IO 壳重开一轮取证（D6.2）"]
+    IOR["控制面授权 → 该尝试的在途取证调用先完成 → IO 壳 append Abandoned{attempt, principal, note, rule_version}（lane 流）→ 尝试移出阻塞头集合（D9.3）"]
+    RRO["控制面 append ReconciliationReopened{Manual(principal)} → IO 壳重开一轮取证（D6.2）"]
     HL["健康读模型"]
   end
   S1 --> SUB
@@ -79,41 +84,39 @@ flowchart LR
   S6 --> IOR
   S6b --> RRO
   S7 --> HL
-  S2 -.->|"逐 target，按序判定：UnknownTarget / Unavailable{source_state}（从未有声明）/ Unsupported / Unconfirmed / InvalidRequest / Unavailable{source_state}（无会话，不调用不记 gap）/ Answered{conclusion, items} / Refused{conclusion, reason} / Unavailable{gap}（渠道失败，已记 Gap{Channel}）/ Pending{from, instance_id}（deadline 到而调用在途；之后照常记结论或 gap，从 from 订阅只投递项可收到；核心实例已换则不再保证）"| S2
-  S1 -.->|"逐项判定，没有任何一项被接纳 → Rejected{items}：来源未登记 / 流不在最近声明里 / 配额池流上不带主体集的供给项 → 该项拒绝；来源从未有声明 → 该项待接纳；供给项超池上限 → 该项 QuotaExceeded{quota, limit}；只投递项不进需求、不占配额；执行事实非 ordered 或作用域键不在任何声明版本里 → 拒绝"| S1
+  S2 -.->|"逐 target，按序判定：UnknownTarget（来源未登记）/ Unavailable{source_state}（从未有声明）/ Unavailable{source_state}（此刻无已建立会话；以上都不调用、不记 gap）→ 按会话有效声明：Unsupported（流不在其中，或 read 为 Unsupported）/ Unconfirmed（read 为 Unknown）/ InvalidRequest{reason} → 调用之后：Answered{conclusion, items} / Refused{conclusion, reason} / Unavailable{gap}（渠道失败，已记 Gap{Channel}）/ Pending{from, instance_id}（deadline 到而调用在途；之后照常记结论或 gap，从 from 订阅只投递项可收到；核心实例已换则不再保证）"| S2
+  S1 -.->|"逐项判定，没有任何一项被接纳或待接纳 → Rejected{items}：来源未登记 → 该项拒绝；来源从未有声明 → 该项待接纳；供给项：流不在最近声明里 / 配额池流上不带主体集 → 拒绝，放不下 → QuotaExceeded{quota, limit}；只投递项：流在任何一个声明版本里出现过 → 接纳（不进需求、不占配额），从未声明过 → 拒绝；from < 保留边界 → BeyondRetention；执行事实非 ordered 或 WriteScope.key 不在任何声明版本里 → 拒绝"| S1
   S3 -.->|"kind 未定义 → 拒绝；as_of 有位置尚未提交 → NotYetAvailable{positions}（各流已提交的流末）；tickets / subscriptions 带历史 as_of → 拒绝"| S3
   S4 -.->|"expected_version ≠ current_version → Conflict；同版本已有 Decision → Conflict(AlreadyDecided)"| S4
   S5 -.->|"越权 → Unauthorized；配置不合法 → Rejected 并保留上一有效版本；advance_retention 逐流判定 → NotForward / ReferencedBelow / InsideWindow"| S5
-  S6 -.->|"越权 → Unauthorized；腿非 Undetermined → Rejected(NotUndetermined)"| S6
+  S6 -.->|"越权 → Unauthorized（安全事件）；尝试不处于 Undetermined → Rejected(NotUndetermined)"| S6
 ```
 
-读法：写类按 `(principal, WriteLaneKey, OperationKind)` 授权，控制与决议按 `(principal, 动作种类)` 授权，同一规则族；三组都留下带 principal 的记录。
+读法：写类按 `(principal, WriteLaneKey, OperationKind)` 授权，控制动作与放弃等待按 `(principal, 动作种类)` 授权，同一规则族；三组都留下带 principal 的记录。一次性读先判 UTA 自己记录里的事实（登记、有无声明），再看来源此刻有没有会话，最后才按会话有效声明判能力：离线时不拿上一次会话的声明报“不支持”。
 
-核出：`read` 与 `resolve` 两组上一轮已并入 §8.5；一次性读按流寻址、读结论记录、`sources` 读模型与执行事实订阅已并入 §2.2、§8.2、§8.5。
+核出：一次性读按流寻址、读结论记录、`sources` 读模型与执行事实订阅已并入 §2.2、§8.2、§8.5。
 
-## D9.3 人工决议流程
+## D9.3 放弃等待流程
 
-对照：§8.5 决议组；§6.6 对账驱动；§3.4 读即观察记录。
+对照：§8.5 决议组；§6.6 对账驱动；§2.4 引用登记；§8.4 调用结果计数。
 
 ```mermaid
 flowchart TB
-  L["读模型 lanes：某 lane 的 Undetermined 腿 r 已渠道穷尽（Inconclusive），停等"]
+  L["读模型 lanes：某 lane 的 Undetermined 尝试 r（仍在取证，或渠道已穷尽 Inconclusive 而停等）"]
   L --> OP["运维 principal 判断"]
-  OP --> R1{"能从 venue 读到该订单？"}
-  R1 -->|"能"| RD["read(该作用域的订单流, 按 venue 身份) → 观察记录 @obs"]
-  RD --> RS1["resolve(r, Found(obs), note)"]
-  R1 -->|"确认未发生"| RS2["resolve(r, Absent, note)"]
-  R1 -->|"venue 当时不可达 / 想再自动查一轮"| RT["retry_reconciliation(r) → ReconciliationReopened{r, Manual}（D6.2）"]
-  R1 -->|"仍不确定"| KEEP["不决议：腿留在阻塞头集合；可起撤单意图让 venue 侧到达可读终态并自动重开取证（D6.7）"]
-  RS1 --> CHK1{"授权 ∧ r 处于 Undetermined 未终结 ∧ obs 存在且属该 WriteScope？"}
-  RS2 --> CHK2{"授权 ∧ r 处于 Undetermined 未终结？"}
-  CHK1 -->|"否"| RJ["Unauthorized / Rejected(NotUndetermined) / Rejected(reason)"]
-  CHK2 -->|"否"| RJ
-  CHK1 -->|"是"| EV["append ResolutionEvidence{r, Manual, round, outcome, principal, note}（Found.evidence = obs 当时的载荷 + 该记录保留的原始负载）<br/>腿终结 → 重算链：链 Resolved 才移出阻塞头集合（撤单腿 Found → 链进 AwaitingTargetTerminal，仍占阻塞头）；集合空才解除 lane；引用登记随链解除"]
-  CHK2 -->|"是"| EV
+  OP --> R1{"下一步？"}
+  R1 -->|"venue 当时不可达 / 想再自动查一轮"| RT["retry_reconciliation(r) → ReconciliationReopened{r, Manual(principal)}（D6.2）"]
+  R1 -->|"仍等"| KEEP["不动作：r 留在阻塞头集合；新到的来源证据照常确立结果"]
+  R1 -->|"不再等"| AB["abandon(r, note)"]
+  AB --> CHK{"授权 ∧ r 处于 Undetermined、结果未确立？"}
+  CHK -->|"否"| RJ["Unauthorized（安全事件）/ Rejected(NotUndetermined)"]
+  CHK -->|"是"| INF["r 的在途取证调用先完成（各自照常记 ResolutionEvidence 或 Gap{Channel}，照常计数）"]
+  INF --> AN["IO 壳 append Abandoned{r, principal, note, rule_version}（r 所在 lane 的执行事实流）<br/>此后不再自动询问：SessionRestored 不重开它"]
+  AN --> OUT["r 移出阻塞头集合，集合空才解除 lane；不再发起任何写<br/>r 的 basis 引用登记随之解除<br/>下游显示“已放弃跟踪，结果未知”"]
+  AN -.->|"结果仍可补上，不是门"| LATE["被动的 Attributed 来源证据可随时到达并确立结果<br/>retry_reconciliation(r) 仍可再问一轮"]
 ```
 
-读法：人工决议不要求渠道已穷尽（可在任一时刻），但永远带 principal；核心自己永不 heuristic。
+读法：放弃等待是 UTA 自己的出口，与 `Expired` 同类：它只结束 UTA 对这次写的等待，不断言写发生或未发生，所以下游永远不把它显示为“已确认发生 / 未发生”。它不要求渠道已穷尽（可在任一时刻），但永远带 principal；核心自己永不 heuristic。
 
 核出：无。
 
@@ -136,7 +139,7 @@ flowchart LR
   end
   A1 --> F1["读策略/审批规则文件（Alice 原子替换写入）<br/>合法 → Applied，规则版本 = 内容 hash，写进此后每条 Outcome / Rejection<br/>不合法 → Rejected，保留上一有效版本"]
   A1 --> F1b["待决单据放行时按新规则重过五步（不冻结）；必要项集 / Lag 变化触发 alignment 重算（D5.5）"]
-  A1r --> F1c["读运行期参数文件：快照频率 · 派生侧留存窗口 · deadline 全局缺省 · 投递缓冲上限<br/>合法 → Applied；不合法 → Rejected，保留上一有效版本；不改规则版本"]
+  A1r --> F1c["读运行期参数文件：快照频率 · 派生侧留存窗口 · deadline 全局缺省 · 投递缓冲上限 · 回填深度（按逻辑流，缺省取全局值；只影响下一个流 epoch 的回填任务判定）<br/>合法 → Applied；不合法 → Rejected，保留上一有效版本；不改规则版本"]
   A2 --> F2["凭据链 文件 → 核心 → 集成；该集成新 session_seq<br/>各流强制新 epoch Gap{Source, credential_rotated}"]
   A3 --> F3["终止并重新拉起集成进程；新 session_seq；各流按游标证明决定续接或新 epoch"]
   A4 --> F4["宿主 Load / Unload（D4.2）；cold_start → 不携带 Checkpoint，ProgramReset{Operator}"]
@@ -169,7 +172,7 @@ sequenceDiagram
   L->>RM: read_model(sources)
   RM-->>L: 每来源：最近声明版本加引用该版本的 CapabilityObserved（账户 = account_ref + label + 挂的流、流的 read/backfill 与名义等级、写能力、配额；account_ref 是否可解析）
   L->>C: subscribe(执行事实 (X, 作用域?), ordered, from)
-  EJ-->>C: 已提交的新声明版本 / CapabilityObserved / 单据与腿的执行事实（存储按位置交出字节）
+  EJ-->>C: 已提交的新声明版本 / CapabilityObserved / 单据与尝试的执行事实（存储按位置交出字节）
   C-->>L: 持久订阅与投递调度按位置原样搬运（不解析、不经读模型）
   L->>RM: 收到新声明版本或 CapabilityObserved → 重读 sources
   L-->>D: 账户列表、能力（支持 / 不支持 / 未确认）、待审事项、结果未知；引用冲突的账户显示“需要处理”

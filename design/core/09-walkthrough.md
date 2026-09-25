@@ -159,26 +159,27 @@
 **正常—失败路径（断线无续传，Q11）。**
 
 1. 订阅 200 instrument tick（订阅表，§4.2、§7.3）；集成断线 30 s 重连，venue 无游标（F11/C6）。
-   - 集成上报不能续接 → 核心结束前一 epoch、创建新 epoch。新 epoch 首条是 `Gap{origin: Source}`（观察 J，§4.2、§8.3），含前一 `StreamId` 与最后 `Seq`、原因 `disconnect`。
-   - 恢复者：核心（时间权威，§2.3、§8.3）。
+   - 握手时集成不能以游标证明续接 → 集成会话结束前一 epoch、创建新 epoch。新 epoch 首条是 `Gap{origin: Source}`（观察 J，§4.2、§8.2 `handshake`），含前一 `StreamId` 与最后 `Seq`、原因 `disconnect`；同一事务写该逻辑流的 `None{epoch}`（§8.4）。
+   - 恢复者：核心（`LogPosition` 与流 epoch 是它创建的，§2.3）；断代本身由来源的证据（不能续接）决定，核心不推断续接。
    - 重连握手后，核心对该流重发一次需求全集（这 200 个主体，§8.2 `route`）；集成在收到它之前不推送该流，`Routed` 的路由结论记录落在新 epoch 上，标出这些主体从这里起有覆盖。
+   - 断线期间与重连后握手之前，`health` 里该流的 readiness 是由会话状态派生的 `Disconnected`，核心不为它 append 任何记录（§8.4）。
    - 对外可见：订阅者先收到 gap 再收新 epoch 记录；无静默跳过。
 2. **有游标变体**：集成重连报可信续传游标 → 续用原 epoch，`Seq` 接续，不新建 gap（§8.2 `handshake`、§8.4）。
 
 **失败路径（慢消费者，Q12）。**
 
-3. 三订阅者中一个不确认，缓冲耗尽 → 投递调度对该订阅者停投，并 append `Gap{origin: Delivery}`（原因 `slow_consumer` 或 `conflated`，§4.2），带 from/to `Seq`，需显式确认。
-   - 行动者：投递调度（§7.3），身份 = 订阅 cursor。
-   - 对外可见：慢者收 gap 且停投；两快者不受影响、cursor 持续推进（跨订阅者不阻塞）。
-4. 确认语义（§4.2）：`ack` = 消费方已处理。停投的慢者恢复后，从其已确认 cursor 之后重收；未确认区间可能重复可见，按 `LogPosition` 去重；已确认区间不重投。
+3. 三订阅者中一个不确认，缓冲耗尽 → 投递调度请持久订阅在该订阅的这条流上写下投递缺口 `Gap{origin: Delivery}`（原因 `slow_consumer`，带 from/to 位置，订阅表，§4.2、§7.5），写下之后对该订阅者停投并交出这条缺口，需显式确认。它是订阅的状态，不是流上的记录：流本身不缺这些记录，其他订阅者看不到它。
+   - 行动者：投递调度检测、持久订阅记录（§7.3），身份 = （订阅，流），与该流的 cursor 同一粒度。
+   - 对外可见：慢者收缺口且停投；两快者不受影响、cursor 持续推进（跨订阅者不阻塞）。
+4. 确认语义（§4.2）：`ack` = 消费方已处理。缺口先于 `to` 之后的记录交出；慢者确认一个不低于缺口 `to`（被跳过的最后一个位置）的 cursor，即确认了这次损失，缺口与 cursor 推进在同一次写里从订阅表删除，投递从 `to` 之后续；确认之前重连，缺口先于记录再次交出。未确认区间可能重复可见，按 `LogPosition` 去重；已确认区间不重投。
 
 **扩展路径（三种消费方式，Q31）。**
 
 5. 同一组流被三种消费者声明消费（§4.2）：
-   - `await-all` 按**完备进度**（frontier）触发，而非 cursor（§2.3）；
+   - `await-all` 按来源证据证明的覆盖触发，而非 cursor（§2.3、§8.4 序号覆盖）：只有这组 tick 流声明 `joinable_venue_seq`、程序以整条流的供给项订阅它们、且它们不在配额池里（需求为 `All`）时才有序号覆盖，要求点是当前 epoch 的一个 venue 序号，覆盖越过它才触发；本走查按 200 个主体订阅，需求不是 `All`，没有序号覆盖，要求覆盖的 `await-all` 声明在装载时被拒，程序改为等核心日志位置、用 `ordered`，或声明自己的等待窗口；
    - `ordered` 按单流顺序背压，不跳过；
-   - `latest/conflated` 允许合并，损失以 `Gap{origin: Delivery, conflated}` 或消费者声明的窗口界记。
-   - 对外可见：每次合并可追溯到声明窗口或 gap（B5/C6）。读模型消费者拿到的 `Snapshot` 带 `as_of` 与 `gaps`（§8.5），与自己的 cursor 比对即知快照覆盖范围。
+   - `latest/conflated` 允许合并，损失以订阅上的 `Gap{origin: Delivery, conflated}` 或消费者声明的等待窗口记。
+   - 对外可见：每次合并可追溯到声明窗口或缺口（B5/C6）。读模型消费者拿到的 `Snapshot` 带 `as_of` 与 `gaps`（只列 `Gap{origin: Source}`，§8.5），与自己的 cursor 比对即知快照覆盖范围。
 
 **走通。**
 
@@ -350,7 +351,7 @@
    - 核心 `Window` 节点的累加器随 `Checkpoint` 持久化，不回读历史。
    - `Pooled` 窗口从 `Journal` 重洗历史但不登记，越界只得 `BeyondRetention`（条件 4，§8.7）。
    - 观察侧可压缩（`compact_below_retention` 仅对 `RetractableDelta`，§4.1、§7.4）；执行事实只 append 不压缩（§3.1）。
-2. 边界推进前必须显式处理仍被引用的位置（不变量 §6.9-3）：保留对应历史、保存必要证据，或缩小重放承诺（`AS OF ≥ retention frontier`，§2.4）；否则拒绝推进。
+2. 边界推进前必须显式处理仍被引用的位置（不变量 §6.9-3）：保留对应历史、保存必要证据，或缩小重放承诺（`AS OF ≥ 保留边界`，§2.4）；否则拒绝推进。要删掉某流当前 epoch 的记录时，持久订阅先为它 append 覆盖检查点，序号覆盖不因压缩改变（§8.4 序号覆盖）。
    - 恢复者：核心（保留协议）。
    - 落到边界下的 `basis` 位置在 prepare 只读校验时为 `BeyondRetention`（§5.2）。
    - 对外可见：压缩后所有仍被引用的 `LogPosition` 均在保留边界内。
@@ -367,7 +368,7 @@
 **失败路径。**
 
 1. Alice 或解释层崩溃 / 重启，UTA 独立存活；订阅与程序 owner 是核心（H5/C5、§7.1）。解释层不持有状态，没有要恢复的东西（`design/downstream/design.md` 3.3）。消费方会话随传输关闭而结束，它只在内存里、不拥有订阅、单据或在途读，核心不为它的结束写任何记录（§8.5 会话的生命周期）。行动者：核心（生命周期独立）。
-2. Alice 凭续传令牌重连；解释层代它开核心会话（P13），经**读模型**（§4.4、§8.5）取当前状态，并取 cursor 之后记录。断连期间损失以 `Gap{origin: Delivery}` 显式标记，不伪造逐条补发（§8.5）。
+2. Alice 凭续传令牌重连；解释层代它开核心会话（P13），经**读模型**（§4.4、§8.5）取当前状态，并取 cursor 之后记录。断连期间的投递损失是订阅上未确认的 `Gap{origin: Delivery}`（订阅表，§4.2），重新挂接时先于记录交出，不伪造逐条补发（§8.5）。
    - 对外可见：当前状态、断连后的推送、缺失通知（由解释层翻译）。
 3. 重连协议（§8.5）：
    - `handshake(contract_version, actor)` 取 `principal = (os_user, actor)`；
@@ -418,14 +419,14 @@
 
 **正常路径。**
 
-1. 程序解释②满足条件 `Emit(EffectRequest{effect_kind: fetch.bars, basis, key})`（§6.1），注册为**读处理器**（§6.1、§7.3）。
+1. 程序解释②满足条件 `Emit(EffectRequest{effect_kind: fetch.bars, basis})`（§6.1），注册为**读处理器**（§6.1、§7.3）。
    - 行动者：程序宿主（装载 principal）。
-2. 读处理器**立即执行**（读副作用，§3.4）：按请求值定出目标流与参数，走 §8.2 `read` 的判定顺序；来源有已建立会话、最近声明版本对该流 `read` 为 `Supported`、参数合该流 `request_schema` 时，经 `read(stream, request, range)` 调用集成（§8.2）。
+2. 读处理器**立即执行**（读副作用，§3.4）：按请求值定出目标流与参数，走 §8.2 `read` 的判定顺序；来源有已建立会话、该会话有效声明对该流 `read` 为 `Supported`、参数合该流 `request_schema` 时，经 `read(stream, request, range)` 调用集成（§8.2）。
    - 集成作答：同一事务在该流上 append 每个结果项一条观察记录（与推送观察同形，质量标记 `one_shot`）与一条读结论记录，都带 `provenance: OneShot{origins ∋ Request(该 EffectRequest 位置), request}`；`EffectResponse` 指向读结论记录（观察 J / 执行 J；读即观察记录，§3.4）。回答为空时只有读结论记录。
    - 恢复者：读可重试、可换渠道、可标 `Gap{origin: Channel}`（§4.2、§3.4），无 in-doubt。核心崩溃于响应持久化前，则按 §9.2 #21 重派。
 3. 程序按位置推进看到该观察记录与读结论（cursor 之后；输入 = 位置推进，§4.3）：**闭环走观察侧**，不进单据 / STS / IO 壳（读 / 写处理器分派，§6.1）。
    - 对外可见：`fetch.bars`（读）与 `trade.place`（写）、`notify.telegram`（写）对程序是同一构造子 `EffectRequest`，差别在注册的读 / 写（§6.1 不变量）。
-4. 未调用集成（Q16 同型）：该流最近声明版本的 `read` 为 `Unsupported` 或 `Unknown`、来源此刻无会话、参数不合 schema 时，不调用集成、不 append 观察记录；`EffectResponse` 记下这一结论（不支持 / 未确认 / 无会话 / 请求不合法），程序的决策半边从自己请求的 `EffectResponse` 看到它（§6.1）。无论哪种都不返回看似成功的空数组（§8.2、F6、C2）。
+4. 未调用集成（Q16 同型）：来源此刻无会话，或该会话有效声明里该流 `read` 为 `Unsupported` 或 `Unknown`，或参数不合 schema 时，不调用集成、不 append 观察记录；`EffectResponse` 记下这一结论（无会话 / 不支持 / 未确认 / 请求不合法，无会话先于其余判定：离线时上一次声明不断言此刻的能力），程序的决策半边从自己请求的 `EffectResponse` 看到它（§6.1）。无论哪种都不返回看似成功的空数组（§8.2、F6、C2）。
 
 **走通。**
 
@@ -492,11 +493,11 @@
 **正常—失败路径（一次性读，Q15/Q16）。**
 
 3. 下游读 X 两个账户的持仓与 P 的某 instrument 报价：解释层按 `sources` 把 (账户, 持仓) 解析到各作用域唯一的持仓流，把 (P, 报价) 解析到 P 的报价流，发 `read(targets, deadline)`，每个 target 带流的 `request_schema` 身份与参数（§8.5 一次性读）。
-   - X 此刻会话在重连（`health` 为 Connecting）：两个持仓 target 得 `Unavailable{source_state}`，核心不调用集成、不记 gap（§8.2 `read`）。
-   - P 有会话、报价流 `read` 为 `Supported`：集成作答，同一事务 append 报价记录（`one_shot`）与读结论记录，target 得 `Answered{conclusion, items}`。
-   - 若 P 的某条历史 bar 流 `read` 为 `Unknown`：该 target 得 `Unconfirmed`，不调用；为 `Unsupported` 则得 `Unsupported`。
+   - X 此刻会话在重连（`health` 为 Connecting）：两个持仓 target 得 `Unavailable{source_state}`，核心不调用集成、不记 gap（§8.2 `read`）。即使 X 上一次声明里持仓流的 `read` 为 `Unsupported`，离线时也得 `Unavailable{source_state}`：无会话的判定在能力之前，上一次会话的声明不断言此刻的能力（§8.5 一次性读）。
+   - P 有会话、报价流 `read` 为 `Supported`：集成作答，同一事务 append 报价记录（`one_shot`，带 `dispatch_end`）与读结论记录，target 得 `Answered{conclusion, items}`。
+   - 若 P 的会话有效声明里某条历史 bar 流 `read` 为 `Unknown`：该 target 得 `Unconfirmed`，不调用；为 `Unsupported` 则得 `Unsupported`。
    - 上游对某 instrument 明确拒绝（未开通该行情）：得 `Refused{conclusion, reason}`，该流上只有读结论记录，流的能力不变。
-   - P 对另一个 instrument 迟迟不答，`deadline` 先到：该 target 得 `Pending{from, instance_id}`，没有结论也没有 gap。解释层以 `from` 订阅该报价流的一个只投递项（主体集为这个 instrument，§8.5 按主体投递）：它不进入 `route` 需求、不占配额池的用量。稍后上游作答，该流上照常 append item 记录与结论记录（同一请求身份，`origins` 含该会话），这一项由此收到结果；若核心在作答之前重启，解释层重连时握手得到新的 `instance_id`，与 `Pending` 所带的不同，就知道这次读的结果不再有保证：从 `from` 起没收到结论的，报为需要重新读，不让下游一直等。
+   - P 对另一个 instrument 迟迟不答，`deadline` 先到：该 target 得 `Pending{from, instance_id}`，没有结论也没有 gap。解释层以 `from` 订阅该报价流的一个只投递项（主体集为这个 instrument，§8.5 按主体投递）：它不进入 `route` 需求、不占配额池的用量，只要该流曾被声明就被接受，与 P 此刻有没有会话、重新握手后的声明里还有没有这条流无关。稍后上游作答，该流上照常 append item 记录与结论记录（同一请求身份，`origins` 含该会话），这一项由此收到结果；这次调用在途时会话结束，则该流上出现 `Gap{origin: Channel}`，同样经这一项送到。若核心在作答之前重启，解释层重连时握手得到新的 `instance_id`，与 `Pending` 所带的不同，就知道这次读的结果不再有保证：从 `from` 起没收到结论的，报为需要重新读，不让下游一直等。
    - 对外可见：各 target 独立；“来源重连中”“不支持”“能力未确认”“来源拒绝”“尚未作答”“空结果”彼此可区分，没有看似成功的空数组。
 4. 下游在一个订阅里选 P 的报价流（属配额池，带主体集）、P 最近声明里没有的一条流、X 某账户的持仓流三项：第二项被拒，第一项的主体集并入后超过配额池上限得 `QuotaExceeded{quota, limit}`，第三项为“活”；订阅照常建立，逐项结果交给下游，集成不收到超限主体（§8.5 订阅组）。
    - X 会话建立后，核心对该持仓流 `route` 一次全集（`All`，§8.2 `route`）；此后 X 的持仓推送才到达该订阅。
@@ -504,7 +505,7 @@
 **扩展路径（声明变化与推送）。**
 
 5. X 重连成功，新声明版本把某作用域的 `account_ref` 改成另一个值：核心照常按键路由，该引用在新声明版本里标为不可解析（§2.2）。解释层的执行事实订阅收到新声明版本，重读 `sources`：该账户显示为“账户引用冲突，需要处理”，按旧名字的命令不再解析到任何账户。
-6. X 上一张单据送审、另一条腿进入 `Undetermined`：两条执行事实经解释层的执行事实订阅到达，翻成“待审事项”“结果未知，正在核实，请勿重下”；取证终结的 `ResolutionEvidence` 到达时翻成“已确认发生 / 未发生”。待审事项此刻是否偏离，解释层在呈现时读 `tickets`（§8.5）。
+6. X 上一张单据送审、另一次尝试进入 `Undetermined`：两条执行事实经解释层的执行事实订阅到达，翻成“待审事项”“结果未知，正在核实，请勿重下”；取证确立结果的 `ResolutionEvidence` 到达时翻成“已确认发生 / 未发生”。运维对那次尝试 `abandon` 时，`Abandoned` 到达，翻成“已放弃跟踪，结果未知”；之后若被动归因或 `retry_reconciliation` 补上结果，再翻成该结果，放弃记录仍在。待审事项此刻是否偏离，解释层在呈现时读 `tickets`（§8.5）。
    - 对外可见：推送经执行事实订阅，重连后从已确认 cursor 续，没有投递损失。
 
 **走通**（验收 §10.5 #25–#29、#48、#49）。

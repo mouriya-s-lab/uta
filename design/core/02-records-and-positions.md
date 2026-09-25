@@ -76,7 +76,7 @@ UTA 是一个反向代理。经过它的不是上游协议，而是集成消费�
 
 UTA 处理订单、新闻还是期权，只是协议不同的处理对象。协议改变的是 UTA 如何响应内部的值，不透明的部分交给下游。
 
-一个协议 = 它填的锚点 + 它注册的字段 + 这些字段触发的处理器 + 它的 `payload_schema` 集。例如 `cumulative_filled_quantity = 100` 对核心没有意义；交易协议注册了“`cumulative_filled_quantity` 出现 → `Replace` 第二腿”，UTA 才对它有响应。
+一个协议 = 它填的锚点 + 它注册的字段 + 这些字段触发的处理器 + 它的 `payload_schema` 集。例如 `cumulative_filled_quantity = 100` 对核心没有意义；交易协议注册了“`cumulative_filled_quantity` 出现 → `orders` 读模型的订单累计成交量”，UTA 才对它有响应。
 
 协议 ≠ venue：一个 venue 实现一个或多个协议。每个协议至少有观察半边；只有可写协议才有效应半边。[证据：fp-04 命题 15/16]
 
@@ -84,7 +84,7 @@ UTA 处理订单、新闻还是期权，只是协议不同的处理对象。协�
 |---|---|---|---|
 | 新闻 | 观察链路 | 可能只有 `occurred_at`；无效应半边 | 程序做派生、消费方展示 |
 | 期权 | 观察 + 意图链路 | 与股票同一交易写协议；守卫要读 greeks/到期则注册 | 同交易 |
-| 订单 | 观察 + 意图/尝试链路 | `attribution`、`cumulative_filled_quantity`、`venue_order_id`、`idempotency_key`、`execution_id`、`execution_revision`、守卫字段 | 程序、钩子、读模型 |
+| 订单 | 观察 + 意图/尝试链路 | `attribution`、`cumulative_filled_quantity`、`venue_order_id`、`order_revision`、`idempotency_key`、`execution_id`、`execution_revision`、守卫字段 | 程序、钩子、读模型 |
 
 “交给下游”的下游包括程序与钩子。它们解释载荷，但输出仍经过核心（派生记录、Intent、`IntentAlignment`）。不透明是对**核心的路由与存储**不透明；解释权在下游，记录权在核心。
 
@@ -121,21 +121,20 @@ struct StreamDecl {
     read: Verdict, backfill: Verdict,            // 读侧能力：一次性读 / 回填，按流
     quality: NominalQuality,                     // 声明的名义数据等级，不担保逐条记录
     has_venue_cursor: bool, has_event_time: bool,
-    joinable_venue_seq: bool,                    // 推送与回填的记录带本流 epoch 内连续、可衔接的 venue 序号（回填坐标与实时边界，§8.4）
+    joinable_venue_seq: bool,                    // 推送与回填的记录带本流 epoch 内连续、可衔接的 venue 序号（回填坐标、实时边界与序号覆盖，§8.4）
     backfill_from_origin: bool,                  // 回填能从上游该流历史的起点（Origin）起给出全部历史（§8.2 backfill、§8.4）
+    order_revision: bool,                        // 订单状态种类：每条记录带注册字段 order_revision，上游保证它对同一订单跨渠道单调（§8.1 最近观察）
+    query_not_lagging: bool,                     // 一次性读、回执与取证的回答不早于发出前已送达本流的任何记录（§8.1 最近观察）
 }
 struct Quota { streams: Vec<StreamName>, max_subjects: u32 }   // 这些流上核心要求集成推送（route，§8.2）的不同订阅主体数上限
 struct Capability { scope: WriteLaneKey, operation: OperationKind, verdict: Verdict<CapabilityProof> }
 enum Verdict<P = ()> { Supported(P), Unsupported, Unknown }   // 写能力的 Supported 带证明；流的读 / 回填能力是 Verdict<()>
 struct CapabilityProof {
-    legs: NonEmpty<LegProof>,                    // 腿计划：按序每条腿恰一次上游写；可声明的计划由交易协议按操作种类限定（§6.2）
+    write: WriteOp,                              // Submit | Cancel：这个 (scope, OperationKind) 用哪个 IDL 写操作，一次上游写（§8.2）
+    key: KeyRole,                                // None | OrderKey(KeyGuarantee) | RequestKey(KeyGuarantee)：调用方键的角色；KeyGuarantee = 键的作用域与上游保证唯一的期限（见下）
+    channels: Vec<EvidenceChannel>,              // Undetermined 时的取证渠道，按 §6.6 的固定顺序
     intent_schema: SchemaRef,                    // 接受的意图参数 schema 身份（§6.2 参数合规）
-    target_kinds: Set<OrderTargetKind>,          // 以订单身份为 target 的操作种类（Cancel、Replace）：寻址目标的那条腿接受的目标种类，⊆ {VenueRef, IdemKey} 且非空；其余操作种类为空
-}
-struct LegProof {
-    write: LegWrite,                             // Submit | Cancel：这条腿用哪个 IDL 写操作（§8.2）
-    key: KeyRole,                                // None | OrderKey | RequestKey：这条腿带不带调用方键，键标识它投放（或改后仍在）的订单，还是只标识这次请求
-    channels: Vec<EvidenceChannel>,              // 这条腿 Undetermined 时的取证渠道，按 §6.6 的固定顺序
+    target_kinds: Set<OrderTargetKind>,          // 以订单身份为 target 的操作种类（Cancel、Replace）接受的目标种类，⊆ {VenueRef, IdemKey} 且非空；其余操作种类为空
 }
 ```
 
@@ -143,9 +142,9 @@ struct LegProof {
 
 - F6“部分未文档化”的能力不可能是静态保证。
 - 写操作的 `CapabilityProof` 声明三件事（类型见上，语义与理由在所引各节）：
-  - **腿计划**：这个 `(scope, OperationKind)` 在上游按几条腿、各用哪个写操作执行，每条腿的调用方键角色与它自己的 unknown 证据渠道（by-key / listing+venue id / fills-positions / 保留期内 replay-by-key；空表即无渠道）。交易协议为每个操作种类列出可声明的计划（§6.2 操作种类表）；IO 壳只按声明的值选腿，不自行判断上游能否原子执行（§6.5）。
+  - **写操作与键角色**：这个 `(scope, OperationKind)` 在上游以哪一个写操作执行（一次上游写，§6.2 操作种类表），调用方键的角色（`None`：不带键；`OrderKey`：上游能以该键找到并撤改这次写投放的订单；`RequestKey`：只标识这次请求），以及 unknown 时的取证渠道（by-key / listing+venue id / fills-positions / 保留期内 replay-by-key；空表即无渠道）。键由核心铸造（§6.5），声明 `None` 以外的角色即断言上游原样接受核心的键，并同时声明键的作用域与上游保证它唯一的期限：只在这个作用域与期限内，集成才凭键把记录归因到这次写（`FromAttempt`），其外记 `Unattributed`（§8.1 `idempotency_key` 处理器、§8.3）。
   - **意图参数 schema 身份** `(schema_id, schema_version)`：交易协议该操作种类的公共意图 schema，或以它为基础只增加字段与约束的扩展 schema（§6.2、§8.1）。
-  - **接受的订单目标种类**：撤单与改单寻址目标的那条腿能按 venue 订单身份（`VenueRef`）还是按调用方键（`IdemKey`）找到目标；有调用方键不等于能按键撤单（F6，§6.2 可执行性）。
+  - **接受的订单目标种类**：撤单与改单能按 venue 订单身份（`VenueRef`）还是按调用方键（`IdemKey`）找到目标；有调用方键不等于能按键撤单（F6，§6.2 可执行性）。
 
 UTA 对投影只做两件事：按投影路由（lane 按 `WriteScope`、订阅与一次性读按 `StreamDecl`、写门按 `Capability`）；把声明部分交给解释层，由它翻成对外概念。它不解释形状，也不发明投影。投影含 `WriteLaneKey`、`Verdict` 等核心概念，所以只到解释层为止（§0.1 三段）。
 
@@ -165,18 +164,20 @@ UTA 对投影只做两件事：按投影路由（lane 按 `WriteScope`、订阅�
 **读侧声明** [设计]。一次性读、回填与订阅按 `StreamDecl` 判定，与写侧 `Capability(scope, OperationKind)` 分开：读的对象是流，不是作用域上的操作。
 
 - `read` / `backfill` 各是一个三值 `Verdict`，按流声明；握手后的变化经能力变更推送进入 `CapabilityObserved`（§8.3）。`Unsupported` 与 `Unknown` 都不调用集成，但给发起方的结果不同：前者是“不支持”，后者是“能力未确认”（§8.2 `read`、§8.5 一次性读）。
+- 声明是来源在一次握手里给出的副本，只代表那次会话（§7.2）。同一份声明有两种读法：**最近声明**（历史上最后一版加引用它的 `CapabilityObserved`）回答“来源说过什么”，用于 `sources`、历史回放与订阅需求；**会话有效声明**只在该来源的会话处于 `Established` 时存在，回答“此刻能不能”。此刻的判断（一次性读能否发、回填能否调用）只读会话有效声明；没有已建立会话时结果是“没有会话”，不以最近声明报“不支持”或“未确认”（§8.2 `read`、§8.5）。
 - 能力只到流的粒度。上游只对部分主体提供某种读时，集成要么把这部分声明成单独的流，要么在请求时由上游明确拒绝，得到 `Refused`（§8.2）；核心不按主体细分能力。
 - `request_schema`：一次性读的参数（查询主体：已解析的 instrument、目录键或文本；领域过滤条件：到期日、行权价、条数上限等）是按这份 schema 写成的一个值，与意图载荷同理：核心只校验形状并原样交给集成，不解释（§8.2）。有公共 schema 的种类随 IDL 发布公共请求 schema；来源专有的请求参数写在该集成的扩展 schema 里。
 - `quotas`：配额池属于来源；每个池列出共享一个上限的流与上限值，计量单位见 §8.5 订阅组。
 - `quality`：声明该流名义上的数据等级，分两个维度：时效（实时 / 延迟 / 未知）与覆盖（全市场 / 部分场所 / 未知）；词表随公共 schema 发布，核心不解释。它是来源对该流开通情况的声明，**不担保**每条记录：上游在回答里报告实际等级时，那是公共载荷的字段，逐条以记录为准。理由：数据等级常随 instrument 与开通状态变化，只有上游作答时才知道（运行期的量不冒充静态保证）；声明值只用来在读之前告诉下游“这条流通常是什么”。
 - `joinable_venue_seq`：该流推送与回填的记录是否带本流 epoch 内连续、可衔接的 venue 序号。它是集成对上游序号语义的断言（由一致性测试验证），不是“记录上有序号字段”：只有这样的序号能证明回填与实时在边界上既不重叠也不留洞，所以它决定该流的回填坐标与实时边界的证明（§8.4）。不声明它的流以事件时间作回填坐标；两者都没有的流不能回填（§8.1 握手校验）。
 - `backfill_from_origin`：该流的回填能否以 `Origin`（上游该流历史的真实起点，不是上游此刻保留的最早一条）为窗口起点，交回从起点到窗口终点的全部历史，含归并所需的修订与作废。它同样是集成对上游语义的断言，由一致性测试验证：上游只保留近期历史，或起点之前的历史取不全、或落不到与实时相同的回填坐标上的流不声明它。只有从 `Origin` 起补齐的回填能闭合流 epoch 开头的 `Gap{origin: Source}`，所以它决定成交流能否给出完整界（§8.1 精确重建的前提）。
+- `order_revision` 与 `query_not_lagging`：订单状态流上，除 venue 序号之外仅有的两种来源定序证据（§8.1“订单身份与最近观察”）。前者断言上游给每条订单状态记录一个对同一订单、跨推送与查询渠道都单调的修订（或更新时间）值，以注册字段 `order_revision` 送达；后者断言一次性读、回执与取证的回答反映的上游状态，不早于该流上在这次调用发出之前已送达核心的任何记录。二者都是集成对上游语义的断言，以上游文档为证据，一致性测试可证伪（§10.4 #31、#32）；不声明的流，这两种顺序都不成立，UTA 不以到达顺序代替。
 
 **能力未知 ≠ 结果未知。**
 
 - 三值 `Verdict` 属握手阶段，与“结果未知”（§6.5）分开：能力未知约束启动阶段（能不能发），结果未知约束恢复阶段（发了之后）。
 - `Verdict` 是**运行期值**，不抬进类型 [设计]。能力随握手与运行期观察变化（能力变更推送、`CapabilityObserved`，§8.3），静态类型无法表达运行期才知道的三值。
-- 单据 `alignment` 的能力项按当前能力证据评估（§6.2）。`Unknown` 视同 `Unsupported`：该项 `Diverged`，不放行。[证据：fp-03 命题 3]
+- 单据的能力项与参数合规读会话有效的能力（§7.2）：`Unknown` 或没有已建立会话 = 能力未确立，不终结，单据等待（§6.2、§6.3）；`Unsupported` 才否决。[证据：fp-03 命题 3]
 
 **`payload_schema` 身份** [设计]：`StreamDecl.payload_schema` 是 `(schema_id, schema_version)` 对，由集成在握手声明。
 
@@ -219,23 +220,30 @@ LogPosition = (StreamId, Seq)           // 一条记录的顺序身份
 
 ### 三种进度
 
-三种进度互不替代：
+三种进度互不替代，源头也各不相同：
 
-| 进度 | 含义 | 承载 |
+| 进度 | 含义 | 源头与承载 |
 |---|---|---|
-| 消费位置（cursor） | 某消费者已读取到的位置 | 订阅状态 |
-| 完备进度（frontier / watermark） | 哪些逻辑时间之前不再产生新更新 | 流元数据，由来源声明或推导 |
-| 保留边界（retention） | 每条观察流上存储仍能精确重建的最早位置（执行事实侧不压缩，没有保留边界） | 存储元数据 |
+| 消费位置（cursor） | 某消费者已确认处理到的位置 | 消费方的确认；核心在它确认之后记入订阅状态（§4.2） |
+| 完备进度 | 来源证据证明的覆盖：某一坐标上的哪一段记录已全部到达，命题与坐标随证据写明 | 来源；核心只从来源证据 fold 出来，只在保留边界推进要删掉它所依的记录前留一个覆盖检查点（§8.4 序号覆盖）。没有证据的流没有 |
+| 保留边界（retention） | 每条观察流上存储仍能精确重建的最早位置（执行事实侧不压缩，没有保留边界） | 核心的存储事实（§2.4） |
 
 **不变量：**
 
-- cursor ≤ frontier 不是强制关系：cursor 可落后于 frontier（慢消费者），也可等于（跟上）。
+- cursor 与完备进度没有强制关系：cursor 可以落在已证明的覆盖之内或之外。
 - 引用的 `LogPosition` 一旦 < retention，其精确重建不再保证。边界推进前必须显式处理仍被引用的位置（§2.4）；`basis` 与 retention 的关系见 §5.2。
-- **时间权威归核心**：核心是 `LogPosition` 与完备进度的权威持有者；集成只提供证据（venue seq/cursor/事件时间）。有 venue 游标时，完备进度由证据推进；无游标时，由核心按声明的滞后界从 `received_at` 保守推导。由核心（时间权威）与集成（证据）保证。
+- **位置归核心，完备归来源** [设计]：
+  - `LogPosition` 是核心在 append 时创建的，核心是它的源头；集成给的 venue 序号、游标与事件时间是来源给的字段，随记录作为副本保存。
+  - 某段历史是否已全部到达，是上游历史的性质，源头是上游（§0.1）。核心只 fold 来源给出的证据，并写明它证明的命题与坐标。契约里今天只有一种这样的证据：声明 `joinable_venue_seq` 的流上的**序号覆盖**，即“流 epoch e 内 venue 序号落在 `[from, through)` 的记录都已 append”（§8.4）。它的坐标是该 epoch 的 venue 序号，不是事件时间：可衔接序号与事件时间之间没有顺序关系（§8.1 精确重建的前提）。
+  - “此后不再有 `occurred_at` 早于 t 的记录”（事件时间闭合）是关于上游未来输出的命题，契约里没有证明它的证据，所以没有哪条流有事件时间上的完备进度。`received_at`、核心或运维声明的滞后界、上游文档写的迟到上限都不是证据：越过上限的迟到记录与从未发出的记录不可区分，违反不是一条可观察的记录（§10.4 #30）。
+  - 没有证据的流没有完备进度；依赖它的判断得“完备未确立”，不以时钟、到达顺序或消费位置补上（§4.2 `await-all`、§8.5 完整界）。
 
-**为什么。** 读取到特定序号并不保证更早事件时间的数据不会迟到，所以 `await-all` 必须按完备进度触发，而非按消费位置。三者度量的是三件不同的事（读到哪、之前不再变、还能重建到哪），任一都无法从另两者算出。[证据：fp-05 案例 10④/11⑤/13⑤；fp-04 命题 10]
+**为什么。** 读到哪不说明之前的记录是否已全部到达，所以 `await-all` 按证据证明的覆盖触发，而非按消费位置。三者度量三件不同的事（确认处理到哪、来源证明了哪段已全部到达、还能重建到哪），源头分别是消费方、来源与核心，任一都无法从另两者算出。[证据：fp-05 案例 10④/11⑤/13⑤；fp-04 命题 10]
 
-**不选。** 用单一“进度”标量同时表达消费、完备与保留。不选：它把“读到哪”与“之前不再变”混同，`latest` 消费者会被误当作已跟上完备进度，阈值策略据此误触发（§4.2）。
+**不选。**
+
+- 用单一“进度”标量同时表达消费、完备与保留：它把“读到哪”与“已全部到达”混同，`latest` 消费者会被误当作已跟上完备进度，阈值策略据此误触发（§4.2）。
+- 由核心按 `received_at` 与声明的滞后界推导完备进度：以本地时钟推断上游的未来输出。迟到记录照常 append 而进度不退，推断失真时没有任何记录说明，依赖它的判断却已当真执行。上游文档给出的迟到上限同理，它不可证伪。
 
 ## 2.4 保留语义
 
@@ -245,11 +253,11 @@ LogPosition = (StreamId, Seq)           // 一条记录的顺序身份
 
 ### 规则
 
-**引用处理与边界推进。** 推进保留边界前，必须显式处理仍被引用的 `LogPosition`：保留对应历史、保存必要证据，或明确缩小重放承诺（`AS OF ≥ retention frontier`）。[证据：fp-05 案例 13⑤ Materialize]
+**引用处理与边界推进。** 推进保留边界前，必须显式处理仍被引用的 `LogPosition`：保留对应历史、保存必要证据，或明确缩小重放承诺（`AS OF ≥ 保留边界`）。[证据：fp-05 案例 13⑤ Materialize]
 
 **双侧保留策略。** [域 P15]
 
-- 派生侧依据 frontier 进行压缩；`compact_below_retention` 仅对 `RetractableDelta` 表存在（§4.1）。
+- 派生侧按保留边界压缩；`compact_below_retention` 仅对 `RetractableDelta` 表存在（§4.1）。
 - 执行事实侧保持纯 append（不变量 §6.9-2）。
 - 快照是重启延迟的必需项，不改变 append-only 语义。
 
@@ -258,7 +266,7 @@ LogPosition = (StreamId, Seq)           // 一条记录的顺序身份
 - `LogPosition` 只在同一 `StreamId` 内有序（§2.3），所以保留边界是每条观察流一个位置。合起来与 `basis`、cursor 同形（`Set<LogPosition>`）。
 - 执行事实侧原始记录不压缩、不删除，没有保留边界；登记只对观察位置起作用。
 
-**健康流按键保留** [设计]。健康观察（§8.4）是状态值：每条带它那个键上的完整当前值，fold 一个键只取该键不高于 `as_of` 的最新一条。键是：一个集成的会话状态；一条流的 readiness；一个逻辑流的回填进度（值带所属流 epoch，没有回填任务的 epoch 为 `None`，§8.4）；一个调用目标的计数（带计数后的 `consecutive_failures` 与 `last_success_at`）。同键的后一条取代前一条，这就是健康流的 `RetractableDelta`（§4.1），它的压缩因此按键进行：
+**健康流按键保留** [设计]。健康观察（§8.4）是状态值：每条带它那个键上的完整当前值，fold 一个键只取该键不高于 `as_of` 的最新一条。键是：一个集成的会话状态（`Established` 带其 `SessionEpoch`）；一条流的 readiness（带它到达时所在会话的 `SessionEpoch`，只在该会话仍是当前已建立会话时有效，§8.4）；一个逻辑流的回填进度（值带所属流 epoch，没有回填任务的 epoch 为 `None`，§8.4）；一个逻辑流的覆盖检查点（值带流 epoch 与 `folded_below`，只说 `folded_below` 之下的记录，序号覆盖的 fold 按 `folded_below` 读它，§8.4）；一个调用目标的计数（带计数后的 `consecutive_failures` 与 `last_success_at`）。同键的后一条取代前一条，这就是健康流的 `RetractableDelta`（§4.1），它的压缩因此按键进行：
 
 - 边界之下只删每个键被同键后续记录取代的记录；每个键在边界之下的最新一条作为**基线**留下，位置不变。对任一 `as_of ≥ 边界`，按键 fold 与压缩前相等；`as_of` 低于边界仍得 `BeyondRetention`（§5.2）。
 - 从边界订阅健康流的消费者先收到这些基线（原位置，低于边界），再收到边界起的记录；这是压缩的结果，不是 cursor 退回（§8.5）。
@@ -270,16 +278,16 @@ LogPosition = (StreamId, Seq)           // 一条记录的顺序身份
 
 | 引用 | 何时登记 | 何时解除 |
 |---|---|---|
-| 意图的 `basis`（§5.1） | `Prepared` 持久化时 | 该 Attempt 链 `Resolved` 后 |
+| 意图的 `basis`（§5.1） | `Prepared` 持久化时 | 该尝试的等待结束后（结果确立、`Expired` 或 `Abandoned`） |
 | 程序 `Checkpoint` 依赖的 cursor 位置 | checkpoint 持久化时 | 下一个 checkpoint 持久化即替换 |
-| 对账 `ResolutionEvidence` 引用的观察位置 | append 时 | Attempt `Resolved` 后 |
+| 对账 `ResolutionEvidence` 引用的观察位置 | append 时 | 该尝试的等待结束后 |
 
 解除后的历史引用仍可读作审计。落到边界之下时读得 `BeyondRetention`（§5.2），不再阻止压缩。
 
 **审批方 = 控制面 principal** [设计]，经 `advance_retention`（§8.5）。
 
 - 核心逐流算出该流已登记引用的最早位置；边界不得越过它，越过即 `Rejected(ReferencedBelow{min})`。
-- 要越过只能先让持有者解除：该 Attempt 链 `Resolved`（含 `Undetermined` 经证据或人工决议收敛）；程序推进 checkpoint 或被卸载。没有旁路。
+- 要越过只能先让持有者解除：该尝试的等待结束（`Undetermined` 经证据收敛或被 principal 放弃）；程序推进 checkpoint 或被卸载。没有旁路。
 
 **留存时长 = 配置参数** [设计]（§7.6）。
 
@@ -406,9 +414,9 @@ money/quantity 为 [交易协议] 处理器的值类型（§2.1 推论 4）。�
 | 金额 | 精确有理数/定点数 + 货币索引；离散化返回余数，不静默丢钱 | fp-04 命题 1 safe-money |
 | 数量 | 精确数值；**不**做“数量带 instrument 尺度”（无证据） | — |
 | 身份 | 上游身份一律 `(venue, native_id)` opaque + 智能构造器（出现位置见表下） | fp-04 命题 16；域 F2 |
-| 时间 | `occurred_at` / `received_at` 分离；`deadline` 以 UTC 时刻声明并随记录持久化，运行期计时器用单调钟；顺序只有 `(stream, seq)` 偏序，不由任何时钟推导 | fp-04 命题 9/11；域 F11 |
+| 时间 | `occurred_at` / `received_at` 分离；`deadline` 以 UTC 时刻声明并随记录持久化，运行期计时器用单调钟；来源顺序只由来源给的定序证据（venue 序号等，§8.1）给出，日志顺序只是 `(stream, seq)` 偏序，都不由任何时钟推导 | fp-04 命题 9/11；域 F11 |
 | 错误 | 每规则封闭 sum；venue 映射保留 `Unmapped` | fp-04 命题 8；域 C13 |
-| 外部写结果 | `Prepared \| SendBarrier \| VenueAccepted \| VenueRejected \| Undetermined \| Expired` + `ResolutionEvidence` 记录，非 `Option`/字符串 | fp-06 命题 1（MongoDB `UnknownTransactionCommitResult`、Oracle in-doubt）；fp-01 M11 DAML 反例 |
+| 外部写结果 | `Prepared \| SendBarrier \| VenueAccepted \| VenueRejected \| NotSent \| Undetermined \| Expired` + `ResolutionEvidence` 记录；另有 UTA 自己的 `Abandoned`（放弃等待，不是结果）；非 `Option`/字符串 | fp-06 命题 1（MongoDB `UnknownTransactionCommitResult`、Oracle in-doubt）；fp-01 M11 DAML 反例 |
 
 - **身份** 出现在四处：投影里的 `WriteLaneKey`/`StreamId`（§2.2）、意图的 `target`（§6.2）、观察记录的 `attribution`（§5.3）、成交记录的 `execution_id`（§8.1）。instrument 只在 venue 作用域内有意义。换名不是安全，隐藏构造器才是。
 - **时间**：`deadline` 以 UTC 时刻持久化，所以发出前门与过期步跨重启仍可比。

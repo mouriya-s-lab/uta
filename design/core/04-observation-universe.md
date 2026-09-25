@@ -16,7 +16,7 @@ trait RetractableDelta: Delta { fn neg(&self) -> Self }            // 只有派�
 
 struct Journal<Record, D: Delta> { stream: StreamId, ops: Vec<(LogPosition, D)> }
 fn fold_state<Record, D: Delta>(journal: &Journal<Record, D>, at: LogPosition) -> State<Record>   // state = 前缀和 = fold
-fn compact_below_retention<Record, D: RetractableDelta>(journal: &mut Journal<Record, D>, frontier: Frontier)
+fn compact_below_retention<Record, D: RetractableDelta>(journal: &mut Journal<Record, D>, retention: LogPosition)
 ```
 
 - **`Record`**：该流的记录词表，由集成侧在边界处解析给出（§2.1）。`Record` 必须为具体类型；退化为 `dyn Any` 即违反解析边界。[证据：fp-04 命题 15/16]
@@ -54,34 +54,40 @@ fn compact_below_retention<Record, D: RetractableDelta>(journal: &mut Journal<Re
 
 | 方式 | 语义 | 损失 |
 |---|---|---|
-| await-all | 待所有指定输入均达到要求位置/完备进度后再行计算 | 无（引入等待） |
+| await-all | 待所有指定输入均达到要求点后再行计算：要求点是核心日志位置，或来源证据证明的覆盖（§2.3）在它自己坐标上的一点 | 无（引入等待） |
 | ordered | 按单条流的顺序依次处理，不跳过中间记录；一个订阅选多条流时各流各自有序，流与流之间不定投递顺序（§8.5） | 无（引入背压） |
-| latest / conflated | 允许合并中间更新，仅保留最新值 | **有**：`Gap{origin: Delivery}` 原因记录为 `conflated`，或以消费者声明的窗口界作为其可接受丢失界 |
+| latest / conflated | 允许合并中间更新，仅保留最新值 | **有**：订阅的投递缺口 `Gap{origin: Delivery, reason: conflated}`，或以消费者声明的等待窗口作为其可接受的丢失界 |
 
-- `await-all` 按**完备进度**触发，而非按消费位置（§2.3）。
-- `latest` 属于传输层 conflation，而非 frontier 消费。UI 报价显示可接受 conflation，但依赖完整状态路径的阈值策略不能默认接受。
+- `await-all` 按**来源证据证明的覆盖**触发，而非按消费位置（§2.3）。今天唯一的这种证据是声明 `joinable_venue_seq` 的流上的序号覆盖（§8.4）：要求点是该输入当前流 epoch 的一个 venue 序号，覆盖的 `through` 越过它即满足。要求点为核心日志位置时（例如“各输入都已 append 到这些位置”），它只说日志，核心自己就能判定，不说任何完备。
+- 没有完备证据的输入上，按覆盖的要求永远不满足（完备未确立），不以时钟、到达顺序或位置替代。跨流按事件时间对齐（“各流 t 之前的记录都到了再算”）没有任何来源证据，所以不提供。要按时间截止的消费者声明自己的**等待窗口**（例如收到时间 t + w 时用已到的记录计算）：这是消费者的意图，写在它的消费声明里，不是流的元数据，也不冒充完备；窗口之后到达的记录照常 append、照常投递，窗口就是它接受的丢失界，它的输出以 `basis` / `as_of` 记下实际用到的位置，事后可追溯漏了什么。
+- 程序装载时按最近声明检查：某输入以 `await-all` 声明、要求点是来源证据证明的覆盖，而该流的最近声明不给这种证据（没有 `joinable_venue_seq`），或程序对这条流的供给项不是整条流、或这条流在配额池里（序号覆盖要求需求为 `All`，§8.4），该程序装载被拒，错误指出该输入，与 `required_inputs` 缺字段同属装载期 fail-closed（§2.5）。要求点是核心日志位置的 `await-all` 与声明等待窗口的消费不受此检查。覆盖按流 epoch 存在、依 epoch 开始时的会话有效声明与当时的需求（§8.4），装载时的检查只看最近声明：装载之后某个流 epoch 不再有覆盖（声明撤去 `joinable_venue_seq`、流进入配额池），该输入在这个 epoch 上的要求不满足，程序不因它推进，这是“完备未确立”，在该流的覆盖上可见，不另设出口。
+- `latest` 属于传输层 conflation，而非完备消费。UI 报价显示可接受 conflation，但依赖完整状态路径的阈值策略不能默认接受。
 - 损失语义必须由消费者显式声明。[证据：fp-05 命题 2/15；域 C6]
 
 ### gap 的三种来源
 
-三种 gap 同一形状，按 `origin` 区分。
+三种 gap 按 `origin` 区分。它们说的事、源头与落点各不相同，不是同一种记录：
 
-**`Gap{origin: Source, reason}`：来源流有缺口。** 新 epoch 首条记录后的补齐边界由 frontier 声明（域 P3/P4）。`reason` 取 P3 的集合，各自的触发者如下：
+**`Gap{origin: Source, reason}`：来源流有缺口。** 它说的是来源流本身的连续性：新 epoch 的首条记录（带前一范围与最后 `Seq`），或回填未能补齐时标出未覆盖区间的流内记录，落在观察 `Journal` 该流上。`reason` 取 P3 的集合，各自的触发者与写者如下：
 
-| `reason` | 触发者 |
+| `reason` | 触发者与写者 |
 |---|---|
-| `start`、`disconnect`、`quota`、`ingress_overflow` | 集成上报 |
-| `credential_rotated` | 会话重建（§7.2） |
+| `start`、`disconnect`、`quota`、`ingress_overflow` | 集成上报（流内断代由集成推送）；握手时决定开新 epoch 的，由集成会话 append（§8.2 `handshake`） |
+| `credential_rotated` | 会话重建（§7.2），集成会话 append |
 | `schema_change` | 载荷版本变化（§8.1） |
-| `backfill_incomplete` | 回填穷尽（§8.4） |
+| `backfill_incomplete` | 回填穷尽（§8.4），持久订阅 append |
 | `program_upgrade` | 程序产出的派生流也是来源；程序升级或 `Reset` 开新 epoch 时记（§8.6） |
 
-**`Gap{origin: Delivery, reason}`：投递有缺口。** `reason ∈ {slow_consumer, compacted, conflated}`（P3），分别是慢消费者被停投、订阅位置已被压缩到保留边界之下、`latest` 消费合并。程序是订阅消费者（输入 = 位置推进，§4.3），程序滞后被跳过的区间是它的 `Delivery` gap。
+**`Gap{origin: Delivery, reason}`：某个订阅的投递有缺口。** `reason ∈ {slow_consumer, compacted, conflated}`（P3），分别是慢消费者被停投、订阅位置已被压缩到保留边界之下、`latest` 消费合并。程序是订阅消费者（输入 = 位置推进，§4.3），程序滞后被跳过的区间是它的 `Delivery` gap。
 
-**`Gap{origin: Channel, channel}`：读渠道不可用。** `channel` 为返回 `Unavailable` 的那个渠道：对账取证渠道（§6.6）、回填操作（§8.4）或一次性读 `read`（§8.2）。落点随发起者：
+- 它是订阅的状态，不是流上的记录：说的是“这个订阅在这条流上没有收到位置 `from` 到 `to`（两端都含）的记录”，流本身并不缺这些记录。源头是核心的投递，拥有者与唯一写者是持久订阅元素，存在订阅表里，按（订阅，流）记，与该流的 cursor 同一粒度（§7.5）：`{流, from, to, reason}`。
+- 开始锚点：投递调度要跳过一段时，请持久订阅写下这一项，写下之后才跳过，所以崩溃不会留下没有记下的跳过。`to` 是被跳过的最后一个位置：`slow_consumer` 与 `conflated` 为跳过时该流已交出范围的末位，`compacted` 为跳过时该流保留边界之下的最后一个位置。确认之前，每次投递与重新挂接都先交出它，再交 `to` 之后的记录。结束锚点：订阅者确认一个不低于 `to` 的 cursor，即显式确认这次损失：cursor 推进与该项删除在同一次写里；确认到 `to` 不确认任何尚未交出的记录。取消订阅，或该流的项从订阅里移除时，该项随之删除；项的挂起（如 `StreamUndeclared`）不是移除，缺口留着。
+- 执行事实订阅没有这种缺口（§8.5）。读模型直接 fold 日志、不经投递，所以它不出现在 `Snapshot.gaps` 里（§8.5）；订阅者在自己的投递里与 `subscriptions` 读模型里看到它。
+
+**`Gap{origin: Channel, channel}`：读渠道不可用。** `channel` 为返回 `Unavailable` 的那个渠道：对账取证渠道（§6.6）、回填操作（§8.4）或一次性读 `read`（§8.2）。它是核心自己那次调用的结果（UTA 自有事实），不是流的断代：它不说来源少了什么记录，所以不计入读模型的 `gaps`（§8.5）。落点随发起者：
 
 - 取证渠道的 gap 记在执行事实侧，属该 Attempt（§6.5）。
-- 回填与一次性读的 gap 记在观察侧该流上。
+- 回填与一次性读的 gap 记在观察侧该流上，作为流上的控制记录，让等这次读的人看得到结论（§8.5 一次性读）。
 
 **集成崩溃的观察流面。** 集成在**观察流侧**崩溃（订阅 / 推送进程掉线）时，仅波及其负责的流，记录为 `Gap{origin: Source}`，核心不受影响。这是集成崩溃两个故障面之一；另一面与两面的判别边界见 §6.7。
 
@@ -112,7 +118,7 @@ struct Program { nodes: Vec<DerivationNode>, rules: Vec<DecisionStep>, state: Ve
 - `nodes` → 增量 DAG，仅重算受影响节点，并通过 cutoff 截断。
 - 输出写回派生侧 `Journal`。alert 本质上是派生观察，与外部观察同形。
 - **增量在节点粒度**（哪些节点因输入变化重跑），不在算法内部。一个节点被触发时可以看它声明的完整窗口，输出相等时 cutoff 仍成立。记录渐进不要求算法渐进。[证据：fp-01 M3 Mu `Work_`；fp-05 案例 7 Incremental；域 B3/P2]
-- **输入 = 位置推进**：frontier + cursor 之后的记录。程序可见 gap 与两种时间。
+- **输入 = 位置推进**：cursor 之后的记录，加上 `await-all` 输入上来源证据证明的覆盖（§4.2）。程序可见 gap 与两种时间。
 - **输出 = (effect 请求集, 派生记录集)**：锚点经处理器成为 Intent 或读结果。
 
 **`Window` 与 `Pooled{window}`。** 两者都以窗口为入口，但语义与物化策略不同：
