@@ -19,7 +19,7 @@ fn fold_state<Record, D: Delta>(journal: &Journal<Record, D>, at: LogPosition) -
 fn compact_below_retention<Record, D: RetractableDelta>(journal: &mut Journal<Record, D>, retention: LogPosition)
 ```
 
-- **`Record`**：该流的记录词表，由集成侧在边界处解析给出（§2.1）。`Record` 必须为具体类型；退化为 `dyn Any` 即违反解析边界。[证据：fp-04 命题 15/16]
+- **`Record`**：该流的记录词表，必须为具体类型；退化为 `dyn Any` 即违反解析边界。集成来源的流上，它由集成侧在边界处解析给出（§2.1）；程序流上，它是解释器产出的类型化值，类型是输出契约里该流的值类型（§4.3），不经任何集成解析。[证据：fp-04 命题 15/16]
 - **`StreamId = (source, stream, epoch)`**：每个范围独立维持 `LogPosition` 单调递增；系统内不存在全局入口序（§2.3）。[证据：fp-04 命题 11；域 P2]
 - **状态计算**：状态是 `fold_state` 的计算结果（前缀和折叠），可随时重建与缓存，而非由规则原地修改的对象。[证据：fp-03 命题 1；fp-01 M8]
 
@@ -60,7 +60,7 @@ fn compact_below_retention<Record, D: RetractableDelta>(journal: &mut Journal<Re
 
 - `await-all` 按**来源证据证明的覆盖**触发，而非按消费位置（§2.3）。今天唯一的这种证据是声明 `joinable_venue_seq` 的流上的序号覆盖（§8.4）：要求点是该输入当前流 epoch 的一个 venue 序号，覆盖的 `through` 越过它即满足。要求点为核心日志位置时（例如“各输入都已 append 到这些位置”），它只说日志，核心自己就能判定，不说任何完备。
 - 没有完备证据的输入上，按覆盖的要求永远不满足（完备未确立），不以时钟、到达顺序或位置替代。跨流按事件时间对齐（“各流 t 之前的记录都到了再算”）没有任何来源证据，所以不提供。要按时间截止的消费者声明自己的**等待窗口**（例如收到时间 t + w 时用已到的记录计算）：这是消费者的意图，写在它的消费声明里，不是流的元数据，也不冒充完备；窗口之后到达的记录照常 append、照常投递，窗口就是它接受的丢失界，它的输出以 `basis` / `as_of` 记下实际用到的位置，事后可追溯漏了什么。
-- 程序装载时按最近声明检查：某输入以 `await-all` 声明、要求点是来源证据证明的覆盖，而该流的最近声明不给这种证据（没有 `joinable_venue_seq`），或程序对这条流的供给项不是整条流、或这条流在配额池里（这两种情形下来源不会被要求供给整条流，序号覆盖只计入来源确认整条流供给之后的推送，§8.4），该程序装载被拒，错误指出该输入，与 `required_inputs` 缺字段同属装载期 fail-closed（§2.5）。要求点是核心日志位置的 `await-all` 与声明等待窗口的消费不受此检查。装载时的检查只看最近声明，是静态的；覆盖本身按流 epoch 由记录决定：epoch 开始时的会话有效声明，以及该 epoch 上确认整条流供给的路由结论记录（§8.4）。装载之后某个流 epoch 没有覆盖或覆盖停住（声明撤去 `joinable_venue_seq`、流进入配额池、来源拒绝了部分主体），该输入在这个 epoch 上的要求不满足，程序不因它推进，这是“完备未确立”，在该流的覆盖上可见，不另设出口。
+- 程序装载时按最近声明检查：某输入以 `await-all` 声明、要求点是来源证据证明的覆盖，而该流的最近声明不给这种证据（没有 `joinable_venue_seq`），或程序对这条流的输入声明不是整条流的供给（用途为只投递，或带主体集）、或这条流在配额池里（这两种情形下来源不会被要求供给整条流，序号覆盖只计入来源确认整条流供给之后的推送，§8.4），该程序装载被拒，错误指出该输入，与字段访问器缺字段同属装载期 fail-closed（§2.5、§8.6）。要求点是核心日志位置的 `await-all` 与声明等待窗口的消费不受此检查。装载时的检查只看最近声明，是静态的；覆盖本身按流 epoch 由记录决定：epoch 开始时的会话有效声明，以及该 epoch 上确认整条流供给的路由结论记录（§8.4）。装载之后某个流 epoch 没有覆盖或覆盖停住（声明撤去 `joinable_venue_seq`、流进入配额池、来源拒绝了部分主体），该输入在这个 epoch 上的要求不满足，程序不因它推进，这是“完备未确立”，在该流的覆盖上可见，不另设出口。
 - `latest` 属于传输层 conflation，而非完备消费。UI 报价显示可接受 conflation，但依赖完整状态路径的阈值策略不能默认接受。
 - 损失语义必须由消费者显式声明。[证据：fp-05 命题 2/15；域 C6]
 
@@ -76,7 +76,7 @@ fn compact_below_retention<Record, D: RetractableDelta>(journal: &mut Journal<Re
 | `credential_rotated` | 会话重建（§7.2），集成会话 append |
 | `schema_change` | 载荷版本变化（§8.1） |
 | `backfill_incomplete` | 回填穷尽（§8.4），持久订阅 append |
-| `program_upgrade` | 程序产出的派生流也是来源；不沿用旧状态的替换（程序升级、程序流集合改变或运维冷启动，即 `Reset`）开新 epoch 时，控制面在替换的 `Applied` 事务里、在新成员的每条程序流上 append（§8.6 程序流的 epoch） |
+| `program_upgrade` | 程序产出的派生流也是来源；不沿用旧状态的替换（程序升级、输出契约改变或运维冷启动，即 `Reset`）开新 epoch 时，控制面在替换的 `Applied` 事务里、在新成员的每条程序流上 append（§8.6 程序流的 epoch） |
 
 **`Gap{origin: Delivery, reason}`：某个订阅的投递有缺口。** `reason ∈ {slow_consumer, compacted, conflated}`（P3），分别是慢消费者被停投、订阅位置已被压缩到保留边界之下、`latest` 消费合并。程序是订阅消费者（输入 = 位置推进，§4.3），程序滞后被跳过的区间是它的 `Delivery` gap。
 
@@ -107,8 +107,14 @@ fn compact_below_retention<Record, D: RetractableDelta>(journal: &mut Journal<Re
 程序是 **deep embedding 的小闭合值**，节点即值树（§2.5）：
 
 ```rust
-struct Program { nodes: Vec<DerivationNode>, rules: Vec<DecisionStep>, outputs: Vec<Output> }
-struct Output  { name: StreamName, node: Id }   // 输出声明：节点 node 的值落在该程序的流 name 上
+struct Program   { nodes: Vec<DerivationNode>, rules: Vec<DecisionStep>, inputs: Vec<InputDecl>, outputs: Vec<Output> }
+struct InputDecl { name: InputName, source: Source, stream: StreamName, subjects: Option<Set<Subject>>,
+                   usage: Usage, mode: Consume, wait: Option<WaitWindow>, start: Start }
+    // 观察输入声明，Input(name) 节点指名它（§2.5）；source 只能是 Integration(_)，Program(_) 在装载期被拒（§8.6）；subjects 无 = 整条流；wait 是该输入声明的等待窗口（§4.2），无则不按时间截止，只与 Ordered、Latest 同用，与 AwaitAll 同给在装载期被拒（要求点与时间截止不能同时决定何时计算）
+enum Usage   { Supply, DeliveryOnly }                         // 缺省 Supply；与 §8.5 观察流订阅项的用途及接纳规则相同
+enum Consume { AwaitAll(RequirementPoint), Ordered, Latest }  // §4.2 三种消费方式；await-all 带要求点
+enum Start   { Tail, Origin }                                 // 缺省 Tail（§8.6 程序的输入）
+struct Output    { name: StreamName, node: Id }   // 输出声明：节点 node 的值导出到该程序的流 name
 // DerivationNode 见 §2.5；DecisionStep 见 §6.1
 ```
 
@@ -117,15 +123,24 @@ struct Output  { name: StreamName, node: Id }   // 输出声明：节点 node �
 同一个程序值有两种解释。观察半边是**解释①（派生）**；解释②见 §6.1。
 
 - `nodes` → 增量 DAG，仅重算受影响节点，并通过 cutoff 截断。
-- **输出由 `outputs` 声明**：每个 `Output` 把节点 `node` 的值落在流 `(Program(id), name)` 上（§2.3 `Source`）；该程序的**程序流集合**恰是 `outputs` 里的全部 `name`（§8.6 程序流的 epoch）。每次 `Advance`，每个 `Output.node` 的值 append 为该流上的派生记录（派生侧 `Journal`）；其余节点的值是程序内部的，不落任何流。alert 本质上是派生观察，与外部观察同形。
-- 装载期校验拒绝 `outputs` 里名字重复或 `Output.node` 不存在的程序值（§8.6 装载期校验）。程序状态就是 `Scan`/`Window` 节点的累加器（见下文“状态正交划分”），经 `Checkpoint` 持久化（§8.6），不另有状态声明。
+- **输入由 `inputs` 声明**：每个 `InputDecl` 是程序对一条集成来源观察流的消费声明：主体集、用途（与 §8.5 订阅项同一接纳规则）、消费方式与要求点、等待窗口（§4.2）与起点（§8.6 程序的输入）；`Input(name)` 节点给出该流 cursor 之后的记录，节点经 `Op1(Field(_), _)` 读其字段（§2.5）。`inputs` 里名字重复，或某项的来源是 `Program(_)`，装载期校验拒绝该程序值（§8.6）。程序之间的组合在编写程序值时完成：文本糖编译成同一棵值树（§8.6），一个程序要用另一个程序算出的值，就把那些节点写进自己的值（§10.1 程序的输入与输出）。执行事实输入与请求流不在 `inputs` 里（§8.6 程序的输入）。
+- **输出由 `outputs` 声明**：每个 `Output` 把节点 `node` 的值导出到流 `(Program(id), name)`（§2.3 `Source`）；其余节点的值是程序内部的，不落任何流。程序的**输出契约**是 `outputs` 每项的 `(name, 值类型)`，值类型由输出类型 fold（§2.5）从 `Output.node` 求出，只由程序值本身求得：字段的类型来自访问器的类型标签，不取任何声明，所以开始成员的 `Applied` 在来源还没有声明版本时也能记下它（§8.6 程序流的 epoch）；这些 `name` 的流就是程序流。装载期校验拒绝 `outputs` 里名字重复、`Output.node` 不存在、是 `Pooled` 节点（输出是段视图，§4.5），或它的类型要从 `payload_schema` 才能求出（`Input` 节点给出的整条记录，及未经字段访问器由它组成的值）的程序值（§8.6）。alert 本质上是派生观察，与外部观察同形。
+- **输出记录是节点的当前值** [设计]：一条程序流在一个流 epoch 内承载 `Output.node` 的当前类型化值，它的 `fold_state`（§4.1）就是这个值。每次 `Advance` 的输出事务按该节点在这批推进之后的值写：
+  - 本流 epoch 第一次有定义的值：一条记录，只含这个值的正贡献；每个流 epoch 由此开始，新 epoch 不撤回上一 epoch 的值（§8.6 程序流的 epoch）；
+  - 值变了：一条记录，原子地撤回此前仍生效的那个贡献（`neg`，指名它所在的位置）并加入新值的正贡献；
+  - 值按其类型的语义相等：不写记录（这批推进的其余结果照常提交，§8.6 `Advance`）；
+  - `Window` 节点导出的是它在这批推进之后的完整值，不是逐元素各一条记录。
+  - 记录不带 `subject`，程序流只能按整条流订阅（§8.5 订阅组）。
+- **每条输出记录带 `basis`**：同一事务提交的该程序各输入的 cursor。契约：在每条输出记录处，值 = 程序对各输入流到 `basis` 为止的前缀求得的值。这条等式对 `ordered` 与 `await-all` 输入成立；`latest` 与声明等待窗口的输入按实际投递给程序的记录求值，跳过的部分是投递上的 `Gap{origin: Delivery, reason: conflated}` 或等待窗口之外的记录（§4.2），`basis` 连同这些缺口说明实际用到了什么，不断言等于完整前缀的值。修正不改写已有位置：迟到记录使值改变时，照上面的“值变了”写一条新记录，撤回旧贡献；引用被撤回贡献的 `basis` 随之为 `Retracted`（§5.2；W16）。
+- **`Advance` 的分批不在契约里** [设计]：一批推进含哪些记录取决于记录何时到达，而流与流之间没有投递顺序（§4.2、§8.5），也没有来源证据给出跨流的切分（§4.2 `await-all`）。所以两份实现可以给出不同的中间记录序列，但每条记录都满足上面的 `basis` 契约，只有 `ordered` 与 `await-all` 输入的程序在同样的输入推进完之后值相等。理由：分批若进契约，就要替到达时间定一个来源从未给出的跨流顺序（§2.3）；`basis` 契约只由已提交的记录决定，两份实现都能按记录检验。要看到中间状态的消费方，自己消费这些输入。
+- 程序状态就是 `Scan`/`Window` 节点的累加器（见下文“状态正交划分”），经 `Checkpoint` 持久化（§8.6），不另有状态声明。
 - **增量在节点粒度**（哪些节点因输入变化重跑），不在算法内部。一个节点被触发时可以看它声明的完整窗口，输出相等时 cutoff 仍成立。记录渐进不要求算法渐进。[证据：fp-01 M3 Mu `Work_`；fp-05 案例 7 Incremental；域 B3/P2]
-- **输入 = 位置推进**：`required_inputs` 各流 cursor 之后的记录，加上 `await-all` 输入上来源证据证明的覆盖（§4.2）。程序可见 gap 与两种时间。解释②另读声明的执行事实流与该程序的请求流（§6.1、§8.6 程序的输入），解释①的节点不消费它们。
+- **输入 = 位置推进**：`inputs` 各流 cursor 之后的记录，加上 `await-all` 输入上来源证据证明的覆盖（§4.2）。程序可见 gap 与两种时间。解释②另读声明的执行事实流与该程序的请求流（§6.1、§8.6 程序的输入），解释①的节点不消费它们。
 - **输出 = (effect 请求集, 派生记录集)**：锚点经处理器成为 Intent 或读结果。
 
 **`Window` 与 `Pooled{window}`。** 两者都以窗口为入口，但语义与物化策略不同：
 
-- `Window(Id, W)` 是**核心内**按位置产出值的滑动窗口节点，输出是逐条值流，走普通增量 DAG。
+- `Window(Id, W)` 是**核心内**按位置产出值的滑动窗口节点，输出是逐条值流，走普通增量 DAG；被 `outputs` 导出时见上文“输出记录是节点的当前值”。
 - `Pooled{input, window}` 把完整窗口**物化为可借用的段视图**交给原生 op（§4.5），输出是段视图，不是逐条值。
 
 **状态正交划分：**
@@ -178,7 +193,7 @@ struct Output  { name: StreamName, node: Id }   // 输出声明：节点 node �
 `Pooled` 是值树（§2.5）里的**读侧组合子**，也是核心暴露给可选行情派生计算子系统的唯一接口。
 
 - 形式：`DerivationNode::Pooled { input, window }`，输出是可借用的完整窗口**段视图**，不是逐条值。
-- 原生 op 是注册表（§2.1）里由子系统提供的黑盒 op。它要求输入是 `Pooled` 的，输出是一条派生观察流，下游像读任何派生流一样读它。
+- 原生 op 是注册表（§2.1）里由子系统提供的黑盒 op。它要求输入是 `Pooled` 的，输出是一个普通节点值：下游节点像读任何节点值一样读它，只有 `outputs` 导出它时才落在程序流上，按程序流的记录规则（§4.3）。
 - “程序不是黑盒函数”对决策（解释②）继续成立。
 - 子系统未安装时，含 `Pooled` 的程序在**装载期被拒绝**，其余程序不受影响。
 

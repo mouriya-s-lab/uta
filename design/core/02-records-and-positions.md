@@ -209,7 +209,7 @@ LogPosition = (StreamId, Seq)           // 一条记录的顺序身份
 
 - 每个 `StreamId` 独立维持 `LogPosition` 单调递增。`Seq` 在该 `StreamId` 内**每 epoch 独立**单调。系统内不存在全局入口序。[证据：fp-04 命题 11；域 P2]
 - 有序范围 = `StreamId=(source, stream, epoch)`。这一对应由 P2（`Seq` 在“来源 × 流 × epoch”有序范围内赋）、P3（新 epoch 首条记录）与本节位置定义共同给出。
-- **来源是带标签的值** [设计]：集成 id 与程序 id 是两个命名空间，同名也不是同一来源。集成只拥有 `Integration(_)` 的流（声明、开 epoch、供给、作答，§8.2）；`Program(_)` 的流由核心产出：流名来自程序值的 `outputs`（§4.3），控制面只在这些流上开 epoch（§8.6 程序流的 epoch）。声明、采纳、会话、`route`、回填与一次性读只对 `Integration(_)` 来源成立；`Program(_)` 来源的接纳依据是控制流上该程序 id 的 `load_program` `Applied` 所记的程序流集合（§8.5 订阅组、§8.6 装载期校验）。
+- **来源是带标签的值** [设计]：集成 id 与程序 id 是两个命名空间，同名也不是同一来源。集成只拥有 `Integration(_)` 的流（声明、开 epoch、供给、作答，§8.2）；`Program(_)` 的流由核心产出：流名来自程序值的 `outputs`（§4.3），控制面只在这些流上开 epoch（§8.6 程序流的 epoch）。声明、采纳、会话、`route`、回填与一次性读只对 `Integration(_)` 来源成立，程序的观察输入也只取 `Integration(_)` 来源（§4.3）。`Program(_)` 的流只经只投递项订阅，接纳依据是控制流上该程序 id 的开始成员的 `Applied` 所记的输出契约（§8.5 订阅组、§8.6 程序流的 epoch）。
 
 **位置作为关联。** `LogPosition` 集合只用于两项语义：
 
@@ -319,10 +319,10 @@ LogPosition = (StreamId, Seq)           // 一条记录的顺序身份
 // 值树 = 一个 enum（deep embedding）。判断的共同底层表示。
 enum DerivationNode {
     Const(V),
-    Field(FieldName),                 // field::<T>(name)：带类型标签的访问器叶子；协议差异压在这一层
-    Input(Cursor),                    // 派生流输入
+    Field(FieldName),                 // field::<T>(name)：带类型标签的访问器叶子，读树隐含的那条记录（处理器、检查项）；协议差异压在这一层
+    Input(InputName),                 // 程序的观察输入：指名 Program.inputs 里的一项，值是该输入流 cursor 之后的记录（§4.3）
     Pred(PredOp, Vec<Id>),            // 谓词/比较算子：InBand / Eq / Lt / And / Or / Not …，输出 bool
-    Op1(Op1, Id), Op2(Op2, Id, Id),   // 一元/二元值算子
+    Op1(Op1, Id), Op2(Op2, Id, Id),   // 一元/二元值算子；Op1 含访问器 Field(FieldName)，程序值里读一个 Input 节点给出的记录的字段
     Scan(ScanOp, Id),                 // 状态累加节点（即 Fold）
     Window(Id, W),                    // 核心内按位置产出值的滑动窗口节点
     Join(JoinOp, Vec<Id>),
@@ -330,10 +330,10 @@ enum DerivationNode {
 }
 ```
 
-- `Field::<T>(name)` 是带类型标签的访问器叶子；类型随访问器进入表达式，装载期校验。
+- `Field::<T>(name)` 是带类型标签的访问器；类型随访问器进入表达式，启动 / 装载期校验。处理器与检查项的树有一条隐含的记录（`Pred<Envelope>`、`Comb<Observed, _>`，见下文“同一 enum 的五处使用”），叶子 `Field(name)` 读它，启动期按字段注册（§8.1）校验。程序值有多个具名输入、没有隐含记录 [设计]：访问器写作 `Op1(Field(name), i)`，`i` 是一个 `Input(name)` 节点，读该输入给出的记录的字段；它的类型由访问器的类型标签给出，装载期与该输入流在最近声明里的 `payload_schema` 核对（§8.6 装载期校验）；含 `Field` 叶子的程序值在装载期被拒。理由：访问器与它所读的输入之间的绑定就是树里的一条边，两个实现者从同一棵树读出同一个绑定；类型取标签，程序的输出类型才能不等声明就从程序值求出（§4.3 输出契约）。不选：给 `Field` 叶子加上所读的节点，处理器与检查项的树就要为隐含的记录另造一个节点。
 - 组合子从不提 venue，只接受三种输入：锚点、注册表里的具名字段（带类型）、经 `payload_schema` 访问器取得的载荷值。记录映射的换算是唯一例外的输入：它的输入是上游字段值，但树里仍不出现上游字段名，字段名只在处置表里（§8.1）。
 - 协议差异被压在访问器一层，谓词之上一律纯组合：`InBand(field("px"), lo, hi)` 对任何注册了 `px: Price` 的 venue 都成立。
-- 程序值是一组节点加决策步与输出声明：`Program { nodes, rules, outputs }`（§4.3）。`Output { name, node }` 不是节点构造子，它只指名哪个节点的值落在该程序的哪条流上；程序的派生记录只落在 `outputs` 声明的流上，其余节点的值是程序内部的。
+- 程序值是一组节点加决策步、输入声明与输出声明：`Program { nodes, rules, inputs, outputs }`（§4.3）。`InputDecl` 与 `Output` 都不是节点构造子：前者声明 `Input(name)` 所指的观察输入，后者只指名哪个节点的值落在该程序的哪条流上；程序的派生记录只落在 `outputs` 声明的流上，其余节点的值是程序内部的。
 
 类型别名视图（把已隐含的关系写明，不是四个独立类型）：
 
@@ -349,18 +349,18 @@ enum DerivationNode {
 
 | fold | 结果 | 替代的旧做法 |
 |---|---|---|
-| `required_inputs` | 树里所有 `Field` 访问器的 stream kind 之并；启动 / 装载期与所引用集成来源的最近声明比对，缺失即 fail-closed（程序的装载期校验、还没有声明版本的来源，以及引用另一程序产出的流时按其 `Applied` 所记程序流集合判定，见 §8.6） | 登记 → 字面意义的推导 |
-| 输出类型 | 每节点值类型：`Field::<T>` 叶子给基类型，`Op`/`Scan`/`Join` 按算子推导；`Pooled` 节点输出类型即段布局，导出给原生计算作者（§4.5） | 手写的布局/输出类型 |
+| `required_inputs` | 树里所有 `Field` 叶子的 stream kind 之并；启动期与所引用集成来源的最近声明比对，缺失即 fail-closed。程序值不用它：程序的输入就是 `inputs` 声明，装载期逐项与所引用集成来源的最近声明比对（§8.6 装载期校验） | 登记 → 字面意义的推导 |
+| 输出类型 | 每节点值类型：`Field::<T>` 给基类型，`Input` 节点给该输入流 `payload_schema` 所定的记录类型，`Op`/`Scan`/`Join` 按算子推导；`Pooled` 节点输出类型即段布局，导出给原生计算作者（§4.5）；程序的输出契约取 `outputs` 各项所指节点的这个类型（§4.3） | 手写的布局/输出类型 |
 | 求值 | `Pred` → `bool`；`Comb` → 值；`Scan`/`Fold` → 状态 | — |
 | 失败 | **单一 kind enum + 路径上下文**（`InBand{field, lo, hi, actual}`、`FieldAbsent(kind)`…，附树中路径） | 组合子层失败不再是各组合子变体的类型级并集 |
 | 说明 | 为审批人生成“为何否决”；静态检查“引用了没有集成提供的字段” | 每条规则各写一遍 |
 
 组合子层的失败是单一 kind enum。规则层的 `Rejection`（§6.3）是具名 enum，包装本层的 kind enum。两层各自封闭，不是同一个类型。
 
-**`required_inputs` 的唯一定义。** `required_inputs` = 对值树整体做上表第一个 fold 的结果 = 树中 `Field` 访问器引用的 `StreamKind` 集。
+**`required_inputs` 的唯一定义。** `required_inputs` = 对值树整体做上表第一个 fold 的结果 = 树中 `Field` 叶子引用的 `StreamKind` 集。
 
-- 处理器、检查项、程序节点都是组合子树，所以“处理器的 `required_inputs`”就是对其树做**同一个** fold。
-- `Pooled` 输入由子系统解析，其余解析到普通流。
+- 处理器与检查项都是组合子树，所以“处理器的 `required_inputs`”就是对其树做**同一个** fold。
+- 程序的输入不由这个 fold 求：它就是程序值的 `inputs` 声明（§4.3），程序值里没有 `Field` 叶子。程序输入被 `Pooled` 引用时由子系统洗入，其余按普通流投递（§4.5）。
 - `AlignmentCheck.required_inputs`（§6.2）与字段注册（§8.1）只引用此定义，不重新定义一套语义。
 
 ### 同一 enum 的五处使用
@@ -385,7 +385,7 @@ enum DerivationNode {
 
 ### 不变量
 
-- `required_inputs` 是装载 / 启动期可算的确定集。引用了没有集成提供字段的树 **fail-closed**。由启动期 `required_inputs` fold + 与所引用来源的最近声明比对保证（§8.6）。
+- `required_inputs` 是启动期可算的确定集。引用了没有集成提供字段的树 **fail-closed**。由启动期 `required_inputs` fold + 与所引用集成来源的最近声明比对保证；程序值由装载期把 `inputs` 声明与其上的字段访问器逐项同所引用集成来源的最近声明比对保证（§8.6）。
 - 组合子层失败与规则层 `Rejection` 是两个封闭类型，互不塌陷。由两层各自 enum 保证。
 - 值树是权威表示，builder / 文本糖必须编译到同一值。由装载期按 schema 校验保证（规范序列化形式，§6.1）。
 
@@ -403,7 +403,7 @@ enum DerivationNode {
 
 ### 扩展与证伪
 
-构造子全集即上面的 `enum DerivationNode`；程序值另带的 `outputs` 是对节点的指名（§4.3），不增加构造子。
+构造子全集即上面的 `enum DerivationNode`；程序值另带的 `inputs` 与 `outputs` 是对输入与节点的声明（§4.3），不增加构造子。
 
 - 表达力不足时的扩展轴是**显式加构造子**：改这个 enum，五个 fold 随之各加一臂，编译器指出全部遗漏。这与加规则同一纪律：显式接受，不做泛型逃生口（§6.3）。
 - 会推翻本节统一表示的观测见 §10.4 #1：规则 / 程序 / 处理器需要不同代数或生命周期，或同一树得不到稳定规范化描述。

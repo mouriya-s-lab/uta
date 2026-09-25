@@ -85,7 +85,7 @@ flowchart LR
   S6b --> RRO
   S7 --> HL
   S2 -.->|"逐 target，按序判定：UnknownTarget（来源未登记，或来源是 Program(_)）/ Unavailable{source_state}（从未有声明）/ Unavailable{source_state}（此刻无已建立会话；以上都不调用、不记 gap）→ 按会话有效声明：Unsupported（流不在其中，或 read 为 Unsupported）/ Unconfirmed（read 为 Unknown）/ InvalidRequest{reason} → 调用之后：Answered{conclusion, items} / Refused{conclusion, reason} / Unavailable{gap}（渠道失败，已记 Gap{Channel}）/ Pending{from, instance_id}（deadline 到而调用在途；之后照常记结论或 gap，从 from 订阅只投递项可收到；核心实例已换则不再保证）"| S2
-  S1 -.->|"逐项判定，没有任何一项被接纳或待接纳 → Rejected{items}：集成来源：来源不在采纳集合且从未有声明 → 该项拒绝；在采纳集合而从未有声明 → 该项待接纳；供给项：来源不在采纳集合 → 拒绝（来源未登记）；流不在最近声明里 / 配额池流上不带主体集 → 拒绝，放不下 → QuotaExceeded{quota, limit}；只投递项（不看采纳集合与会话）：流在任何一个声明版本里出现过 → 接纳（不进需求、不占配额），从未声明过 → 拒绝；程序来源 Program(p)（按 p 历代开始成员的 Applied 所记程序流集合）：没有这种 Applied → 拒绝（来源未登记）；供给项 → 拒绝（ProgramStreamNotRouted）；只投递项：流在任一条集合里出现过 → 接纳，否则拒绝；from < 保留边界 → BeyondRetention；执行事实（不看采纳集合）：非 ordered、来源是 Program(_)，或 WriteScope.key 不在任何声明版本里 → 拒绝；控制：非 ordered → 拒绝"| S1
+  S1 -.->|"逐项判定，没有任何一项被接纳或待接纳 → Rejected{items}：集成来源：来源不在采纳集合且从未有声明 → 该项拒绝；在采纳集合而从未有声明 → 该项待接纳；供给项：来源不在采纳集合 → 拒绝（来源未登记）；流不在最近声明里 / 配额池流上不带主体集 → 拒绝，放不下 → QuotaExceeded{quota, limit}；只投递项（不看采纳集合与会话）：流在任何一个声明版本里出现过 → 接纳（不进需求、不占配额），从未声明过 → 拒绝；程序来源 Program(p)（按 p 历代开始成员的 Applied 所记输出契约）：没有这种 Applied → 拒绝（来源未登记）；供给项 → 拒绝（ProgramStreamNotRouted）；带主体集 → 拒绝；整条流的只投递项：流在任一条输出契约里出现过 → 接纳，否则拒绝；from < 保留边界 → BeyondRetention；执行事实（不看采纳集合）：非 ordered、来源是 Program(_)，或 WriteScope.key 不在任何声明版本里 → 拒绝；控制：非 ordered → 拒绝"| S1
   S3 -.->|"kind 未定义 → 拒绝；as_of 有位置尚未提交 → NotYetAvailable{positions}（各流已提交的流末）；tickets / subscriptions 带历史 as_of → 拒绝"| S3
   S4 -.->|"expected_version ≠ current_version → Conflict；同版本已有 Decision → Conflict(AlreadyDecided)"| S4
   S5 -.->|"越权 → Unauthorized；配置不合法 → Rejected 并保留上一有效版本；advance_retention 逐流判定 → NotForward / ReferencedBelow / InsideWindow"| S5
@@ -142,7 +142,7 @@ flowchart LR
   A1r --> F1c["读运行期参数文件：快照频率 · 派生侧留存窗口 · deadline 全局缺省 · 投递缓冲上限 · 回填深度（按逻辑流，缺省取全局值；只影响下一个流 epoch 的回填任务判定）<br/>合法 → Applied；不合法 → Rejected，保留上一有效版本；不改规则版本"]
   A2 --> F2["凭据链 文件 → 核心 → 集成；该集成新 session_seq<br/>各流强制新 epoch Gap{Source, credential_rotated}"]
   A3 --> F3["终止并重新拉起集成进程；新 session_seq；各流按游标证明决定续接或新 epoch"]
-  A4 --> F4["宿主 Load / Unload（D4.2）<br/>load_program，id 不在活动集合里：新成员每条程序流 Gap{Source, start}，不是 Reset<br/>load_program，id 已在活动集合里：沿用的替换（非 cold_start、程序流集合相同、无旧 Checkpoint 或接受其 state_version）不写程序流；不沿用的替换：ProgramReset{cold_start 为 Operator，否则 Replace} + 新成员每条程序流 Gap{Source, program_upgrade}<br/>新成员不声明的流不写记录；unload_program 不写程序流，epoch 都不结束"]
+  A4 --> F4["宿主 Load / Unload（D4.2）<br/>load_program，id 不在活动集合里：新成员每条程序流 Gap{Source, start}，不是 Reset<br/>load_program，id 已在活动集合里：沿用的替换（非 cold_start、输出契约相同、无旧 Checkpoint 或接受其 state_version）不写程序流；不沿用的替换：ProgramReset{cold_start 为 Operator，否则 Replace} + 新成员每条程序流 Gap{Source, program_upgrade}<br/>新成员不声明的流不写记录；unload_program 不写程序流，epoch 都不结束"]
   A5 --> F5["写快照（仅加速重建，不改 append-only）"]
   A6 --> F6["D8.2"]
   A7 --> F7["cursor 退回；已确认区间重投（显式控制动作，不是恢复路径）"]

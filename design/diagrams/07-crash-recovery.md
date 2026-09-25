@@ -42,7 +42,7 @@ sequenceDiagram
   participant I as 集成
   participant A as 订阅者
   H-->>C: Advance Output
-  Note over C,DB: ✕16 输出持久化前：整批不存在，重放同一批
+  Note over C,DB: ✕16 输出持久化前：整批不存在，从同一组已提交 cursor 重新推进
   C->>DB: COMMIT EffectRequest + 派生 + Checkpoint + cursor
   Note over C,DB: ✕21 EffectRequest 已提交、EffectResponse 未提交：重启重派（写：重新开单；读：重新执行一次）
   C->>DB: COMMIT Draft + SubmitForDecision + EffectResponse{Drafted}
@@ -110,7 +110,7 @@ sequenceDiagram
 flowchart TB
   Q{"崩在哪？"}
   Q -->|"宿主进程异常退出（trap），或 Output 的 checkpoint 版本不在本成员接受的集合内（视同 trap）"| T1["核心同一事务 append ProgramHalted{Trap}（执行 J）+ ProgramFailed{Trap}（观察 J，只供展示）；版本违例的 Output 不落<br/>提交之后终止宿主，OS 确认退出后清除登记；程序 Halted（失败抑制，跨重启保持），等引用该 ProgramHalted 的 load_program"]
-  Q -->|"核心在 Advance 输出 COMMIT 前"| T2["整批不存在；重启从最近 Checkpoint Load<br/>重放 cursor 之后同一批记录，不重复 Emit（#16）"]
+  Q -->|"核心在 Advance 输出 COMMIT 前"| T2["整批不存在；重启从最近 Checkpoint Load<br/>从同一组已提交 cursor 重新推进，不重复 Emit（#16）"]
   Q -->|"核心在 COMMIT 后、EffectResponse 持久化前"| T3["fold 出无 EffectResponse 的已注册请求（D4.3）<br/>读：重新执行一次；写：按 member 所指发出成员的 Applied 重新开单，发出成员已被替换或卸载亦然（Draft 与 EffectResponse{Drafted} 同事务，不存在有 Draft 无响应）（#21）"]
   Q -->|"派生 DAG 重算中途（#10）"| T5["持久：派生记录部分 append（RetractableDelta）<br/>恢复：派生侧可重算，未提交贡献重建；无自反馈环 → 最终一致"]
   Q -->|"快照写入中途（#11）"| T6["持久：快照部分写、原记录完整<br/>恢复：半写快照丢弃，从保留边界 fold_state 重建；只增加重启延迟"]

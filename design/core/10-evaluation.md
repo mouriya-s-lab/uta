@@ -144,6 +144,19 @@
 - 不选：Wasm（wasmtime）作初始宿主。无 live `Store` 快照 / 恢复 API、fuel 不限制阻塞 host 调用、三 OS 开箱即用未证。它可作实现阶段的替代宿主，走同一宿主协议，不改设计。
 - 证据：§8.6；`investigation/rust-feasibility.md`。
 
+**程序的输入与输出**（§4.3、§2.5、§8.6）。已定（验收 §10.5 #82/#83）。
+
+- 选中：程序的观察输入由程序值的 `inputs` 声明，只取 `Integration(_)` 来源；每项在开始成员的 `Applied` 同一事务成为持久订阅里按声明用途的观察项，生命周期与该输入的 cursor 相同。`Input(name)` 节点给出该输入的记录，`Op1(Field(name), i)` 读其字段，类型取该流最近声明的 `payload_schema`。每个声明输出承载节点的当前类型化值：流 epoch 里第一次有值写一条正贡献，值变了写一条原子地撤回旧贡献并加入新值的记录，值相等不写；每条记录以同一事务提交的输入 cursor 为 `basis`；`Advance` 的分批不在契约里。开始成员的 `Applied` 以值记下输出契约 `(name, 值类型)`，沿用要求它相等。
+- Q 场景后果：Q23/Q25：程序只凭自己的值与集成来源的声明即可校验与装载，不等任何别的程序；订阅一条程序流的下游看到的是该输出的当前值与它的每次变化，不是每批推进一条的采样。
+- 不选：
+  - 程序以另一程序的程序流为输入 [设计]：没有正文要求跨成员消费程序输出；组合在编写程序值时完成，文本糖编译成同一棵值树（§8.6），B3 的“想组合什么就组合什么”（§1.3.2）由此满足。运行期跨成员耦合要为等待另一程序的 `Applied`、按生产者记录的类型校验、跨程序的环规则各加机制，正是 §0.1 的“机制即信号”。代价：多个程序共用的输出在每个程序里各算一次。
+  - 每次 `Advance` 为每个输出写一条记录（值未变也写）：值不变的记录不改变当前值，订阅者却收到一次并未发生的变化，记录序列还随分批而变。
+  - 输出是历史样本序列：旧样本不能撤回，行情修订时旧信号不会消失（W16）。
+  - `Window` 逐元素导出：同一次推进的中间值成为可观察记录，记录序列依赖分批。
+  - 只按名字记录输出、沿用只比较名字：值类型变了而不开新 epoch，同一 epoch 里就有两种类型的记录。
+  - 按来源种类推断输入的用途：同一来源上供给与只投递的上游调用、配额与覆盖后果都不同，要由声明给出。
+- 证据：§0.1“机制即信号”；§4.1；§5.2；§9.1 W16。
+
 ### 写边界
 
 **写结果不确定的建模**（§6.5）。已定（验收 §10.5 #8/#14）。
@@ -491,7 +504,7 @@
 
 **程序的活动集合与失败抑制**（§8.6、§8.5 `load_program`/`unload_program`）。已定（证伪 §10.4 #36；验收 §10.5 #82）。
 
-- 选中：活动集合是控制流上 `load_program`/`unload_program` 的 `Applied` 的 fold，`Applied` 钉住程序值的内容 hash；每次拉起宿主按钉住的内容装载，不符即 `ContentUnavailable`。超预算、trap、内容不符与装载期校验失败，同一事务 append 执行事实 `ProgramHalted` 与观察 `ProgramFailed`，提交之后才终止宿主；`ProgramHalted` 跨重启保持，只由以位置引用它的 `load_program` `Applied` 解除。`unload_program` 与替换（对已在集合里的程序再 `load_program`）先结束宿主执行（停调度、等在途输出事务、OS 确认退出），再 append 结束成员的 `Applied`；替换是一条 `Applied`，沿用旧状态时 cursor 与 `Checkpoint` 引用原样转给新成员，否则同一事务照 `Reset` 处理。cursor 在开始成员的 `Applied` 同事务建立；`Checkpoint` 引用从进入集合后的第一个 `Checkpoint` 登记，在 `unload_program` 或不沿用的替换时解除。所引用来源尚无声明版本的程序等待，不装载、不 `ProgramHalted`。
+- 选中：活动集合是控制流上 `load_program`/`unload_program` 的 `Applied` 的 fold，`Applied` 钉住程序值的内容 hash；每次拉起宿主按钉住的内容装载，不符即 `ContentUnavailable`。超预算、trap、内容不符与装载期校验失败，同一事务 append 执行事实 `ProgramHalted` 与观察 `ProgramFailed`，提交之后才终止宿主；`ProgramHalted` 跨重启保持，只由以位置引用它的 `load_program` `Applied` 解除。`unload_program` 与替换（对已在集合里的程序再 `load_program`）先结束宿主执行（停调度、等在途输出事务、OS 确认退出），再 append 结束成员的 `Applied`；替换是一条 `Applied`，沿用旧状态时 cursor 与 `Checkpoint` 引用原样转给新成员，否则同一事务照 `Reset` 处理。cursor 在开始成员的 `Applied` 同事务建立；`Checkpoint` 引用从进入集合后的第一个 `Checkpoint` 登记，在 `unload_program` 或不沿用的替换时解除。所引用的集成来源尚无声明版本的程序等待，不装载、不 `ProgramHalted`。
 - Q 场景后果：Q25：超预算的程序重启后不被自动重新装载，其他程序照常；改清单或程序值文件不悄悄改变运行的程序。
 - 不选：以装载清单为活动集合（两个源头）；由 `ProgramFailed` 观察 fold 失败状态（依赖可压缩记录）；核心另存一份程序值（无实测需要的近处副本）；先 append `unload_program` 的 `Applied` 再 `Unload`（在途 `Advance` 可能在成员结束之后提交，为已不在集合里的程序登记一条无人解除的引用）；替换 = `unload_program` + `load_program`（中间一段程序不在集合里，cursor 与引用先结束再重建，沿用无从表达）；cursor 在首次装载时建立（等待声明或崩溃使 `Tail` 漂移）。
 - 证据：§8.6；§7.2 第 3 步（与 `Halted` 同构）。
@@ -602,7 +615,7 @@
 **可选行情派生计算的接入**（§4.5、§8.7）。已定（验收 §10.5 #7；子系统验收其 §10）。
 
 - 选中：单一读侧组合子 `Pooled` + 注册表黑盒原生 op；子系统独立进程、独立文档。
-- Q 场景后果：Q24/Q30：含 `Pooled` 的程序无子系统时装载期被拒，其余程序不受影响；op 输出对下游是普通派生流。
+- Q 场景后果：Q24/Q30：含 `Pooled` 的程序无子系统时装载期被拒，其余程序不受影响；op 的输出是普通节点值，经 `outputs` 导出后与普通节点导出的程序流同形。
 - 不选：
   - 把原生计算做成新节点种类：程序代数随算法膨胀（红线，§4.3）；
   - 把段池做成 `Journal` 的热层：两套存储互不派生（§8.7）；
@@ -632,7 +645,7 @@
 
 **`EffectRequest` 绑定发出成员**（§6.1 发出成员、§8.5 `load_program`、§8.6 卸载与替换）。已定（验收 §10.5 #85）。
 
-- 选中：每条 `EffectRequest` 记下 `member`：开始发出成员的 `load_program` / 替换 `Applied` 在控制流上的位置，由核心在 `Advance` 输出事务里写下；该 `Applied` 以值记下装载 principal、内容 hash、预算、接受的 `state_version` 集合、声明的执行事实输入集合与程序流集合。写处理器与重启重派只读发出成员的这些事实：以它的装载 principal 为负责人开单，按它的执行事实输入判定 `ScopeNotObserved`；发出成员已被替换或卸载、程序值文件已被改或删去时亦然。
+- 选中：每条 `EffectRequest` 记下 `member`：开始发出成员的 `load_program` / 替换 `Applied` 在控制流上的位置，由核心在 `Advance` 输出事务里写下；该 `Applied` 以值记下装载 principal、内容 hash、预算、接受的 `state_version` 集合、声明的执行事实输入集合与输出契约。写处理器与重启重派只读发出成员的这些事实：以它的装载 principal 为负责人开单，按它的执行事实输入判定 `ScopeNotObserved`；发出成员已被替换或卸载、程序值文件已被改或删去时亦然。
 - Q 场景后果：Q9/Q19/Q25：替换或卸载之前提交的请求在其后分派、或在重启后重派，负责人与作用域判定都与不替换时相同；“谁负责这张单据”不随后来的装载者漂移。
 - 不选：按处理时的当前成员判定（替换或卸载之后以另一成员的 principal 开单、按另一份声明判定作用域，卸载之后无成员可读）；按请求与 `Applied` 的位置先后推断成员（请求流与控制流之间没有可比的序，§2.3）；结束成员之前处理完它的全部请求（`Unhandled` 请求永无响应，在途读没有上界）；处理时重读程序值文件（文件可被改或删去，钉住的 hash 只能发现不符，给不出原内容）。
 - 证据：§0.1“权威源头与生命周期”；§2.3；§7.2 生命周期表。
@@ -757,7 +770,7 @@
    - 执行事实侧无记录被删。
 5. **provider 正交性**（§2.2、§8.3）：新 provider 接入不改核心 crate；新 `OperationKind` 必然改实现该协议的全部 provider；新 IDL 操作必然改全部集成。（对应 Q18）
 6. **窗口追溯**（§4.2）：`latest` 消费者的每次合并，都可追溯到它声明的等待窗口或该订阅上的 `conflated` 投递缺口；声明等待窗口的消费者，其输出的 `basis` / `as_of` 记下实际用到的位置，窗口之后到达的记录照常 append 与投递。（对应 Q31）
-7. **核心层最小验收**（§8.7）：含 `Pooled` 的程序在无可选子系统时被拒，且其余程序不受影响；子系统 op 的输出对下游是普通派生流（下游节点无需知道它由原生 op 产出）。（对应 Q24/Q30）
+7. **核心层最小验收**（§8.7）：含 `Pooled` 的程序在无可选子系统时被拒，且其余程序不受影响；子系统 op 的输出经 `outputs` 导出时，程序流上的记录与普通节点导出的同形（订阅者与下游节点无需知道它由原生 op 产出）。（对应 Q24/Q30）
 8. **崩溃矩阵可测项**（§9.2 #1–#3、#8、#9）：`Prepared`/`SendBarrier`/`submit` 各窗口 fsync 崩溃注入后重启，观测：（对应 Q2/Q4/Q17）
    - (a) 无 `SendBarrier` 的 `Prepared` 确未发出；
    - (b) 无后继的 `SendBarrier` 升为 `Undetermined`；
@@ -934,7 +947,7 @@
     - 该订阅的一条流被重握手撤掉：该项挂起，整体仍为“活”；只剩挂起项时整体为“挂起”；
     - 执行事实订阅在某作用域尚无单据时建立，之后该作用域第一次出现新的 `WriteLaneKey`：订阅者从该 lane 的第一条记录起收到它，不需重订；重握手不再声明该作用域后，已有与新到的 lane 记录照常投递；
     - 以某来源历史上声明过、最近声明里已没有的 `WriteScope.key` 订阅执行事实：被接纳，可从起点重放；从未声明过的键被拒。
-    - 程序来源：程序 P 的开始成员的 `Applied` 记下程序流 `alerts`；以只投递项订 `(Program(P), alerts)`：被接纳且为“活”，收到 P 此后写在其上的派生记录与开 epoch 的 `Gap{Source}`；以供给项订同一条流：该项拒绝，原因 `ProgramStreamNotRouted`，任何集成都收不到对它的 `route`；订 P 从未在任何 `Applied` 里记下的流：被拒；订一个从无开始成员 `Applied` 的程序 id：被拒（来源未登记）；P 卸载之后、或被不声明 `alerts` 的成员替换之后，再以只投递项订 `alerts`：仍被接纳，从 `from` 收到已 append 的记录；与 P 同名的集成 id 的流与 `(Program(P), alerts)` 互不相干，各按自己的规则接纳；以 `Program(P)` 为来源的执行事实 selector 被拒，对 `(Program(P), alerts)` 的一次性 `read` 得 `UnknownTarget`、不调用任何集成。
+    - 程序来源：程序 P 的开始成员的 `Applied` 所记输出契约含流 `alerts`；以整条流的只投递项订 `(Program(P), alerts)`：被接纳且为“活”，收到 P 此后写在其上的派生记录与开 epoch 的 `Gap{Source}`；以带主体集的只投递项订同一条流：该项拒绝（程序流的记录不带 `subject`）；以供给项订同一条流：该项拒绝，原因 `ProgramStreamNotRouted`，任何集成都收不到对它的 `route`；订 P 从未在任何 `Applied` 的输出契约里记下的流：被拒；订一个从无开始成员 `Applied` 的程序 id：被拒（来源未登记）；P 卸载之后、或被不声明 `alerts` 的成员替换之后，再以只投递项订 `alerts`：仍被接纳，从 `from` 收到已 append 的记录；与 P 同名的集成 id 的流与 `(Program(P), alerts)` 互不相干，各按自己的规则接纳；以 `Program(P)` 为来源的执行事实 selector 被拒，对 `(Program(P), alerts)` 的一次性 `read` 得 `UnknownTarget`、不调用任何集成。
 49. **实时边界的两种终态**（§8.4 实时边界、回填进度）：（对应 Q14）
     - 声明 `joinable_venue_seq` 的流：fixture 在回填与实时之间不留洞、不重叠，进度恰一次变为 `Closed`；同 epoch 无重复记录；
     - 只有事件时间的流：fixture 在实时订阅确认前发出一条事件时间晚于首条实时记录的记录、并让首条实时记录迟到：进度恰一次变为 `Reached`，不是 `Closed`；该 epoch 起点的 `Gap{origin: Source}` 仍在读模型的 `gaps` 里；迟到或修订的实时记录与回填记录并存时二者都 append、核心不去重；
@@ -1074,19 +1087,21 @@
     - `load_program` 之后修改程序值文件再重启核心：不装载，同一事务 `ProgramHalted{ContentUnavailable}` + `ProgramFailed`；修改装载清单再重启：活动集合不变；
     - `unload_program` 之后该程序 `Checkpoint` 的 cursor 引用解除，`advance_retention` 不再被它阻止；受控停止、宿主崩溃与失败抑制不解除该引用；程序进入活动集合之后、第一个 `Checkpoint` 之前没有登记的引用；
     - 卸载与在途 `Advance`：宿主正在 `Advance` 时发出 `unload_program`：`Applied` 只在该 `Advance` 的输出事务提交（或确知不提交）且宿主 OS 确认退出之后出现；该输出事务里的 `EffectRequest` 照常分派并各得一条 `EffectResponse`；`Applied` 之后没有该程序的 `Advance` 提交、没有新的 `Checkpoint` 与新的引用登记；替换（对同一 id 再 `load_program`）同样如此；
-    - 替换是一条 `Applied`：其间任一位置的活动集合都含该程序；非 `cold_start`、新旧成员的程序流集合相同、新程序接受旧 `state_version` 时，`Applied` 记下沿用的 `Checkpoint`，共有输入的 cursor 与保留引用不变，新程序从该 `Checkpoint` `Load`，只有它新加的输入从其声明的起点开始，程序流上没有新的 `Gap{Source}`；`cold_start`、不接受或程序流集合不同时，同一事务有 `ProgramReset{Operator | Replace}`、新成员每条程序流新 epoch 的 `Gap{Source, program_upgrade}` 与重建的 cursor，旧引用解除；新程序接受旧 `state_version` 而程序流集合不同（多一条或少一条输出）时，替换不沿用：非 `cold_start` 的记 `ProgramReset{Replace}`，`Load` 不携带旧 `Checkpoint`；在该事务提交之后、新宿主第一个 `Checkpoint` 之前注入崩溃：重启后不交回旧 `Checkpoint`、不再记第二条 `ProgramReset`；
+    - 替换是一条 `Applied`：其间任一位置的活动集合都含该程序；非 `cold_start`、新旧成员的输出契约相同、新程序接受旧 `state_version` 时，`Applied` 记下沿用的 `Checkpoint`，共有输入的 cursor、订阅项与保留引用不变，新程序从该 `Checkpoint` `Load`，只有它新加的输入从其声明的起点开始，程序流上没有新的 `Gap{Source}`；`cold_start`、不接受或输出契约不同时，同一事务有 `ProgramReset{Operator | Replace}`、新成员每条程序流新 epoch 的 `Gap{Source, program_upgrade}` 与重建的 cursor，旧引用解除；新程序接受旧 `state_version` 而输出契约不同（多一条或少一条输出，或同名输出的值类型变了）时，替换不沿用：非 `cold_start` 的记 `ProgramReset{Replace}`，`Load` 不携带旧 `Checkpoint`；在该事务提交之后、新宿主第一个 `Checkpoint` 之前注入崩溃：重启后不交回旧 `Checkpoint`、不再记第二条 `ProgramReset`；
     - `unload_program` 之后再 `load_program` 同一 id：cursor 按声明的起点在新 `Applied` 同事务建立，`Load` 不携带旧 `Checkpoint`；
     - 程序流的 epoch：首次 `load_program` 与卸载之后再 `load_program` 同一 id，各在自己的 `Applied` 同一事务为新成员的每条程序流 append 一条 `Gap{Source, start}`，开出新 epoch，事务里没有 `ProgramReset`；在该 `Applied` 提交之前注入崩溃：重启后既没有这个成员，也没有这条 gap；`unload_program` 的 `Applied` 不在程序流上写记录，卸载与再装载之间程序流上没有记录，再装载的成员声明的流上，卸载之前的 epoch 由这条 gap 结束；核心重启（崩溃或受控停止之后第 5 步重新 `Load`）与失败抑制之后沿用旧状态的重新装载，都不在程序流上开新 epoch；
-    - 程序流集合改变的替换：旧成员声明流 A、B，新成员声明 B、C，替换不沿用；同一事务在 B 上 append 一条 `Gap{Source, program_upgrade}`，带前一 epoch 的最后 `Seq`，结束 B 的上一 epoch；在 C 上 append 一条无前驱的 `Gap{Source, program_upgrade}`，开出 C 的第一个 epoch；A 上没有任何记录，A 的 epoch 不结束，此后 A 上不再有记录；之后又一个不沿用旧状态、声明 A 的成员开始时，它的 `Applied` 在 A 上 append 的 gap 带 A 上一 epoch 的最后 `Seq`，结束那个 epoch。
-    - 程序流集合以值记在 `Applied` 里：每条开始成员的 `Applied` 带该成员的程序流集合（`outputs` 的全部 `name`）；程序值声明重名输出或指向不存在的节点：装载期校验失败；装载后改写程序值文件（多一条输出）、重启核心（旧内容已不可读，得 `ContentUnavailable`），再以新内容替换：沿用判定比对的是开始旧成员的 `Applied` 所记的集合，集合不同即不沿用（`ProgramReset{Replace}`），多出的那条流得一条无前驱的 `Gap{Source, program_upgrade}`；`Advance` 之后每条声明输出的流上都有这次的派生记录，未声明为输出的节点的值不出现在任何流上。
-83. **程序装载期校验读最近声明**（§2.2 声明的两种读法、§2.5 `required_inputs`、§8.6 装载期校验、§7.2 第 5 步）：（对应 Q23/Q25）
-    - 来源已有声明版本而此刻没有会话（fixture 集成断开）：`load_program` 之后的装载期校验按该来源的最近声明比对 `required_inputs`；最近声明提供所引用的字段时程序照常装载并运行，不等会话；最近声明缺该字段时按装载期校验失败处理（§8.6），错误指出该字段；校验结果与该来源此刻有没有会话无关；
+    - 输出契约改变的替换：旧成员声明流 A、B，新成员声明 B、C，替换不沿用；同一事务在 B 上 append 一条 `Gap{Source, program_upgrade}`，带前一 epoch 的最后 `Seq`，结束 B 的上一 epoch；在 C 上 append 一条无前驱的 `Gap{Source, program_upgrade}`，开出 C 的第一个 epoch；A 上没有任何记录，A 的 epoch 不结束，此后 A 上不再有记录；之后又一个不沿用旧状态、声明 A 的成员开始时，它的 `Applied` 在 A 上 append 的 gap 带 A 上一 epoch 的最后 `Seq`，结束那个 epoch。
+    - 输出契约以值记在 `Applied` 里：每条开始成员的 `Applied` 带该成员的输出契约（`outputs` 各项的 `(name, 值类型)`）；程序值声明重名输出、指向不存在的节点或指向 `Pooled` 节点：装载期校验失败；装载后改写程序值文件（多一条输出）、重启核心（旧内容已不可读，得 `ContentUnavailable`），再以新内容替换：沿用判定比对的是开始旧成员的 `Applied` 所记的输出契约，不同即不沿用（`ProgramReset{Replace}`），多出的那条流得一条无前驱的 `Gap{Source, program_upgrade}`；只改同名输出值类型的替换同样不沿用，该流开新 epoch。
+    - 输出记录：一条声明输出的流在新 epoch 里第一次有值时得一条只含正贡献的记录，不撤回上一 epoch 的值；之后一次 `Advance` 使值改变，得一条记录，撤回前一贡献（指名它的位置）并加入新值，`fold_state` 只剩新值；再一次 `Advance` 值不变，流上没有新记录，cursor 与 `Checkpoint` 照常前进；每条记录的 `basis` 等于同一事务提交的输入 cursor，按它截取各输入前缀重算得同一值；迟到的输入记录改变已输出的值时，得一条新的撤回加新值记录，此前的位置不变，以被撤回贡献为 `basis` 的单据得 `Retracted`；导出 `Window` 节点的流每次 `Advance` 至多一条记录，值是窗口的完整值；未声明为输出的节点的值不出现在任何流上；以带主体集的项订阅程序流被拒。
+83. **程序装载期校验读最近声明**（§2.2 声明的两种读法、§4.3 输入声明、§8.6 装载期校验与程序的输入、§7.2 第 5 步）：（对应 Q23/Q25）
+    - 来源已有声明版本而此刻没有会话（fixture 集成断开）：`load_program` 之后的装载期校验按该来源的最近声明比对各输入声明；最近声明提供所读的字段时程序照常装载并运行，不等会话；最近声明缺该字段时按装载期校验失败处理（§8.6），错误指出该字段；校验结果与该来源此刻有没有会话无关；
     - 所引用的来源在采纳集合里而从未有过声明版本（新登记、尚未握手成功）：`load_program` 的 `Applied` 之后程序在活动集合里，核心不为它拉起宿主，控制流上没有它的 `ProgramHalted`，观察侧也没有它的 `ProgramFailed`；核心在此期间重启，第 5 步同样不拉起它、不写 `ProgramHalted`；
     - 该来源第一次握手成功（append 第一个声明版本）之后：核心按这一版声明重做校验，成立则拉起宿主装载，程序从它的 cursor 起收到等待期间 append 的记录；不成立则按装载期校验失败处理；该来源握手返回 `Refused` 或投影不合法、一直没有声明版本时，程序继续等待，不写 `ProgramHalted`；
     - 等待中的程序可被 `unload_program` 卸载，此后该来源第一次握手成功也不再装载它；
     - 替换一个等待中的成员：`Applied` 直接 append，fixture 宿主观测不到 `Unload`；新程序所引用的来源都已有声明版本时照常装载，否则新成员继续等待，不拉起宿主、不写 `ProgramHalted`；
     - 替换一个运行中或失败抑制中的程序、或卸载之后再装载，而新程序引用一个从未有声明版本的来源：`Applied` 之后没有宿主被拉起，控制流上没有 `ProgramHalted`；该来源第一次握手成功之后才按其声明校验与装载。
-    - 程序 Q 的 `required_inputs` 引用程序 P 的流 `alerts`：P 还没有任何开始成员的 `Applied` 时，Q 的 `Applied` 之后没有宿主被拉起、没有 `ProgramHalted`；P 的 `load_program` `Applied` 提交之后按它所记的程序流集合校验：含 `alerts` 则装载 Q，不含则按装载期校验失败处理；校验读的是开始 P 最近成员的 `Applied`，与 P 此刻是否运行、是否在失败抑制中无关；Q 装载之后 P 被替换为不声明 `alerts` 的成员，Q 不被重新校验，`alerts` 上只是不再有记录。
+    - 输入声明成为订阅项：`load_program` 的 `Applied` 同一事务里，缺省用途的输入是供给项，fixture 集成随后收到的 `route` 需求含它的主体，配额按它计量；只投递用途的输入不进入需求；在配额池里放不下的供给输入得 `QuotaExceeded`，该程序装载期校验失败（`ProgramHalted` 与 `ProgramFailed` 同事务）；`unload_program` 的 `Applied` 之后，该程序的供给不再在需求里。
+    - 程序 Q 的 `inputs` 里有一项的来源是 `Program(P)`（Q 引用的集成来源都已有声明版本）：Q 装载期校验失败，同一事务 `ProgramHalted` 与 `ProgramFailed`；与 P 有没有开始成员的 `Applied`、是否在运行无关，之后 P 的装载也不使 Q 装载。
 84. **会话内开的新流 epoch**（§8.4 readiness 与回填进度、§8.2 `route`、§8.3 供给中断）：fixture 集成在一个已建立的会话里，对一条声明 `joinable_venue_seq` 且 readiness 为 `Live` 的流上报 `Gap{origin: Source}`（fixture 上游推送通道断开重连）：（对应 Q11/Q14/Q31）
     - `Gap{origin: Source}` 与该逻辑流的 `None{新 epoch}` 在同一事务 append；`health` 上该流的 readiness 立即回到 `Starting`，会话仍是 `Established`，旧 epoch 的 `Live` 不再出现；核心没有为该流 append `Disconnected` 或 `Starting`；
     - 核心为该流重发 `route`，fixture 集成在收到之前不送出该流的推送；新 epoch 的路由结论记录 append 在新 epoch 里，覆盖只计入它确认之后的推送；
