@@ -16,10 +16,10 @@ flowchart LR
   ANCH -->|"缺"| MAL["畸形记录：边界拒绝<br/>不是规则否决"]
   ANCH -->|"齐"| POS["核心盖上该会话的 SessionEpoch<br/>分配 LogPosition = (StreamId, Seq)（按到达顺序）<br/>打质量标记 replayed / out_of_order / backfilled / one_shot"]
   POS --> APPEND[("append 观察 Journal")]
-  APPEND --> COV["序号覆盖 fold（§8.4）<br/>推送与回填记录上的 venue 序号、回填的 covered_to<br/>只在 epoch 开始时声明 joinable_venue_seq 且需求为 All 的流上存在"]
+  APPEND --> COV["序号覆盖 fold（§8.4）<br/>推送与回填记录上的 venue 序号、回填的 covered_to<br/>只在 epoch 开始时声明 joinable_venue_seq 的流上存在；推送只在同会话、确认供给 All 且 refused 为空的路由结论记录之后才计入"]
   APPEND --> REG["处理器字段注册表<br/>字段出现 → 处理器触发；不出现 → 不触发"]
   REG --> OH["观察侧处理器<br/>occurred_at → 事件时间（程序与 range 取窗口；不推进任何完备进度）<br/>payload_schema → 解释器选择"]
-  REG --> EH["效应侧处理器<br/>attribution / idempotency_key → 归因、Attributed 决议<br/>cumulative_filled_quantity → orders 的订单累计成交量<br/>execution_id / execution_revision → orders 按执行计数<br/>守卫字段 → 输入约束"]
+  REG --> EH["效应侧处理器<br/>attribution: FromAttempt(r) → 归因、Attributed 决议（核心不凭键字节归因）<br/>cumulative_filled_quantity → orders 的订单累计成交量<br/>execution_id / execution_revision → orders 按执行计数<br/>守卫字段 → 输入约束"]
   APPEND --> DAG["派生 DAG（程序解释①）"]
   APPEND --> DELIV["投递调度 → 订阅者"]
   APPEND --> TKT["单据 alignment 重算（世界变了）"]
@@ -54,14 +54,14 @@ flowchart LR
   A6 -.->|"断线无游标 → 新 epoch"| B0
   RET["保留边界<br/>epoch1 @ 901<br/>≤ min(配置窗口下界, 最早登记引用)（可推进上限）"] -.-> A4
   CUR["消费位置 cursor<br/>订阅者 X：epoch2 @ 60"] -.-> B4
-  COV["完备进度 = 序号覆盖（仅当 epoch 2 开始时的会话有效声明含 joinable_venue_seq 且需求为 All）<br/>命题：epoch 2 内 venue 序号落在 [from, through) 的记录都已 append<br/>坐标是 epoch 2 的 venue 序号，不是 Seq，也不是事件时间<br/>from = live_from（回填 Closed 后为任务起点）· through = 推送序号连续到达的第一个缺口<br/>随下一 epoch 的 Gap{Source} 停止变化 · 保留边界推进前留覆盖检查点 {epoch, from, through, above, frozen, folded_below}"] -.-> B3
+  COV["完备进度 = 序号覆盖（仅当 epoch 2 开始时的会话有效声明含 joinable_venue_seq）<br/>只计入 append 在 epoch 2 上同会话、确认供给 All 且 refused 为空的路由结论记录之后的推送<br/>命题：epoch 2 内 venue 序号落在 [from, through) 的记录都已 append<br/>坐标是 epoch 2 的 venue 序号，不是 Seq，也不是事件时间<br/>from = live_from（回填 Closed 后为任务起点）· through = 计入的推送序号连续到达的第一个缺口<br/>随下一 epoch 的 Gap{Source} 停止变化 · 保留边界推进前留覆盖检查点 {epoch, from, through, above, frozen, folded_below}"] -.-> B3
 ```
 
 读法：
 
 - `Seq` 每 epoch 独立单调；跨 epoch 的顺序只由 `Gap{Source}` 记录里的"前一范围与最后 Seq"给出，没有全局序。venue 序号也只在一个流 epoch 内可比。
 - 三种进度互不推导，源头各不相同：X 读到 60 不代表之前的记录已全部到达（只有来源证据证明的覆盖才说这个），也不代表 60 还能重建（保留边界才说这个）。
-- 没有证据的流没有完备进度：没有 `joinable_venue_seq`、需求不是 `All`，或只有事件时间的流，依赖完备的判断得"完备未确立"，不以时钟、到达顺序或消费位置补上。放行门不读序号覆盖（§5.2）；它的消费者是 `await-all` 的覆盖要求与 `orders` 的完整界。
+- 没有证据的流没有完备进度：没有 `joinable_venue_seq`、来源没有确认整条流的供给（路由结论记录不是 `All` 或 `refused` 非空），或只有事件时间的流，依赖完备的判断得"完备未确立"，不以时钟、到达顺序、消费位置或 UTA 自己的需求补上。放行门不读序号覆盖（§5.2）；它的消费者是 `await-all` 的覆盖要求与 `orders` 的完整界。
 - 回填只覆盖 `< live_from` 的范围，与实时记录按范围不重叠；覆盖不到就 `Gap{Source, backfill_incomplete}`，序号覆盖的起点停在 `live_from`。
 
 核出：无。
@@ -81,9 +81,10 @@ flowchart TB
     F5["说明<br/>为审批人生成为何否决"]
   end
   ENUM --> F1 & F2 & F3 & F4 & F5
-  F1 --> CMP{"与握手声明比对"}
+  F1 --> CMP{"与所引用来源的最近声明比对"}
   CMP -->|"缺字段"| FC["fail-closed：拒绝装载 / 启动"]
   CMP -->|"齐"| OK["可运行"]
+  CMP -->|"来源还没有声明版本（程序）"| WAIT["不判定：程序留在活动集合，不拉起宿主、不 append ProgramHalted<br/>该来源第一次握手成功后再比对（§8.6）"]
   subgraph USES["五处使用（同一 enum，不同构造者与校验期）"]
     U1["处理器触发 · 订阅过滤<br/>Pred&lt;Envelope&gt;<br/>集成注册 / 启动期"]
     U2["STS 规则守卫<br/>Pred&lt;(Context, RuleState, Input)&gt;<br/>实现者 / 启动期"]
@@ -157,8 +158,8 @@ flowchart LR
 | 观察 | `Gap{origin: Source, reason}` | 集成推送入口（流内断代）/ 集成会话（握手开新 epoch，含 `credential_rotated`；与该逻辑流的 `None{epoch}` 同事务）/ 持久订阅（`backfill_incomplete`）/ 核心按宿主协议（程序流新 epoch，`program_upgrade`） | 前一 `StreamId` 与最后 `Seq`、`reason`；`backfill_incomplete` 标出未覆盖的区间 | 前一 epoch |
 | 观察 | 一次性读 / 回填的结果项 | 一次性读元素（发起方：读处理器 / 检查项的"先查后判" / 消费方 `read`，§7.5）/ 持久订阅元素（回填） | 与该流推送记录同形；一次性读：`provenance: OneShot{origins, request}`（`origins ⊆ {Request(pos), Ticket(id), Session(principal)}`）、`dispatch_end`、`one_shot`；回填：`backfilled` | 出处值（不解析）；`Request` → `EffectRequest` 位置；`dispatch_end` → 调用发出时该流已提交的流末 |
 | 观察 | 读结论记录 | 同上（集成作答或上游 `Refused` 时） | 请求身份、`origins`、本次结果项的位置与 `dispatch_end`（一次性读）或窗口与 `covered_to`（回填）、或拒绝原因；控制记录，不是载荷 | → 本次结果项 |
-| 观察 | 路由结论记录 | 持久订阅元素（`route` 返回 `Routed` 时，§8.2） | 本次生效主体集相对上一条的增减、`refused` 与原因；控制记录，不是载荷；主体的覆盖从加入它的这条记录之后开始 | 前一条路由结论记录（同流） |
-| 观察 | 回执的观察记录 | IO 壳 | 该回应的观察记录：回应含订单状态时订单状态一条，加回应所含每笔可识别执行一条成交记录（带 `execution_id`）；同一回应的各条 `provenance: Receipt{AttemptRef}` 与 `dispatch_end` 相同；`attribution` 按各条自己的关联证据填写，不因同在一个回应而继承（订单状态一条为 `FromAttempt(AttemptRef)`）；可压缩；契约载荷与原始负载永存于执行侧 `Evidence` | 出处值（不解析）；`dispatch_end` → 流末位置 |
+| 观察 | 路由结论记录 | 持久订阅元素（`route` 返回 `Routed` 时，§8.2；会话建立后与每个会话内新开的流 epoch 上各重发一次） | 本次生效的主体全集（`All` 或主体集）、`refused` 与原因；控制记录，不是载荷；主体的记录从加入它的这条记录之后开始；同会话、全集为 `All` 且 `refused` 为空的记录之后的推送才计入该流 epoch 的序号覆盖（§8.4） | 前一条路由结论记录（同流 epoch） |
+| 观察 | 回执的观察记录 | IO 壳 | 该回应的观察记录：回应含订单状态时订单状态一条，加回应所含每笔可识别执行一条成交记录（带 `execution_id`）；同一回应的各条 `provenance: Receipt{AttemptRef}` 与 `dispatch_end` 相同；`attribution` 按各条自己的关联证据填写，不因同在一个回应而继承：订单状态一条只在这次尝试投放了该订单时为 `FromAttempt(AttemptRef)`，撤单回执里目标订单的状态按目标订单自己的关联证据填写，不归到这次撤单；可压缩；契约载荷与原始负载永存于执行侧 `Evidence` | 出处值（不解析）；`dispatch_end` → 流末位置 |
 | 观察 | 取证的观察记录 | IO 壳 | 同上，`provenance: Reconciliation{AttemptRef, channel}`、`dispatch_end`；只对由自己的关联证据属于该尝试的记录填 `FromAttempt(AttemptRef)`；`list_fills` 命中只有成交记录，不造订单状态记录；可压缩 | 出处值（不解析）；`dispatch_end` → 流末位置 |
 | 观察 | 派生记录（含 alert） | 派生 DAG | 程序流 `StreamId`、`RetractableDelta` | — |
 | 观察 | `ProgramReset{reason}` / `ProgramFailed{reason}` | 宿主协议（核心） | 程序 id、`reason` | — |
@@ -173,22 +174,24 @@ flowchart LR
 | 执行 | `Undetermined(reason)` | IO 壳 | `AttemptRef`、`NoResponse` 或 `CrashWindow` | → `Prepared` |
 | 执行 | `Expired(deadline)` | IO 壳（发出前门到期） | `AttemptRef` | → `Prepared` |
 | 执行 | `Abandoned` | IO 壳（经 `abandon` 授权；该尝试的在途取证调用先完成） | `AttemptRef`、`principal`、`note`、`rule_version`；随该 lane 的执行事实流；UTA 自己的放弃等待，不是结果 | → `Prepared` |
-| 执行 | `IntegrationHalted` | 集成会话 | 集成、`cause`（`ProjectionInvalid` / `ContractIncompatible` / `Refused(reason)`）、`session_epoch`；与 `Halted` 健康观察同事务 | — |
+| 执行 | `IntegrationHalted` | 集成会话 | 集成、`cause`（`ProjectionInvalid` / `ContractIncompatible` / `Refused(reason)`）、`session_epoch`；落控制流；与 `Halted` 健康观察同事务 | — |
+| 执行 | 采纳记录 | 集成会话（启动第 3 步） | 集成登记文件的内容 hash、其中列出的集成 id、本实例的 `instance_id`；落控制流 | — |
+| 执行 | `ProgramHalted{program, reason}` | 程序宿主（核心） | 程序 id、`reason`；落控制流；与 `ProgramFailed` 观察同事务 | — |
 | 执行 | `ResolutionEvidence{AttemptRef, channel, round, outcome}` | IO 壳 / 归因处理器 | `channel ∈ {ByKey, Listing, Fills, Replay, Attributed}`、`round`（发起时所属轮次）、`outcome ∈ {Found{observation, evidence: Evidence}, Absent, Inconclusive}`；每条 `Found` 都带 `evidence`（五渠道一视同仁） | `Found` → 命中的那条观察记录（`list_fills` 命中多笔归因到该尝试的成交时，取同一成交流上 `Seq` 最小者）；`round` → `ReconciliationReopened` |
 | 执行 | `ReconciliationReopened{AttemptRef, cause}` | IO 壳（`SessionRestored`，不重开已 `Abandoned` 的）/ 控制面（`retry_reconciliation`） | `cause ∈ {SessionRestored, Manual(principal)}` | → `Undetermined` |
 | 执行 | `CapabilityObserved` | IO 壳 | `(WriteLaneKey, OperationKind)` 或逻辑流 `(source, stream)` 的读 / 回填、新 `Verdict`、所更新声明版本的 `session_epoch`（被接受的那条推送或回应所携的 `SessionEpoch`）；不属于任何 Attempt | → 同来源同 `session_epoch` 的声明版本 |
 | 执行 | 声明版本 | 集成会话 | 该握手 `Projection` 除记录映射外的全部（作用域与 `account_ref` 可解析判定、流声明、写能力、配额、扩展 schema）、`session_epoch` | — |
 | 执行 | `Gap{origin: Channel, channel}`（取证渠道） | IO 壳 | `AttemptRef`、渠道 | → `Prepared` |
 | 观察 | `Gap{origin: Channel, channel}`（回填 / 一次性读） | 持久订阅元素（回填）/ 一次性读元素（调用后 `Unavailable`；无会话不调用、不记） | 流、渠道 | — |
-| 执行 | `EffectRequest` | 出站请求处理器（随 `Advance` 输出提交） | 程序 id（即所在请求流）、`effect_kind`、`basis`、`key?`、载荷 | `basis` → 观察位置 |
+| 执行 | `EffectRequest` | 出站请求处理器（随 `Advance` 输出提交） | 程序 id（即所在请求流）、`effect_kind`、`basis`、载荷；不带调用方键（键由核心在发出时按 `AttemptRef` 铸造，§6.5） | `basis` → 观察位置 |
 | 执行 | `EffectResponse{request, outcome}` | 出站请求处理器 | 同一请求流；读：`Concluded(读结论记录位置)` / `Unavailable(gap)` / `NotCalled(reason)`；写：`Drafted(ticket)` / `NotDrafted(Malformed{reason} \| ScopeNotObserved)`（§6.1） | → `EffectRequest` |
-| 执行 | 控制记录 `Applied(position)` / `Rejected(reason)` | 控制面 | principal、动作、配置版本 hash；解除 `Halted` 的 `restart_integration` / `rotate_credential` 的 `Applied` 带被解除的 `IntegrationHalted` 位置 | — |
+| 执行 | 控制记录 `Applied(position)` / `Rejected(reason)` | 控制面 | principal、动作、配置版本 hash；落控制流（`bypass_lane` 的除外，见下）；`restart_integration` 的 `Applied` 带本实例的 `instance_id`；解除 `Halted` 的 `restart_integration` / `rotate_credential` 的 `Applied` 带被解除的 `IntegrationHalted` 位置 | — |
 | 执行 | 安全事件 | 会话入口（未完成握手的请求）/ STS 授权步（写越权）/ 控制面（控制动作、`abandon` 与 `retry_reconciliation` 越权） | principal（或未认证连接标识）、请求种类 | — |
 | 执行 | `bypass_lane` 的控制记录 `Applied`（不是 Decision） | 控制面 | principal、单据、该单据的 `WriteLaneKey`（随该 lane 的执行事实流投递）、生效时的 `current_version`、被绕过的阻塞头位置集 | → 被绕过的 `Prepared` 集合 |
 
 读法：
 
-- 两个 `Journal` 的记录种类就是上表。lane 的阻塞头集合、尝试的结果是否确立、"下一取证渠道"是执行 J 的 fold（§6.4）；单据状态是执行 J 与其评估所读观察、当前能力证据和策略的 fold（§6.2）。它们都不是记录。
+- 两个 `Journal` 的记录种类就是上表。执行 J 上除 lane 流、各来源的声明流、各程序的请求流之外，有一条核心唯一、不属任何来源的控制流：采纳记录、除 `bypass_lane` 之外的控制记录、`IntegrationHalted`、`ProgramHalted`（§8.5 订阅组）。lane 的阻塞头集合、尝试的结果是否确立、"下一取证渠道"是执行 J 的 fold（§6.4）；单据状态是执行 J 与其评估所读观察、当前能力证据和策略的 fold（§6.2）。它们都不是记录。
 - 投递缺口 `Gap{origin: Delivery}` 不在表里：它是订阅的状态，按（订阅，流）记为 `{流, from, to, reason}`，存在订阅表里，唯一写者是持久订阅元素；不是任何 `Journal` 的记录，不在任何流上（§4.2、§7.5）。
 - 一个尝试是一次写：`SendBarrier` 之后，写调用的封闭结果落为 `VenueAccepted` / `VenueRejected` / `NotSent`，或 `Undetermined(NoResponse)`；崩溃窗口为 `Undetermined(CrashWindow)`。`Expired` 与 `Abandoned` 是 UTA 自己的出口，不是写的结果；`Abandoned` 之后被动来源证据（`Attributed`）仍可补上结果，补上的结果不是门。
 - 观察 J 的记录可被压缩到其所在流的保留边界之下；执行 J 的记录永不删除，没有保留边界（§2.4）。

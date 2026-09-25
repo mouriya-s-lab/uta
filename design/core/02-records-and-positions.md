@@ -125,6 +125,7 @@ struct StreamDecl {
     backfill_from_origin: bool,                  // 回填能从上游该流历史的起点（Origin）起给出全部历史（§8.2 backfill、§8.4）
     order_revision: bool,                        // 订单状态种类：每条记录带注册字段 order_revision，上游保证它对同一订单跨渠道单调（§8.1 最近观察）
     query_not_lagging: bool,                     // 一次性读、回执与取证的回答不早于发出前已送达本流的任何记录（§8.1 最近观察）
+    push_ordered: bool,                          // 同一 (会话 epoch, 流 epoch) 内本流的推送按上游状态次序送达，后到的推送不旧于先到的（§8.1 最近观察）
 }
 struct Quota { streams: Vec<StreamName>, max_subjects: u32 }   // 这些流上核心要求集成推送（route，§8.2）的不同订阅主体数上限
 struct Capability { scope: WriteLaneKey, operation: OperationKind, verdict: Verdict<CapabilityProof> }
@@ -164,14 +165,14 @@ UTA 对投影只做两件事：按投影路由（lane 按 `WriteScope`、订阅�
 **读侧声明** [设计]。一次性读、回填与订阅按 `StreamDecl` 判定，与写侧 `Capability(scope, OperationKind)` 分开：读的对象是流，不是作用域上的操作。
 
 - `read` / `backfill` 各是一个三值 `Verdict`，按流声明；握手后的变化经能力变更推送进入 `CapabilityObserved`（§8.3）。`Unsupported` 与 `Unknown` 都不调用集成，但给发起方的结果不同：前者是“不支持”，后者是“能力未确认”（§8.2 `read`、§8.5 一次性读）。
-- 声明是来源在一次握手里给出的副本，只代表那次会话（§7.2）。同一份声明有两种读法：**最近声明**（历史上最后一版加引用它的 `CapabilityObserved`）回答“来源说过什么”，用于 `sources`、历史回放与订阅需求；**会话有效声明**只在该来源的会话处于 `Established` 时存在，回答“此刻能不能”。此刻的判断（一次性读能否发、回填能否调用）只读会话有效声明；没有已建立会话时结果是“没有会话”，不以最近声明报“不支持”或“未确认”（§8.2 `read`、§8.5）。
+- 声明是来源在一次握手里给出的副本，只代表那次会话（§7.2）。同一份声明有两种读法：**最近声明**（历史上最后一版加引用它的 `CapabilityObserved`）回答“来源说过什么”，用于 `sources`、历史回放、订阅需求与程序的装载期校验（§8.6：还没有声明版本的来源不判定，程序等到它第一次握手成功）；**会话有效声明**只在该来源的会话处于 `Established` 时存在，回答“此刻能不能”。此刻的判断（一次性读能否发、回填能否调用）只读会话有效声明；没有已建立会话时结果是“没有会话”，不以最近声明报“不支持”或“未确认”（§8.2 `read`、§8.5）。
 - 能力只到流的粒度。上游只对部分主体提供某种读时，集成要么把这部分声明成单独的流，要么在请求时由上游明确拒绝，得到 `Refused`（§8.2）；核心不按主体细分能力。
 - `request_schema`：一次性读的参数（查询主体：已解析的 instrument、目录键或文本；领域过滤条件：到期日、行权价、条数上限等）是按这份 schema 写成的一个值，与意图载荷同理：核心只校验形状并原样交给集成，不解释（§8.2）。有公共 schema 的种类随 IDL 发布公共请求 schema；来源专有的请求参数写在该集成的扩展 schema 里。
 - `quotas`：配额池属于来源；每个池列出共享一个上限的流与上限值，计量单位见 §8.5 订阅组。
 - `quality`：声明该流名义上的数据等级，分两个维度：时效（实时 / 延迟 / 未知）与覆盖（全市场 / 部分场所 / 未知）；词表随公共 schema 发布，核心不解释。它是来源对该流开通情况的声明，**不担保**每条记录：上游在回答里报告实际等级时，那是公共载荷的字段，逐条以记录为准。理由：数据等级常随 instrument 与开通状态变化，只有上游作答时才知道（运行期的量不冒充静态保证）；声明值只用来在读之前告诉下游“这条流通常是什么”。
 - `joinable_venue_seq`：该流推送与回填的记录是否带本流 epoch 内连续、可衔接的 venue 序号。它是集成对上游序号语义的断言（由一致性测试验证），不是“记录上有序号字段”：只有这样的序号能证明回填与实时在边界上既不重叠也不留洞，所以它决定该流的回填坐标与实时边界的证明（§8.4）。不声明它的流以事件时间作回填坐标；两者都没有的流不能回填（§8.1 握手校验）。
 - `backfill_from_origin`：该流的回填能否以 `Origin`（上游该流历史的真实起点，不是上游此刻保留的最早一条）为窗口起点，交回从起点到窗口终点的全部历史，含归并所需的修订与作废。它同样是集成对上游语义的断言，由一致性测试验证：上游只保留近期历史，或起点之前的历史取不全、或落不到与实时相同的回填坐标上的流不声明它。只有从 `Origin` 起补齐的回填能闭合流 epoch 开头的 `Gap{origin: Source}`，所以它决定成交流能否给出完整界（§8.1 精确重建的前提）。
-- `order_revision` 与 `query_not_lagging`：订单状态流上，除 venue 序号之外仅有的两种来源定序证据（§8.1“订单身份与最近观察”）。前者断言上游给每条订单状态记录一个对同一订单、跨推送与查询渠道都单调的修订（或更新时间）值，以注册字段 `order_revision` 送达；后者断言一次性读、回执与取证的回答反映的上游状态，不早于该流上在这次调用发出之前已送达核心的任何记录。二者都是集成对上游语义的断言，以上游文档为证据，一致性测试可证伪（§10.4 #30、#31）；不声明的流，这两种顺序都不成立，UTA 不以到达顺序代替。
+- `order_revision`、`query_not_lagging` 与 `push_ordered`：除 venue 序号之外仅有的三种来源定序证据，按流声明，用于同一身份的最近观察（§8.1“订单身份与最近观察”）。`order_revision` 断言上游给每条订单状态记录一个对同一订单、跨推送与查询渠道都单调的修订（或更新时间）值，以注册字段 `order_revision` 送达，只在订单状态种类的流上声明；`query_not_lagging` 断言一次性读、回执与取证的回答反映的上游状态，不早于该流上在这次调用发出之前已送达核心的任何记录；`push_ordered` 断言同一会话 epoch、同一流 epoch 内该流的两条推送，后送达的反映的上游状态不早于先送达的：上游经一条有序通道、按状态次序交付该流的推送，不是多路上游 feed 的合并，也不是由轮询合成的推送。上游推送通道重连是一次供给中断，集成本就要上报 `Gap{origin: Source}` 并开新流 epoch（§8.3），所以重连两侧的推送落在不同流 epoch，没有别的证据时不可比。三者都是集成对上游语义的断言，以上游文档为证据，一致性测试可证伪（§10.4 #30、#31、#37）；不声明的流，对应的顺序不成立，UTA 不以到达顺序代替：不声明 `push_ordered` 的流上，不带序号也不带 `order_revision` 的两条推送不可比。
 
 **能力未知 ≠ 结果未知。**
 
@@ -279,7 +280,7 @@ LogPosition = (StreamId, Seq)           // 一条记录的顺序身份
 | 引用 | 何时登记 | 何时解除 |
 |---|---|---|
 | 意图的 `basis`（§5.1） | `Prepared` 持久化时 | 该尝试的等待结束后（结果确立、`Expired` 或 `Abandoned`） |
-| 程序 `Checkpoint` 依赖的 cursor 位置 | checkpoint 持久化时 | 下一个 checkpoint 持久化即替换 |
+| 程序 `Checkpoint` 依赖的 cursor 位置 | 程序进入活动集合后的每个 checkpoint 持久化时（第一个 checkpoint 之前没有登记） | 下一个 checkpoint 持久化即替换；`unload_program` 的 `Applied`，或不沿用旧 checkpoint 的替换 `Applied` 时解除；宿主 `Unload` 与失败抑制不解除 |
 | 对账 `ResolutionEvidence` 引用的观察位置 | append 时 | 该尝试的等待结束后 |
 
 解除后的历史引用仍可读作审计。落到边界之下时读得 `BeyondRetention`（§5.2），不再阻止压缩。
@@ -287,7 +288,7 @@ LogPosition = (StreamId, Seq)           // 一条记录的顺序身份
 **审批方 = 控制面 principal** [设计]，经 `advance_retention`（§8.5）。
 
 - 核心逐流算出该流已登记引用的最早位置；边界不得越过它，越过即 `Rejected(ReferencedBelow{min})`。
-- 要越过只能先让持有者解除：该尝试的等待结束（`Undetermined` 经证据收敛或被 principal 放弃）；程序推进 checkpoint 或被卸载。没有旁路。
+- 要越过只能先让持有者解除：该尝试的等待结束（`Undetermined` 经证据收敛或被 principal 放弃）；程序推进 checkpoint、被卸载或被不沿用旧 checkpoint 的替换。没有旁路。
 
 **留存时长 = 配置参数** [设计]（§7.6）。
 
@@ -345,7 +346,7 @@ enum DerivationNode {
 
 | fold | 结果 | 替代的旧做法 |
 |---|---|---|
-| `required_inputs` | 树里所有 `Field` 访问器的 stream kind 之并；启动/装载期与握手声明比对，缺失即 fail-closed | 登记 → 字面意义的推导 |
+| `required_inputs` | 树里所有 `Field` 访问器的 stream kind 之并；启动 / 装载期与所引用来源的最近声明比对，缺失即 fail-closed（程序的装载期校验与还没有声明版本的来源见 §8.6） | 登记 → 字面意义的推导 |
 | 输出类型 | 每节点值类型：`Field::<T>` 叶子给基类型，`Op`/`Scan`/`Join` 按算子推导；`Pooled` 节点输出类型即段布局，导出给原生计算作者（§4.5） | 手写的布局/输出类型 |
 | 求值 | `Pred` → `bool`；`Comb` → 值；`Scan`/`Fold` → 状态 | — |
 | 失败 | **单一 kind enum + 路径上下文**（`InBand{field, lo, hi, actual}`、`FieldAbsent(kind)`…，附树中路径） | 组合子层失败不再是各组合子变体的类型级并集 |
@@ -381,7 +382,7 @@ enum DerivationNode {
 
 ### 不变量
 
-- `required_inputs` 是装载 / 启动期可算的确定集。引用了没有集成提供字段的树 **fail-closed**。由启动期 `required_inputs` fold + 握手比对保证。
+- `required_inputs` 是装载 / 启动期可算的确定集。引用了没有集成提供字段的树 **fail-closed**。由启动期 `required_inputs` fold + 与所引用来源的最近声明比对保证（§8.6）。
 - 组合子层失败与规则层 `Rejection` 是两个封闭类型，互不塌陷。由两层各自 enum 保证。
 - 值树是权威表示，builder / 文本糖必须编译到同一值。由装载期按 schema 校验保证（规范序列化形式，§6.1）。
 

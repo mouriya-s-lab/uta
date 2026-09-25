@@ -24,9 +24,9 @@ sequenceDiagram
     B-->>I: 畸形记录，拒绝
   else 接受
     B->>J: 核心盖上该会话的 SessionEpoch，分配 LogPosition（按到达顺序）；venue seq 倒退/重复 → 照常 append 并打 replayed / out_of_order
-    Note over J: venue 序号 → 推进序号覆盖（该 epoch 开始时声明 joinable_venue_seq 且需求为 All 的流；已在覆盖里的序号再到达不改变它）<br/>occurred_at 只是事件时间，不推进任何完备进度
+    Note over J: venue 序号 → 推进序号覆盖（该 epoch 开始时声明 joinable_venue_seq 的流；只计入 append 在同会话、确认供给 All 且 refused 为空的路由结论记录之后的推送；已在覆盖里的序号再到达不改变它）<br/>occurred_at 只是事件时间，不推进任何完备进度
     J->>H: 字段出现 → 触发
-    opt attribution: FromAttempt(r)，或 idempotency_key 经唯一索引解析到 r（只凭键时须来源声明键作用域与唯一期），且 r 处于 Undetermined、结果未确立（已 Abandoned 的同样可补）
+    opt attribution: FromAttempt(r)（集成依上游关联证据填写；核心不凭键字节归因），且 r 处于 Undetermined、结果未确立（已 Abandoned 的同样可补）
       H->>EJ: 同事务 append ResolutionEvidence{r, Attributed, Found{observation: 该记录, evidence: 载荷 + 原始负载}}
     end
     J->>D: 受影响节点增量重算（cutoff）；派生记录写回观察 J
@@ -38,7 +38,7 @@ sequenceDiagram
 读法：
 
 - 位置归核心，完备归来源：`LogPosition` 由核心按到达顺序分配，核心是它的源头，但到达顺序只是日志顺序，不是来源顺序；venue seq、`occurred_at` 是来源给的字段，随记录作为副本保存。完备只来自来源证据（序号覆盖），不从到达时刻或任何时限推导。
-- 乱序与重复不被核心修正，由派生侧 fold 按种类处理：成交按 execution_id 与修订计数；订单状态与持仓按身份取最近观察，只凭来源定序证据（同一 epoch 的 venue 序号、`order_revision`、声明 `query_not_lagging` 的流上不带序号的回答对 `dispatch_end` 及之前的记录）与同一会话 epoch 内的推送顺序比较，其余不可比，最近观察顺序未确立时并列；其余种类由各自的 fold 规定（§8.1）。
+- 乱序与重复不被核心修正，由派生侧 fold 按种类处理：成交按 execution_id 与修订计数；订单状态与持仓按身份取最近观察，只凭四种声明的来源定序证据比较（同一 epoch 的 venue 序号、`order_revision`、声明 `query_not_lagging` 的流上不带序号的回答对 `dispatch_end` 及之前的记录、声明 `push_ordered` 的流上同一会话 epoch 且同一流 epoch 内的两条推送；上游推送通道重连由集成报为 `Gap{Source}` 开新流 epoch，两侧推送不可比），其余不可比，最近观察顺序未确立时并列；其余种类由各自的 fold 规定（§8.1）。
 - 同一条推送可能同时是三件事：订阅者的一条记录、某单据偏离状态的触发、某 `Undetermined` Attempt 的决议证据。
 - 迟到回执走的就是这条路：旧会话的通道关闭后不再读入（其在途调用已在会话结束时完成为 `NoResponse`）；新会话重送的在 `opt` 分支并入原 Attempt。
 
@@ -62,17 +62,20 @@ stateDiagram-v2
   }
   Starting --> DC : 会话离开 Established（最近的会话记录不再是 Established）
   Live --> DC : 会话离开 Established（旧会话的 Live 随会话记录更替失效）
+  Live --> Starting : 会话内集成上报 Gap{Source} 开新流 epoch（旧 epoch 的 Live 随该逻辑流的 None{新 epoch} 失效）；核心为新 epoch 重发 route，集成收到后才推送，再为新 epoch 声明 Live{live_from}
   note right of DC
     由会话状态派生：没有记录、没有自己的时刻
     只随附当前会话状态及其 since（会话记录的时刻，不是断线时刻）
     核心不替集成 append readiness，也不回填崩溃发生的时刻
   end note
   note right of Starting
-    握手时每条流决定 epoch：
-    能以 venue 游标证明续接 → 续原 epoch，Seq 接续
+    流 epoch 的开始（首条 Gap{Source}，与该逻辑流的 None{epoch} 同事务）：
+    握手时每条流决定：能以 venue 游标证明续接 → 续原 epoch，Seq 接续；
     否则 → 新 epoch，首条 Gap{Source, disconnect / start / quota / ingress_overflow}
     rotate_credential → 强制新 epoch，reason credential_rotated
     载荷版本变化 → 新 epoch，reason schema_change
+    会话内：集成上报供给中断（含上游推送通道重连）→ 新 epoch，与握手开的新 epoch 同样处理：
+    readiness 回到 Starting、核心重发 route、新 live_from、回填任务在它声明时判定
   end note
 ```
 
@@ -98,7 +101,7 @@ stateDiagram-v2
   end note
 ```
 
-读法：readiness 是集成在一个会话里对该流实时供给的陈述：集成推送，核心盖上到达会话的 `SessionEpoch` 后 append；fold 只取带着最近一条会话记录的 `SessionEpoch` 的值，且只在那条会话记录是 `Established` 时，否则为派生的 `Disconnected`。回填进度由核心凭读结论记录判定、持久订阅 append，只说当前流 epoch 的 `[起点, live_from)` 补齐到哪。二者都是健康观察（不需确认），经 `health` 读模型对解释层可见，再由它翻成下游的连接状态；它们不改变记录接受条件——核心只从当前会话的通道读入。
+读法：readiness 是集成在一个会话里、对该流一个流 epoch 的实时供给的陈述：集成推送，核心盖上到达会话的 `SessionEpoch` 与该流当时的流 epoch 后 append；fold 只取同时带着最近一条会话记录的 `SessionEpoch` 与该流当前流 epoch 的值，且只在那条会话记录是 `Established` 时，否则为派生的 `Disconnected`。会话内上报的 `Gap{Source}` 开新流 epoch，readiness 回到 `Starting`，与握手开的新 epoch 同样处理。回填进度由核心凭读结论记录判定、持久订阅 append，只说当前流 epoch 的 `[起点, live_from)` 补齐到哪。二者都是健康观察（不需确认），经 `health` 读模型对解释层可见，再由它翻成下游的连接状态；它们不改变记录接受条件——核心只从当前会话的通道读入。
 
 核出：readiness 原把 `Backfilling` 放在 `Live` 之前，而回填窗口的终点 `live_from` 要到 `Live` 才有，`through` 又是核心凭读结论记录才证明得了的——已拆为集成推送的 readiness 与核心判定的回填进度（§8.4）。
 
@@ -117,7 +120,7 @@ flowchart LR
   BF2 -->|"covered_to 连到 live_from ∧ joinable_venue_seq"| CLOSE["Closed：边界闭合，序号覆盖的起点下延到任务起点<br/>回填与实时之间无重叠无洞（Q14）"]
   BF2 -->|"covered_to 连到 live_from ∧ 只有事件时间"| REACH["Reached：衔接未证明，没有完备进度<br/>Gap{Source} 仍列在 gaps，成交完整性条件 1 不成立"]
   CLOSE -.->|"仅当声明 backfill_from_origin ∧ 起点 = Origin ∧ subjects = All"| C1["成交完整性条件 1 成立（§8.1）：序号覆盖为 [Origin, n)<br/>有限起点的 Closed 不闭合 epoch 开头的 Gap{Source}"]
-  C1 -.->|"另需条件 2"| C2["从 live_from 到 n 有效供给为 All：<br/>路由结论记录表明需求为 All 且 refused 为空<br/>（流在配额池里时核心不要求 All，不成立）"]
+  C1 -.->|"另需条件 2"| C2["从 live_from 到 n 有效供给为 All：<br/>这段推送都计入了序号覆盖，即都在 e 上同会话、确认供给 All 且 refused 为空的路由结论记录之后<br/>（流在配额池里时核心不要求 All，不成立）"]
   BF2 -->|"上游历史穷尽（covered_to 未达）或 Refused"| INC["append Gap{Source, backfill_incomplete}<br/>序号覆盖的起点停在 live_from，不越过未覆盖区间（不伪造连续）"]
   CORE -->|"Unavailable（任一页失败即整体失败）"| CH["Gap{Channel, backfill}<br/>可再发"]
 ```
@@ -138,8 +141,8 @@ sequenceDiagram
   participant DL as 投递调度
   participant J as 观察 Journal
   participant EJ as 执行 Journal（经存储按位置读，不解析）
-  C->>SUB: subscribe(selector, mode, from?)（selector = 观察流：一组 (来源, 流, 主体集?, 用途：供给 | 只投递) 项，可跨来源；或 执行事实 (来源, WriteScope?)）
-  alt 执行事实：mode ≠ ordered，或 WriteScope.key 不在该来源任何声明版本里（不看采纳集合）
+  C->>SUB: subscribe(selector, mode, from?)（mode = ordered | latest；selector = 观察流：一组 (来源, 流, 主体集?, 用途：供给 | 只投递) 项，可跨来源；或 执行事实 (来源, WriteScope?)；或 控制（核心的控制流））
+  alt 执行事实 / 控制：mode ≠ ordered，或执行事实的 WriteScope.key 不在该来源任何声明版本里（不看采纳集合）
     SUB-->>C: 拒绝
   else 观察流：逐项判定（各项独立，按项在请求里的次序）
     Note over SUB: 每项：来源不在采纳集合且从未有声明 → 拒绝；在采纳集合而从未有声明 → 待接纳；供给项：来源不在采纳集合 → 拒绝（来源未登记），流不在最近声明 / 配额池里不带主体集 → 拒绝，放不下 → QuotaExceeded（集成不收到超限主体）；只投递项：流在该来源任何一个声明版本里出现过 → 接纳（不看采纳集合、不要求最近声明、不要求会话；不进需求、不占配额），从未声明过 → 拒绝；from < 保留边界 → 该项 BeyondRetention
@@ -149,8 +152,8 @@ sequenceDiagram
       SUB->>SUB: 写订阅表，cursor 每条选中流一个位置 = from（缺省 = 当前流末，不补历史）；订阅归属 principal，持久
       SUB-->>C: Subscription{id, items}（逐项结果；整体状态由逐项派生）
     end
-  else 执行事实：接受
-    SUB->>SUB: 写订阅表；selector 是成员规则：此后出现的 lane 流自动加入，从其首条记录起；from 可为起点
+  else 执行事实 / 控制：接受
+    SUB->>SUB: 写订阅表；执行事实的 selector 是成员规则：此后出现的 lane 流自动加入，从其首条记录起；控制订阅只有控制流一条；from 可为起点
     SUB-->>C: Subscription{id, items}
   end
   opt 某流的需求（各供给项主体之并 ∪ 核心自己的需求；只投递项与挂起项不计）变了，且该集成会话已建立
@@ -187,14 +190,18 @@ sequenceDiagram
     SUB->>SUB: 该流上整条流的供给项挂起（WholeStreamInPool），核心自己的 All 撤去；离开所有配额池时恢复
     SUB->>I: route(stream, 重算后的全集)
   end
-  Note over SUB,I: 集成每次会话建立后，SUB 对每条需求非空的流重发 route；会话内第一次 route 之前集成不推送该流
+  opt 会话内集成上报 Gap{Source}，该流开新流 epoch
+    SUB->>I: route(stream, 当前全集)：新流 epoch 在收到 route 之前不推送
+    I-->>SUB: 路由结论记录（落在新 epoch 里；确认 All 且 refused 为空之后的推送才计入序号覆盖）
+  end
+  Note over SUB,I: 集成每次会话建立后与每个会话内新开的流 epoch 上，SUB 对每条需求非空的流重发 route；每个流 epoch 有自己的路由结论记录，在该 epoch 第一次 route 之前集成不推送该流
 ```
 
 读法：
 
 - 确认语义唯一：`ack` = 已处理。已投未确认的记录在崩溃后会再见一次；已确认的永不重投（退回只经控制面 `rewind_cursor`）。
 - 程序是同一种订阅者：它的 cursor 与 `Checkpoint` 同事务持久化（D4.1），所以程序永远不会看到已折入状态的记录。
-- 需求按流的全集下发：多个订阅对同一主体只路由一次，配额在核心计量；一个主体的覆盖从加入它的路由结论记录之后开始。
+- 需求按流的全集下发：多个订阅对同一主体只路由一次，配额在核心计量。序号覆盖只看记录：推送只在该流 epoch 上同会话、确认供给 `All` 且 `refused` 为空的路由结论记录之后才计入；之后一条不确认这一点的路由结论记录使计入停住，直到下一条确认的记录（§8.4）。订阅表与核心自己的需求都不是它的输入。
 - 投递按主体：数据记录只看信封上的 `subject`，不论来自推送、回填、一次性读还是回执；控制记录投给该流每一项。只投递项不改变需求与配额，一次性读得 `Pending{from, instance_id}` 后从 `from` 订阅一个只投递项，即收到那条结论或 gap（同一核心实例内）。
 - 投递缺口是订阅的状态，不是流上的记录：投递调度要跳过时先请持久订阅写进订阅表，写下之后才跳过；每次投递与重新挂接都先交出它；确认不低于 `to` 的 cursor 时与 cursor 推进同一次写删除，取消订阅或该流从订阅里移除时随之删除。`subscriptions` 读模型逐项列出未确认的缺口；其他订阅者看不到它。
 - 执行事实订阅走同一套 cursor 与 ack，但只能 `ordered`：执行事实不压缩、不合并，所以慢消费者只背压自己，没有投递缺口；投递经存储按位置读出已提交的记录、原样搬运，不经读模型、不解析，所以观察侧的订阅与投递元素不依赖效应侧类型（§7.3 uses 图）。它不经 `route`，不受声明与会话影响。

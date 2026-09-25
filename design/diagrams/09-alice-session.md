@@ -57,7 +57,7 @@ sequenceDiagram
 ```mermaid
 flowchart LR
   subgraph OPS["核心↔解释层操作（同一 JSON-RPC，§8.5）"]
-    S1["subscribe(观察流 {(来源, 流, 主体集?, 用途：供给 | 只投递)} 或 执行事实 (来源, WriteScope?)) / ack / unsubscribe"]
+    S1["subscribe(观察流 {(来源, 流, 主体集?, 用途：供给 | 只投递)} 或 执行事实 (来源, WriteScope?) 或 控制（控制流）, mode = ordered | latest) / ack / unsubscribe"]
     S2["read(targets = (来源, 流, request_schema 身份, request, range?), deadline)"]
     S3["read_model(kind, as_of?)"]
     S4["draft / revise / submit_for_decision / decide / send_back / withdraw / transfer"]
@@ -85,7 +85,7 @@ flowchart LR
   S6b --> RRO
   S7 --> HL
   S2 -.->|"逐 target，按序判定：UnknownTarget（来源未登记）/ Unavailable{source_state}（从未有声明）/ Unavailable{source_state}（此刻无已建立会话；以上都不调用、不记 gap）→ 按会话有效声明：Unsupported（流不在其中，或 read 为 Unsupported）/ Unconfirmed（read 为 Unknown）/ InvalidRequest{reason} → 调用之后：Answered{conclusion, items} / Refused{conclusion, reason} / Unavailable{gap}（渠道失败，已记 Gap{Channel}）/ Pending{from, instance_id}（deadline 到而调用在途；之后照常记结论或 gap，从 from 订阅只投递项可收到；核心实例已换则不再保证）"| S2
-  S1 -.->|"逐项判定，没有任何一项被接纳或待接纳 → Rejected{items}：来源不在采纳集合且从未有声明 → 该项拒绝；在采纳集合而从未有声明 → 该项待接纳；供给项：来源不在采纳集合 → 拒绝（来源未登记）；流不在最近声明里 / 配额池流上不带主体集 → 拒绝，放不下 → QuotaExceeded{quota, limit}；只投递项（不看采纳集合与会话）：流在任何一个声明版本里出现过 → 接纳（不进需求、不占配额），从未声明过 → 拒绝；from < 保留边界 → BeyondRetention；执行事实（不看采纳集合）：非 ordered 或 WriteScope.key 不在任何声明版本里 → 拒绝"| S1
+  S1 -.->|"逐项判定，没有任何一项被接纳或待接纳 → Rejected{items}：来源不在采纳集合且从未有声明 → 该项拒绝；在采纳集合而从未有声明 → 该项待接纳；供给项：来源不在采纳集合 → 拒绝（来源未登记）；流不在最近声明里 / 配额池流上不带主体集 → 拒绝，放不下 → QuotaExceeded{quota, limit}；只投递项（不看采纳集合与会话）：流在任何一个声明版本里出现过 → 接纳（不进需求、不占配额），从未声明过 → 拒绝；from < 保留边界 → BeyondRetention；执行事实（不看采纳集合）：非 ordered 或 WriteScope.key 不在任何声明版本里 → 拒绝；控制：非 ordered → 拒绝"| S1
   S3 -.->|"kind 未定义 → 拒绝；as_of 有位置尚未提交 → NotYetAvailable{positions}（各流已提交的流末）；tickets / subscriptions 带历史 as_of → 拒绝"| S3
   S4 -.->|"expected_version ≠ current_version → Conflict；同版本已有 Decision → Conflict(AlreadyDecided)"| S4
   S5 -.->|"越权 → Unauthorized；配置不合法 → Rejected 并保留上一有效版本；advance_retention 逐流判定 → NotForward / ReferencedBelow / InsideWindow"| S5
@@ -149,13 +149,13 @@ flowchart LR
   A8 --> F8["控制记录 Applied（自觉违反，不是 Decision）：记单据当时的 current_version 与阻塞头位置集；单据不在 AwaitingDecision → Rejected<br/>lane 步只对这些阻塞头不等待，其余各步照常 → Prepared；阻塞头成集合（D5.4）"]
 ```
 
-读法：控制动作不经进程信号或 flag 文件；每个动作的结果是一条带 principal 与配置版本 hash 的控制记录，生效动作再触发相应记录。
+读法：控制动作不经进程信号或 flag 文件；每个动作的结果是一条带 principal 与配置版本 hash 的控制记录，落核心的控制流（`bypass_lane` 的落该单据的 lane 流，§8.5 订阅组），生效动作再触发相应记录。
 
 核出：无。
 
 ## D9.5 解释层取得声明与执行事实推送（W20）
 
-对照：§2.2 Projection / `StreamDecl` / `account_ref`；§7.5 能力证据；§8.2 `handshake`；§8.5 订阅组、一次性读、`sources`；W20；`design/downstream/design.md` 第 2、3.2、4 节。
+对照：§2.2 Projection / `StreamDecl` / `account_ref`、声明的两种读法；§7.5 能力证据；§8.2 `handshake`；§8.4 健康面；§8.5 订阅组、一次性读、`sources`、`health`；W20；`design/downstream/design.md` 第 2、3.2、4 节。
 
 ```mermaid
 sequenceDiagram
@@ -175,10 +175,15 @@ sequenceDiagram
   EJ-->>C: 已提交的新声明版本 / CapabilityObserved / 单据与尝试的执行事实（存储按位置交出字节）
   C-->>L: 持久订阅与投递调度按位置原样搬运（不解析、不经读模型）
   L->>RM: 收到新声明版本或 CapabilityObserved → 重读 sources
-  L-->>D: 账户列表、能力（支持 / 不支持 / 未确认）、待审事项、结果未知；引用冲突的账户显示“需要处理”
+  L->>C: health()（该来源的会话状态；sources 不带会话状态）
+  alt 来源会话 Established
+    L-->>D: 账户列表；能力按 sources 翻译（支持 / 不支持 / 未确认）；待审事项、结果未知；引用冲突的账户显示“需要处理”
+  else 会话 Connecting 或 Halted
+    L-->>D: 账户列表照常（引用冲突的仍显示“需要处理”）；能力一律答“来源离线 / 需要处理”，不按 sources 里上一次会话的声明答“不支持”或“未确认”；待审事项、结果未知照常
+  end
   Note over L,D: 待审事项是否偏离不推送：呈现时读 tickets（§8.5）
 ```
 
-读法：声明是执行事实，所以取得它是一次读模型 fold、它的变化随执行事实订阅到达，不依赖当前会话；会话状态另在 `health`（§8.4）。按旧 `account_ref` 发出的命令在引用不可解析时不解析到任何账户。
+读法：声明是执行事实，所以取得它是一次读模型 fold、它的变化随执行事实订阅到达，不依赖当前会话；会话状态只在 `health`（§8.4），`sources` 不带它。“此刻能不能”由解释层合并二者：来源在线时按 `sources` 翻译能力，离线时先答离线（`design/downstream/design.md` 第 4 节）。按旧 `account_ref` 发出的命令在引用不可解析时不解析到任何账户。
 
 核出：无。
