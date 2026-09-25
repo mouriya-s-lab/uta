@@ -72,11 +72,11 @@ fn compact_below_retention<Record, D: RetractableDelta>(journal: &mut Journal<Re
 
 | `reason` | 触发者与写者 |
 |---|---|
-| `start`、`disconnect`、`quota`、`ingress_overflow` | 集成来源的流：集成上报（会话内上报的断代由集成推送）；握手时决定开新 epoch 的，由集成会话 append（§8.2 `handshake`）。程序产出的派生流上的 `start`：让程序 id 进入活动集合的 `load_program`（首次装载，或卸载之后再装载），控制面在它的 `Applied` 事务里 append（§8.6 程序流的 epoch） |
+| `start`、`disconnect`、`quota`、`ingress_overflow` | 集成来源的流：集成上报（会话内上报的断代由集成推送）；握手时决定开新 epoch 的，由集成会话 append（§8.2 `handshake`）。程序产出的派生流上的 `start`：让程序 id 进入活动集合的 `load_program`（首次装载，或卸载之后再装载），控制面在它的 `Applied` 事务里、在新成员的每条程序流上 append（§8.6 程序流的 epoch） |
 | `credential_rotated` | 会话重建（§7.2），集成会话 append |
 | `schema_change` | 载荷版本变化（§8.1） |
 | `backfill_incomplete` | 回填穷尽（§8.4），持久订阅 append |
-| `program_upgrade` | 程序产出的派生流也是来源；不沿用旧状态的替换（程序升级或运维冷启动，即 `Reset`）开新 epoch 时，控制面在替换的 `Applied` 事务里 append（§8.6 程序流的 epoch） |
+| `program_upgrade` | 程序产出的派生流也是来源；不沿用旧状态的替换（程序升级、程序流集合改变或运维冷启动，即 `Reset`）开新 epoch 时，控制面在替换的 `Applied` 事务里、在新成员的每条程序流上 append（§8.6 程序流的 epoch） |
 
 **`Gap{origin: Delivery, reason}`：某个订阅的投递有缺口。** `reason ∈ {slow_consumer, compacted, conflated}`（P3），分别是慢消费者被停投、订阅位置已被压缩到保留边界之下、`latest` 消费合并。程序是订阅消费者（输入 = 位置推进，§4.3），程序滞后被跳过的区间是它的 `Delivery` gap。
 
