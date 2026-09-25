@@ -75,13 +75,13 @@ sequenceDiagram
 
 ## D4.2 程序生命周期
 
-对照：§8.6 装载期校验、`Load`/`Reset`/`Unload`、程序的活动集合与失败抑制、卸载与替换、预算语义、状态迁移、运维冷启动；§8.5 `load_program`/`unload_program`；§6.1 发出成员；§4.2 `program_upgrade`；§7.2 生命周期表与受控停止。
+对照：§8.6 装载期校验、`Load`/`Reset`/`Unload`、程序的活动集合与失败抑制、卸载与替换、程序流的 epoch、预算语义、状态迁移、运维冷启动；§8.5 `load_program`/`unload_program`；§6.1 发出成员；§4.2 `start`、`program_upgrade`；§7.2 生命周期表与受控停止。
 
 ```mermaid
 stateDiagram-v2
   state "等待来源的声明" as WAIT
   state "结束宿主执行中" as DRAIN
-  [*] --> Loading : load_program 的 Applied（id 不在活动集合里：以值记下成员事实：装载 principal、内容 hash、预算、接受的 state_version 集合、执行事实输入；同事务按各输入声明的起点建立全部 cursor）/ 启动第 5 步（活动集合中未被抑制的程序）
+  [*] --> Loading : load_program 的 Applied（id 不在活动集合里：以值记下成员事实：装载 principal、内容 hash、预算、接受的 state_version 集合、执行事实输入；同事务按各输入声明的起点建立全部 cursor，并为每条程序流开新 epoch：Gap{Source, start}）/ 启动第 5 步（活动集合中未被抑制的程序；不开 epoch）
   [*] --> WAIT : 同上，但所引用的某个来源还没有任何声明版本：不拉起宿主、不 ProgramHalted，留在活动集合里
   WAIT --> Loading : 该来源第一次握手成功（append 声明版本）→ 做装载期校验
   WAIT --> Unloaded : unload_program 的 Applied（没有宿主，跳过第 1–3 步，直接 append）
@@ -93,14 +93,14 @@ stateDiagram-v2
   Running --> Halted : 超预算 / Output 的 checkpoint 版本不在本成员接受的集合内（视同 trap）/ trap（宿主异常退出）→ Output 不落，同事务 ProgramHalted + ProgramFailed，提交后终止宿主、OS 确认退出后清除登记
   Running --> Stopped : 受控停止第 2 步 → Unload；活动集合、cursor 与引用不变，下一实例第 5 步重新 Load
   Running --> DRAIN : unload_program，或替换（对该 id 再 load_program）生效：停止调度 Advance，等在途输出事务提交或确知不提交，Unload，OS 确认退出、清除行；此时还没有 Applied
-  DRAIN --> Unloaded : 然后 append unload_program 的 Applied：离开活动集合，全部 cursor 结束，Checkpoint cursor 引用解除（Checkpoint 只作记录保留）
-  DRAIN --> Loading : 然后 append 替换的 Applied：同一条结束旧成员、开始新成员。沿用（非 cold_start，且无旧 Checkpoint 或新程序接受其 state_version）：共有输入 cursor 与引用原样沿用，Applied 记下沿用的 Checkpoint；不沿用：同事务 ProgramReset{Replace 或 Operator}、程序流新 epoch、cursor 按起点重建、旧引用解除。新成员所引用的来源都已有声明版本
+  DRAIN --> Unloaded : 然后 append unload_program 的 Applied：离开活动集合，全部 cursor 结束，Checkpoint cursor 引用解除（Checkpoint 只作记录保留）；程序流不写记录，epoch 不结束
+  DRAIN --> Loading : 然后 append 替换的 Applied：同一条结束旧成员、开始新成员。沿用（非 cold_start，且无旧 Checkpoint 或新程序接受其 state_version）：共有输入 cursor 与引用原样沿用，Applied 记下沿用的 Checkpoint，程序流接着原 epoch；不沿用：同事务 ProgramReset{Replace 或 Operator}、每条程序流开新 epoch（Gap{Source, program_upgrade}）、cursor 按起点重建、旧引用解除。新成员所引用的来源都已有声明版本
   DRAIN --> WAIT : 同上，但新成员所引用的某个来源还没有声明版本：不拉起宿主
   Halted --> Loading : 替换的 Applied（宿主已 OS 确认退出之后，跳过第 1–3 步），以位置引用 ProgramHalted（记下新成员事实；沿用规则同上，状态本身致 trap 时用 cold_start），新成员所引用的来源都已有声明版本
   Halted --> WAIT : 同上，但新成员所引用的某个来源还没有声明版本
   Halted --> Halted : 核心重启：ProgramHalted 未被解除，第 5 步不装载
-  Halted --> Unloaded : unload_program 的 Applied（宿主已 OS 确认退出之后）
-  Unloaded --> Loading : 再 load_program：新成员，cursor 在其 Applied 同事务按起点建立，不交回旧 Checkpoint
+  Halted --> Unloaded : unload_program 的 Applied（宿主已 OS 确认退出之后）；程序流 epoch 不结束
+  Unloaded --> Loading : 再 load_program：新成员，cursor 在其 Applied 同事务按起点建立，不交回旧 Checkpoint；同事务每条程序流开新 epoch：Gap{Source, start}
   Unloaded --> WAIT : 同上，但新成员所引用的某个来源还没有声明版本
   Stopped --> [*]
   note right of Running
@@ -117,6 +117,7 @@ stateDiagram-v2
 - 宿主执行在程序成员与核心实例两者之内：`Stopped`（受控停止）与崩溃都只结束宿主执行，成员、cursor 与 `Checkpoint` 引用不变；`unload_program` 与替换先经“结束宿主执行中”结束它，再写结束成员的 `Applied`；没有宿主的成员（等待来源的声明、`Halted`）跳过这一步。
 - 等待来源的声明不是失败：没有 `ProgramHalted`，来源一有声明版本就照常校验与装载（§8.6）。任何开始新成员的 `Applied`（首次装载、替换、卸载后再装载），只要新成员所引用的某个来源还没有声明版本，就进入等待，不拉起宿主。
 - 没有装载时的 `Reset`：本成员可交回的 `Checkpoint` 总被本成员接受（替换的 `Applied` 比对沿用的，`Output` 检查其后持久化的，§8.6 状态迁移）；`ProgramReset` 只在不沿用的替换 `Applied` 事务里出现。
+- 程序流的 epoch 由开始不沿用旧状态之成员的 `Applied` 开出，与该 `Applied` 同一事务：让 id 进入活动集合的 `load_program`（`[*]` 与 `Unloaded` 出发的那条）为 `start`，不沿用的替换为 `program_upgrade`；它到同一 id 下一个这样的 `Applied` 为止。卸载、沿用的替换、`Stopped` 与崩溃之后的重新 `Load` 都不开也不结束它。装载开 epoch 而不是 `Reset`，没有 `ProgramReset`（§8.6 程序流的 epoch）。
 - 成员结束之后，它已提交的 `EffectRequest` 仍按开始它的 `Applied` 所记事实分派与重派（D4.3）。
 
 核出：无。

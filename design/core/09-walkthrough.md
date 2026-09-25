@@ -161,7 +161,7 @@
 1. 订阅 200 instrument tick（订阅表，§4.2、§7.3）；集成断线 30 s 重连，venue 无游标（F11/C6）。
    - 握手时集成不能以游标证明续接 → 集成会话结束前一 epoch、创建新 epoch。新 epoch 首条是 `Gap{origin: Source}`（观察 J，§4.2、§8.2 `handshake`），含前一 `StreamId` 与最后 `Seq`、原因 `disconnect`；同一事务写该逻辑流的 `None{epoch}`（§8.4）。
    - 恢复者：核心（`LogPosition` 与流 epoch 是它创建的，§2.3）；断代本身由来源的证据（不能续接）决定，核心不推断续接。
-   - 重连握手后，核心对该流重发一次需求全集（这 200 个主体，§8.2 `route`，新会话里 `generation` 为 0）；集成在收到它之前不推送该流，`Routed` 的路由结论记录落在新 epoch 上，带这次生效的全集，标出这些主体在新 epoch 里的记录从这里起开始。序号覆盖另按整条流计，只在这条流被确认为 `All` 且 `refused` 为空之后才计入推送（§8.4）。同一会话里之后若集成再上报 `Gap{origin: Source}` 开新流 epoch，这条 gap 带集成加一后的 `generation`，核心以它为该流再重发一次 `route`，新 epoch 有自己的路由结论记录；此前发出、带旧 `generation` 的 `route` 由集成答 `Unavailable`，核心不另判。
+   - 重连握手后，核心对该流重发一次需求全集（这 200 个主体，§8.2 `route`；新会话里核心尚未接受该流的会话内 gap，`generation` 为 0）；集成在收到它之前不推送该流，`Routed` 的路由结论记录落在新 epoch 上，带这次生效的全集，标出这些主体在新 epoch 里的记录从这里起开始。序号覆盖另按整条流计，只在这条流被确认为 `All` 且 `refused` 为空之后才计入推送（§8.4）。同一会话里之后若集成再上报 `Gap{origin: Source}` 开新流 epoch，这条 gap 带集成加一后的 `generation`，核心接受它即为该流起一项 `route` 义务（已有则并入），此后发出的 `route` 带这个 `generation`，新 epoch 的供给由它的 `Routed` 确认；此前发出、带旧 `generation` 的 `route` 由集成答 `Unavailable`，核心不另判。
    - 断线期间与重连后握手之前，`health` 里该流的 readiness 是由会话状态派生的 `Disconnected`，核心不为它 append 任何记录（§8.4）。
    - 对外可见：订阅者先收到 gap 再收新 epoch 记录；无静默跳过。
 2. **有游标变体**：集成重连报可信续传游标 → 续用原 epoch，`Seq` 接续，不新建 gap（§8.2 `handshake`、§8.4）。

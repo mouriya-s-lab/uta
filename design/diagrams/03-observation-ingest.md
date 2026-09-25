@@ -62,7 +62,7 @@ stateDiagram-v2
   }
   Starting --> DC : 会话离开 Established（最近的会话记录不再是 Established）
   Live --> DC : 会话离开 Established（旧会话的 Live 随会话记录更替失效）
-  Live --> Starting : 会话内集成上报 Gap{Source, generation} 开新流 epoch（旧 epoch 的 Live 随该逻辑流的 None{新 epoch} 失效；上报之前集成已以 Unavailable 完成它已收到的该流 read / backfill / route）；核心带这个 generation 为新 epoch 重发 route，集成收到后才推送，再为新 epoch 声明 Live{live_from}
+  Live --> Starting : 会话内集成上报 Gap{Source, generation} 开新流 epoch（旧 epoch 的 Live 随该逻辑流的 None{新 epoch} 失效；上报之前集成已以 Unavailable 完成它已收到的该流 read / backfill / route）；核心接受它即为该流起 route 义务（已有则并入），此后的 route 带这个 generation，集成收到后才推送，再为新 epoch 声明 Live{live_from}
   note right of DC
     由会话状态派生：没有记录、没有自己的时刻
     只随附当前会话状态及其 since（会话记录的时刻，不是断线时刻）
@@ -74,8 +74,8 @@ stateDiagram-v2
     否则 → 新 epoch，首条 Gap{Source, disconnect / start / quota / ingress_overflow}
     rotate_credential → 强制新 epoch，reason credential_rotated
     载荷版本变化 → 新 epoch，reason schema_change
-    会话内：集成上报供给中断（含上游推送通道重连）→ 新 epoch，Gap{Source} 带集成的 generation（会话开始为 0，每上报一条加一并带上新值，本会话第一条为 1），与握手开的新 epoch 同样处理：
-    readiness 回到 Starting、核心带新 generation 重发 route、新 live_from、回填任务在它声明时判定
+    会话内：集成上报开 epoch 的 Gap{Source}（供给中断，含上游推送通道重连；schema_change 等）→ 新 epoch，Gap{Source} 带集成的 generation（会话开始为 0，每上报一条加一并带上新值，本会话第一条为 1），与握手开的新 epoch 同样处理：
+    readiness 回到 Starting、核心起或并入该流的 route 义务（此后的 route 带新 generation）、新 live_from、回填任务在它声明时判定
   end note
 ```
 
@@ -158,12 +158,12 @@ sequenceDiagram
     SUB-->>C: Subscription{id, items}
   end
   opt 某流的需求（各供给项主体之并 ∪ 核心自己的需求；只投递项与挂起项不计）变了，且该集成会话已建立
-    SUB->>I: route(stream, 主体全集 | All | 空集, generation = 本会话里集成为该流上报、核心已接受的最近一条 Gap{Source} 所带的值，没有则 0；握手事务里的与 backfill_incomplete 的 Gap{Source} 不带 generation，不改变它)
+    SUB->>I: route(stream, 主体全集 | All | 空集, generation = 本会话最后接受的值，见 §8.2 route 的 generation)
     alt Routed{refused}（集成只以 Routed 回答带它当前 generation 的调用）
       I-->>SUB: Routed{refused}
       SUB->>J: 同事务 append 路由结论记录（这次生效的主体全集：All 或主体集，refused 及原因；不记增减，相对同一流 epoch 内上一条的增减由相邻两条算出）；refused 主体在所属各项内列为“来源拒绝”
     else Unavailable（上游没有完整结论；或 generation 早于集成为该流最近上报的：集成先已上报 Gap{Source}，这次调用问的是已结束的 epoch，供给不变）
-      I-->>SUB: Unavailable（不 append；该流的 route 义务未了，按 pacing 再发，带其时最新的全集与最后接受的 generation；同一流至多一次 route 在途；核心不另判 epoch 更替）
+      I-->>SUB: Unavailable（不 append；该流的 route 义务未了，本会话内按 pacing 再发，带其时的目标全集；会话结束时随会话丢弃；同一流至多一次 route 在途；核心不另判 epoch 更替）
     end
   end
   loop 记录到达
@@ -187,16 +187,16 @@ sequenceDiagram
     C->>SUB: 重连：同一 principal 重新 handshake → 自动挂接其持久订阅（不需再 subscribe）
     DL->>C: 先交出未确认的投递缺口，再从 cursor 之后重投；未确认区间可能重复，按 LogPosition 去重
   end
-  opt 重新握手使某流进入配额池
+  opt 重新握手（新会话建立）使某流进入配额池
     SUB->>SUB: 该流上整条流的供给项挂起（WholeStreamInPool），核心自己的 All 撤去；离开所有配额池时恢复
-    SUB->>I: route(stream, 重算后的全集, generation)
+    SUB->>I: 按会话建立的规则：重算后的全集非空才起 route 义务，route(stream, 重算后的全集, generation)
   end
   opt 会话内集成上报 Gap{Source, generation}，该流开新流 epoch
     Note over I: 上报之前，已收到的该流 route 以 Unavailable 完成；此后收到的带旧 generation 的 route 一律 Unavailable，不改供给
-    SUB->>I: route(stream, 当前全集, 新 generation)：接受 gap 只把该流未了的 route 义务的目标 generation 更新为新值，它与 pacing 重试是同一项，不多发；新流 epoch 在收到带新 generation 的 route 之前不推送
+    SUB->>I: route(stream, 当前全集, 新 generation)：接受 gap 为该流起一项 route 义务，已有则并入（与 pacing 重试是同一项，不多发），此后发出的都带新 generation；新流 epoch 在收到带新 generation 的 route 之前不推送
     I-->>SUB: Routed{refused} → SUB 在新 epoch 里 append 路由结论记录（全集、refused 及原因；推送只在同会话、全集为 All 且 refused 为空的一条之后才计入序号覆盖）
   end
-  Note over SUB,I: 会话建立后，SUB 为每条需求非空的流起一项 route 义务；接受会话内某流开新 epoch 的 Gap{Source} 时，为该流起一项义务，已有则并入（每条流至多一项，第一次 Routed 了结；在途期间的新需求按 §8.2 在返回后继续下发）。每个流 epoch 的供给由本 epoch 的路由结论记录证明；在该 epoch 第一次带其 generation 的 route 之前集成不推送该流
+  Note over SUB,I: route 义务嵌在集成会话里，每条流至多一项：会话建立时为需求非空的流起（需求为空的不起）；已建立期间接受会话内开 epoch 的 Gap{Source} 或需求变化时起，已有则并入；第一次 Routed 了结（在途期间的新需求按 §8.2 在返回后以新全集再起）；会话结束时在途调用完成之后、关闭通道之前丢弃，不带进下一个会话；没有已建立的会话时需求变化只改需求。流 epoch 的供给只由本 epoch 的路由结论记录证明；在该 epoch 第一次带其 generation 的 route 之前集成不推送该流
 ```
 
 读法：
@@ -204,7 +204,7 @@ sequenceDiagram
 - 确认语义唯一：`ack` = 已处理。已投未确认的记录在崩溃后会再见一次；已确认的永不重投（退回只经控制面 `rewind_cursor`）。
 - 程序是同一种订阅者：它的 cursor 与 `Checkpoint` 同事务持久化（D4.1），所以程序永远不会看到已折入状态的记录。
 - 需求按流的全集下发：多个订阅对同一主体只路由一次，配额在核心计量。序号覆盖只看记录：推送只在该流 epoch 上同会话、确认供给 `All` 且 `refused` 为空的路由结论记录之后才计入；之后一条不确认这一点的路由结论记录使计入停住，直到下一条确认的记录（§8.4）。订阅表与核心自己的需求都不是它的输入。
-- `route` 跨过会话内流 epoch 更替只有一个判定者，就是集成。`generation` 由集成创建，随 `Gap{Source}` 送来；核心只带上它最后接受的那个，不另按发出 epoch 过滤 `Routed`。集成→核心按发送顺序处理，所以更替之前送出的 `Routed` 先于 gap 到达，落在它确认的那个 epoch 里。集成在 gap 之前以 `Unavailable` 完成已收到的 `route`，这个 `Unavailable` 先于 gap 到达，核心在接受 gap 之前按 pacing 再发的仍带旧 `generation`，同样得 `Unavailable`，无害；更替之后才到集成的旧 `generation` 调用得 `Unavailable`、供给不变。每条流至多一项未了的 `route` 义务：按 pacing 的重试与接受 gap 触发的重发是同一项，gap 只更新它的目标 `generation`，第一次 `Routed` 了结它，所以新 epoch 的第一条路由结论记录来自一次带新 `generation` 的 `route`（§8.2 `route`）。
+- `route` 跨过会话内流 epoch 更替只有一个判定者，就是集成。`generation` 由集成创建，随 `Gap{Source}` 送来；核心只带上它最后接受的那个，不另按发出 epoch 过滤 `Routed`。集成→核心按发送顺序处理，所以更替之前送出的 `Routed` 先于 gap 到达，落在它确认的那个 epoch 里。集成在 gap 之前以 `Unavailable` 完成已收到的 `route`，这个 `Unavailable` 先于 gap 到达，核心在接受 gap 之前按 pacing 再发的仍带旧 `generation`，同样得 `Unavailable`，无害；更替之后才到集成的旧 `generation` 调用得 `Unavailable`、供给不变。每条流至多一项未了的 `route` 义务，嵌在集成会话里：按 pacing 的重试与接受 gap 触发的重发是同一项，gap 并入它而不另起，第一次 `Routed` 了结它，所以新 epoch 的第一条路由结论记录来自一次带新 `generation` 的 `route`；会话结束时未了的义务丢弃，不带进下一个会话（§8.2 `route`“谁调、何时调”）。
 - 投递按主体：数据记录只看信封上的 `subject`，不论来自推送、回填、一次性读还是回执；控制记录投给该流每一项。只投递项不改变需求与配额，一次性读得 `Pending{from, instance_id}` 后从 `from` 订阅一个只投递项，即收到那条结论或 gap（同一核心实例内）。
 - 投递缺口是订阅的状态，不是流上的记录：投递调度要跳过时先请持久订阅写进订阅表，写下之后才跳过；每次投递与重新挂接都先交出它；确认不低于 `to` 的 cursor 时与 cursor 推进同一次写删除，取消订阅或该流从订阅里移除时随之删除。`subscriptions` 读模型逐项列出未确认的缺口；其他订阅者看不到它。
 - 执行事实订阅走同一套 cursor 与 ack，但只能 `ordered`：执行事实不压缩、不合并，所以慢消费者只背压自己，没有投递缺口；投递经存储按位置读出已提交的记录、原样搬运，不经读模型、不解析，所以观察侧的订阅与投递元素不依赖效应侧类型（§7.3 uses 图）。它不经 `route`，不受声明与会话影响。
@@ -236,7 +236,7 @@ sequenceDiagram
 ```mermaid
 flowchart TB
   Q{"缺口出在哪一段？"}
-  Q -->|"来源流本身断代<br/>断线 / 配额 / 溢出 / 换凭据 / 载荷换版 / 回填穷尽 / 程序升级"| S["Gap{origin: Source, reason}<br/>观察 J 该流上：新 epoch 首条或流内记录<br/>写者：集成推送入口（流内）/ 集成会话（握手开新 epoch）/ 持久订阅（backfill_incomplete）/ 核心（程序流新 epoch）"]
+  Q -->|"来源流本身有缺口：断代，或 epoch 内未补齐的区间<br/>断线 / 配额 / 溢出 / 换凭据 / 载荷换版 / 程序装载 / 程序升级 / 回填穷尽"| S["Gap{origin: Source, reason}<br/>观察 J 该流上：新 epoch 首条（开 epoch）或 epoch 内记录（backfill_incomplete，不开 epoch）<br/>写者：集成推送入口（会话内上报的断代）/ 集成会话（握手开新 epoch）/ 持久订阅（backfill_incomplete）/ 控制面（程序流新 epoch，在开始成员的 Applied 事务里）"]
   Q -->|"核心到某个订阅的投递<br/>慢消费者 / 订阅位置被压缩 / conflated"| D["Gap{origin: Delivery, reason}<br/>订阅的状态：订阅表里按（订阅, 流）记 {流, from, to, reason}，不在任何流上<br/>写者：持久订阅（应投递调度请求，先写后跳）；订阅者确认不低于 to 的 cursor 即删除"]
   Q -->|"核心发起的读渠道不可用<br/>取证 / 回填 / 一次性读 返回 Unavailable"| C["Gap{origin: Channel, channel}<br/>该次调用的结果，可再发<br/>写者：IO 壳（取证，执行事实侧属该 Attempt）/ 持久订阅（回填）/ 一次性读元素（观察侧该流）"]
   Q -->|"submit 无业务回执"| U["不是 gap：Undetermined<br/>写边界 in-doubt（D6.1）"]

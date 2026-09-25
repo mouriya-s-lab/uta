@@ -97,11 +97,12 @@ flowchart TB
 | 集成运行（每个采纳的集成登记 × 实例） | 让一个采纳的集成进入初始状态的 `Connecting` 会话健康观察：第 3 步为它写的那一条，或 `restart_integration` 采纳一个本实例尚未运行的 id 时与其 `Applied` 同一事务的那一条；或解除 `Halted` 的 `Applied` 事务（与其 `Connecting` 健康观察同一事务，只在上一次运行结束之后提交）（集成会话、控制面） | `Halted` 路径：`IntegrationHalted` 之后，该会话已结束、最后一个集成进程 OS 确认退出并清除它的进程表行，这次清除就是运行的结束锚点（OS；核心在确认之前崩溃的，由继任实例第 1 步回收确认）；或实例结束：受控停止的实例结束锚点、崩溃后继任者的 fence。`Connecting` 中换进程不结束运行 | 核心实例 | 会话健康观察、`IntegrationHalted`；结束之后进程表里没有它的行 |
 | 集成进程 | 拉起并写进程表 `(instance_id, pid, start_time, role)`（OS） | OS 确认退出之后清除该行（OS）；本实例没来得及确认的，由继任实例第 1 步回收（OS） | 集成运行；同一集成同时至多一个：下一个进程在上一个 OS 确认退出之后才拉起 | 进程表 |
 | 凭据副本 | 拉起时经继承句柄交付（核心写入后关闭己端，§7.1 凭据链） | 该进程 OS 确认退出（OS） | 集成进程 | 无 |
-| 集成会话（通道化身） | 拉起时核心创建通道并为它分配 `SessionEpoch`（核心，§7.1） | 在途调用恰好完成一次，然后核心关闭通道（核心；关闭之后读不到该化身的任何消息） | 集成进程：一个进程恰有一个会话，会话在进程之内结束 | 核心 append 的记录带它的 `SessionEpoch`（见下文“会话 epoch”） |
+| 集成会话（通道化身） | 拉起时核心创建通道并为它分配 `SessionEpoch`（核心，§7.1） | 在途调用恰好完成一次，再丢弃它的全部未了 `route` 义务，然后核心关闭通道（核心；关闭之后读不到该化身的任何消息） | 集成进程：一个进程恰有一个会话，会话在进程之内结束 | 核心 append 的记录带它的 `SessionEpoch`（见下文“会话 epoch”） |
 | `Established` | 握手返回合法投影：声明版本与 `Established` 健康观察同一事务（集成会话） | 会话结束（集成会话） | 集成会话 | 声明版本、会话健康观察 |
-| 流 epoch（集成来源的每条逻辑流） | 该流一条开 epoch 的 `Gap{origin: Source}`：握手时集成不能以 venue 游标证明续接，由集成会话在握手事务里 append（§8.2 `handshake`）；或会话内由集成上报供给中断、核心按通道次序接受（§8.3、§8.4“会话内开的新流 epoch”）。边界由集成确认，身份 `StreamId.epoch` 由核心分配 | 该流下一条开 epoch 的 `Gap{origin: Source}`，它同时开始下一个 epoch（确认者同左）；`backfill_incomplete` 是 epoch 内标出回填未覆盖区间的记录，不结束也不开 epoch（§4.2）；会话结束与实例更替本身不结束它 | 不嵌在实例或会话里：握手以游标续接时跨会话、跨实例延续 | 流上的 `Gap{origin: Source}` |
-| 流 epoch（程序产出的派生流上，不沿用旧状态的替换开出的 epoch） | 不沿用旧状态的替换 `Applied` 事务里的 `Gap{origin: Source, reason: program_upgrade}`（控制面，§8.6 卸载与替换、`Reset`） | 下一次这样的替换 `Applied` 事务里的 `Gap{origin: Source, reason: program_upgrade}`，它同时开始下一个 epoch（控制面） | 不嵌在实例或程序成员里：沿用旧状态的替换不开新 epoch | 流上的 `Gap{origin: Source}` |
+| 流 epoch（集成来源的每条逻辑流） | 该流一条开 epoch 的 `Gap{origin: Source}`：握手时集成不能以 venue 游标证明续接，由集成会话在握手事务里 append（§8.2 `handshake`）；或会话内由集成上报开 epoch 的 `Gap{origin: Source}`（供给中断、`schema_change` 等），核心按通道次序接受（§8.3、§8.4“会话内开的新流 epoch”）。边界由集成确认，身份 `StreamId.epoch` 由核心分配 | 该流下一条开 epoch 的 `Gap{origin: Source}`，它同时开始下一个 epoch（确认者同左）；`backfill_incomplete` 是 epoch 内标出回填未覆盖区间的记录，不结束也不开 epoch（§4.2）；会话结束与实例更替本身不结束它 | 不嵌在实例或会话里：握手以游标续接时跨会话、跨实例延续 | 流上的 `Gap{origin: Source}` |
+| 流 epoch（程序产出的每条派生流） | 开始一个不沿用旧状态的成员的 `Applied` 事务里、该流的 `Gap{origin: Source}`：让程序 id 进入活动集合的 `load_program`（首次装载，或 `unload_program` 之后再装载）带 `reason: start`，不沿用旧状态的替换带 `reason: program_upgrade`（控制面；身份 `StreamId.epoch` 由核心分配，§8.6 程序流的 epoch） | 同一程序 id 下一个这样的 `Applied` 事务里的 `Gap{origin: Source}`，它同时开始下一个 epoch（控制面）；`unload_program` 不结束它，卸载期间流上没有记录；沿用旧状态的替换与实例更替也不结束它 | 不嵌在实例或程序成员里 | 流上的 `Gap{origin: Source}` |
 | 核心→集成的在途读侧调用（`read`、`backfill`、`route`） | 经通道发出（集成会话，内存）。发出时这条流的当前流 epoch 是它的发出 epoch：`read` 由 `dispatch_end` 记下，`backfill` 是任务所在的 epoch，`route` 由它所带的 `generation` 指名（§8.2） | 封闭返回值（集成；它在上报 `Gap{origin: Source}` 之前以 `Unavailable` 完成已收到的这类调用，§8.3）；会话结束时的强制完成（集成会话）；实例崩溃时随实例结束，结束锚点即继任者的 fence 事务，调用结果无从记录，由发起方按各自规则重来。结果按发出 epoch 准入：`read`、`backfill` 的结果到达时发出 epoch 已结束的，调用仍以这个返回值结束，核心不准入它、记为 `Unavailable`（§8.2 两者的“错误”）；`route` 所带 `generation` 早于集成最近上报的，集成答 `Unavailable`、供给不变（§8.2 `route`） | 集成会话。发出 epoch 是调用的属性，不是外层：流 epoch 何时结束由集成决定，与核心的调用互不等待，集成送出 gap 时仍在通道上的调用只能在 gap 之后结束（§8.4“会话内开的新流 epoch”） | 结果记录与计数观察同一事务 |
+| 核心→集成的 `route` 义务（每条逻辑流至多一项） | 会话建立时，为需求非空的流各起一项；会话已建立期间，核心接受该流一条会话内上报的 `Gap{origin: Source}`，或该流的需求变化时起一项，已有则并入（持久订阅元素，内存，§8.2 `route`“谁调、何时调”） | 第一次 `Routed`（持久订阅元素）；会话结束：在途调用完成之后、关闭通道之前丢弃，不再重发（持久订阅元素）；实例崩溃时随实例结束 | 集成会话：没有已建立的会话就没有义务，需求变化只改变需求；它逐次发出的 `route` 是上一行的调用 | 无；`Routed` 的路由结论记录是那次调用的结果 |
 | 核心→集成的在途写与取证调用（`submit`、`cancel`、`query_by_key`、`list_open`、`list_fills`、`replay_by_key`） | 经通道发出（集成会话，内存） | 封闭返回值（集成）；会话结束时的强制完成（集成会话）；实例崩溃时随实例结束，结束锚点即继任者的 fence 事务，调用结果无从记录（写由第 2 步记为 `Undetermined(CrashWindow)`，取证由 IO 壳按恢复规则重做，§6.7） | 集成会话：按作用域寻址，不是流 epoch 的内层；跨过流 epoch 更替的回答按 §8.1 来源顺序第 1 条处理 | 结果记录与计数观察同一事务 |
 | 程序（活动集合的成员） | `load_program` 的 `Applied`：钉住内容 hash、预算与接受的 `state_version`；替换时同一个 `Applied` 结束旧成员、开始新成员（控制面，§8.6） | `unload_program` 的 `Applied`，或替换它的那个 `Applied`（控制面）；只在它的宿主执行已结束之后 append：停止调度 `Advance`、在途输出事务已提交或确知不提交、宿主 OS 确认退出（§8.6 卸载与替换） | 不嵌在实例里：跨实例持续 | 控制记录（控制流） |
 | 程序的输入 cursor | 开始成员的 `Applied` 同一事务，按各输入声明的起点建立；沿用旧状态的替换原样沿用共有输入的 cursor（核心，§8.6） | `unload_program` 的 `Applied`，或替换的 `Applied`（不沿用时同一事务按 `Reset` 重建，沿用时只结束新程序不再声明的输入）（核心） | 程序成员 | 与 `Checkpoint` 同事务持久化 |
@@ -180,7 +181,7 @@ flowchart TB
   - 理由：先终止再记录，则二者之间崩溃会让重启自动重试（持久的 `Halted` 还没写下）；把“进程已终止”写进 `Halted` 的含义，又让持久记录先于它所断言的事实。所以 `Halted` 只记核心的决定，进程的结束由 OS 另行确认。
 - 解除 `Halted` 的控制记录 `Applied`（`restart_integration`，或 `Halted{Refused}` 上的 `rotate_credential`）带被解除的那条 `IntegrationHalted` 的位置，与转入 `Connecting` 的健康观察同一事务：这是新一次集成运行的开始锚点。这一事务只在该集成上一次运行结束（上一个进程 OS 确认退出、进程表的行已清除）之后提交；提交之后集成会话才拉起进程、握手。所以同一集成的两次运行不重叠。
 - 不在 `Established` 时该集成没有可用的会话：IO 壳不向它发写，也不发取证读（§6.5、§6.6）；已放行未发出的尝试在发出前门等待或到期。
-- **会话结束时在途调用恰好完成一次** [设计]：会话结束（离开 `Established`、`Connecting` 中的会话结束、受控停止第 3 步）时，经该会话通道发出、尚未返回的每个调用立即以封闭返回值完成：写（`submit`/`cancel`）为 `NoResponse`（→ `Undetermined`，§6.5），其余为 `Unavailable`，各按 §8.4 计数一次；然后核心关闭通道。关闭之后这条通道上再也读不到消息，已完成的调用不会再被迟到的回应完成，也不再计数。理由：让调用悬着等回应，发起方就永远等不到结果；同一调用若既被会话结束完成、又被迟到回应完成，就会有两条记录与两次计数。先完成调用、再关闭通道，是内层在外层之前结束。
+- **会话结束时在途调用恰好完成一次** [设计]：会话结束（离开 `Established`、`Connecting` 中的会话结束、受控停止第 3 步）时，经该会话通道发出、尚未返回的每个调用立即以封闭返回值完成：写（`submit`/`cancel`）为 `NoResponse`（→ `Undetermined`，§6.5），其余为 `Unavailable`，各按 §8.4 计数一次；再丢弃该会话的全部未了 `route` 义务，不再重发（§8.2 `route`“谁调、何时调”）；然后核心关闭通道。关闭之后这条通道上再也读不到消息，已完成的调用不会再被迟到的回应完成，也不再计数。理由：让调用悬着等回应，发起方就永远等不到结果；同一调用若既被会话结束完成、又被迟到回应完成，就会有两条记录与两次计数。先完成调用、丢弃义务，再关闭通道，是内层在外层之前结束；义务不带进下一个会话，下一个会话建立时按那时的需求重新起。
 
 **`Halted` 的持久化** [设计]：持久的 `Halted` 只由执行事实判定。一个集成最近的 `IntegrationHalted` 没有被某条 `Applied` 以位置引用解除，它就是 `Halted`，原因取该记录；重启时本步据此恢复，不读健康观察。
 
@@ -220,7 +221,7 @@ flowchart TB
 
 ### 5. 恢复观察侧与消费面
 
-1. 为已建立会话的集成，持久订阅按订阅表与核心自己的需求（每个不在配额池里的作用域订单状态流与成交流恒为 `All`）合成各流需求、经 `route` 下发（§8.2），并续回填；`Gap{origin: Source}` 标记断代（§4.2）。
+1. 为已建立会话的集成，持久订阅按订阅表与核心自己的需求（每个不在配额池里的作用域订单状态流与成交流恒为 `All`）合成各流需求，为需求非空的流起 `route` 义务下发（§8.2 `route`“谁调、何时调”），并续回填；`Gap{origin: Source}` 标记断代（§4.2）。
 2. 装载程序的活动集合：控制流上 `load_program` / `unload_program` 的 `Applied` 的 fold，减去未解除失败抑制的程序（§8.6）；每个程序按它的 `Applied` 所钉的内容 hash 与预算，从本成员可交回的最近 `Checkpoint`（与 cursor 同事务持久化，§8.6 `Load`）交回状态；这个 `Checkpoint` 的 `state_version` 总在该 `Applied` 所记的接受集合内（§8.6 状态迁移），装载时不再比对。所引用的来源尚无声明版本的程序留在活动集合里等待，不拉起宿主，该来源第一次握手成功之后再装载（§8.6 装载期校验）。
 3. 最后开放下游会话（经解释层，§8.5）。
 
@@ -232,9 +233,9 @@ flowchart TB
 
 核心收到 OS 的停止请求（服务管理器、终端中断）时，按生命周期表从内到外结束本实例：
 
-1. **关闭新工作的入口**：会话入口不再接受消费方会话，并关闭已有的全部消费方会话；核心内不再发起新的集成调用：IO 壳不再 append `SendBarrier`、不再推进取证（已 append 的 `SendBarrier` 的写调用照常发出，它是同一动作的一部分），持久订阅不再发 `route` 与 `backfill`，一次性读不再发调用，出站请求处理器不再分派，过期计时器与链的重新评估停止。已在途的调用照常等结果。
+1. **关闭新工作的入口**：会话入口不再接受消费方会话，并关闭已有的全部消费方会话；核心内不再发起新的集成调用：IO 壳不再 append `SendBarrier`、不再推进取证（已 append 的 `SendBarrier` 的写调用照常发出，它是同一动作的一部分），持久订阅不再发 `route` 与 `backfill`（未了的 `route` 义务不再发出，第 3 步随会话丢弃），一次性读不再发调用，出站请求处理器不再分派，过期计时器与链的重新评估停止。已在途的调用照常等结果。
 2. **程序**：每个程序在途的 `Advance`，等它的输出事务提交（或确知不提交），然后 `Unload`。活动集合不变：受控停止不是 `unload_program`，下一实例第 5 步照常装载这些程序。
-3. **集成会话**：每个会话按“会话结束时在途调用恰好完成一次”结束（写为 `NoResponse` → `Undetermined`，其余为 `Unavailable`，照常与计数同事务提交），然后关闭通道。
+3. **集成会话**：每个会话按“会话结束时在途调用恰好完成一次”结束（写为 `NoResponse` → `Undetermined`，其余为 `Unavailable`，照常与计数同事务提交；未了的 `route` 义务丢弃），然后关闭通道。
 4. **进程**：请求每个集成进程与程序宿主进程退出，超时后强制终止；OS 确认退出之后清除进程表的行。
 5. **实例结束锚点**：在实例表本实例的行上写结束锚点。这是本实例的最后一次写。
 6. **释放 fence**：关闭 SQLite，释放 OS 文件锁。
@@ -475,9 +476,10 @@ flowchart TB
   - 一次性读元素：除回填外的一次性读的结果项及其读结论记录或 `Gap{origin: Channel}`，发起方为读处理器、检查项的“先查后判”与消费方 `read`（§3.4、§7.3、§8.2）；持久订阅元素：回填的结果及其读结论记录（§8.4）；
   - IO 壳：回执与取证的观察记录（该回应的订单状态与每笔可识别执行的成交记录，带 `dispatch_end`，记录模型，§6.5）；
   - 集成会话：健康观察中的会话状态与调用结果计数（§8.4），计数观察由调用发起方在记录结果的同一事务里提交（§7.3）；握手时决定开新流 epoch 的 `Gap{origin: Source}`（含换凭据强制的 `credential_rotated`），与持久订阅为该逻辑流写的 `None{epoch}` 同一事务提交（§8.2 `handshake`、§8.4）；
-  - 集成推送入口：集成推送的观察记录、流内 `Gap{origin: Source}` 与 readiness（核心盖上到达会话的 `SessionEpoch` 与 `LogPosition`，§8.3）；
+  - 集成推送入口：集成推送的观察记录、会话内上报的断代 `Gap{origin: Source}` 与 readiness（核心盖上到达会话的 `SessionEpoch` 与 `LogPosition`，§8.3）；
   - 持久订阅元素：各逻辑流当前流 epoch 的回填进度健康观察（含新 epoch 的 `None{epoch}`，§8.4）；`backfill_incomplete` 的 `Gap{origin: Source}`；路由结论记录（`route` 返回 `Routed` 时，§8.2）；
-  - 核心按宿主协议：程序观察 `ProgramReset{reason}`、`ProgramFailed{reason}`（§8.6）。
+  - 核心按宿主协议：程序观察 `ProgramReset{reason}`、`ProgramFailed{reason}`（§8.6）；
+  - 控制面：程序流开 epoch 的 `Gap{origin: Source}`（`start` 或 `program_upgrade`），在开始不沿用旧状态之成员的 `Applied` 同一事务里（§8.6 程序流的 epoch）。
   - 投递缺口 `Gap{origin: Delivery}` 不写在这里：它是订阅的状态，在订阅表里（见下）。
 - **读**：订阅者、程序、单据 `basis`/检查项、读模型、效应侧归因处理器。
 - **传播**：按 `LogPosition` 推进；`RetractableDelta` 可撤回可压缩；回执 / 取证的观察记录可压缩，`Evidence` 在执行 J。健康流按键压缩，每键保留基线（§2.4）。

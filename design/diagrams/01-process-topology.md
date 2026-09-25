@@ -262,8 +262,8 @@ flowchart LR
 | `IntegrationHalted` + `Halted` 健康观察（进程的终止在提交之后，另由 OS 确认） | §7.2 第 3 步 | 二者皆无：仍在上一状态，重启按执行事实重判；已提交而进程未确认退出：继任实例第 1 步回收 |
 | 解除 `Halted` 的控制记录 `Applied`（引用 `IntegrationHalted`）+ `Connecting` 健康观察；只在上一次集成运行结束（进程 OS 确认退出、行已清除）之后提交 | §7.2 第 3 步 | 二者皆无：仍 `Halted`，没有握手发生 |
 | `restart_integration` 采纳本实例尚未运行的 id：`Applied`（带文件 hash 与 `instance_id`）+ `Connecting` 健康观察 | §7.2 第 3 步、§8.5 | 二者皆无：该 id 不在采纳集合里，没有运行、没有进程 |
-| `load_program` 的 `Applied`（钉内容 hash、记下沿用的 `Checkpoint`）+ 程序全部输入的 cursor；替换不沿用旧状态时另加 `ProgramReset`、程序流新 epoch 的 `Gap{Source}`、旧保留引用的解除 | §8.5、§8.6 卸载与替换 | 二者皆无：旧成员照旧（替换时旧宿主已结束，重启照常装载旧成员）；已提交：按 `Applied` 所记沿用或不携带装载，不重复 `Reset` |
-| `unload_program` 的 `Applied` + 程序 cursor 的结束 + 保留引用的解除（宿主已 OS 确认退出之后） | §8.6 卸载与替换 | 二者皆无：程序仍在活动集合里，重启照常装载 |
+| `load_program` 的 `Applied`（钉内容 hash、记下沿用的 `Checkpoint`）+ 程序全部输入的 cursor；让 id 进入活动集合的（首次装载、卸载之后再装载）另加每条程序流新 epoch 的 `Gap{Source, start}`；替换不沿用旧状态时另加 `ProgramReset`、每条程序流新 epoch 的 `Gap{Source, program_upgrade}`、旧保留引用的解除 | §8.5、§8.6 卸载与替换、程序流的 epoch | 二者皆无：id 不在活动集合里的，程序仍不在集合里，程序流没有新 epoch；替换的，旧成员照旧（替换时旧宿主已结束，重启照常装载旧成员）；已提交：按 `Applied` 所记沿用或不携带装载，不重复 `Reset`，不再开 epoch |
+| `unload_program` 的 `Applied` + 程序 cursor 的结束 + 保留引用的解除（宿主已 OS 确认退出之后）；程序流上不写记录，它的 epoch 不结束 | §8.6 卸载与替换 | 二者皆无：程序仍在活动集合里，重启照常装载 |
 | `ProgramHalted` + `ProgramFailed` 观察（宿主的终止在提交之后） | §8.6 | 二者皆无：重启时程序仍在活动集合里且未被抑制，按 `Checkpoint` 重新装载；超预算或 trap 若再发生，再记一次 |
 
 读法：`SendBarrier` 不在任何集合里——它单独 durable append（fsync）后才允许该尝试的写调用，这正是把崩溃窗口二分的屏障（D6.1）。
@@ -272,7 +272,7 @@ flowchart LR
 
 ## D1.6 生命周期嵌套与受控停止
 
-对照：§7.2 生命周期表、受控停止；§7.1 凭据链与核心创建的通道；§8.2 `route` 的 `generation`、§8.3 上报 gap 之前先完成已收到的调用、§8.4 会话内开的新流 epoch；§8.5 会话的生命周期；§8.6 程序的活动集合与失败抑制、卸载与替换。
+对照：§7.2 生命周期表、会话结束时在途调用恰好完成一次、受控停止；§7.1 凭据链与核心创建的通道；§8.2 `route` 的 `generation` 与谁调、何时调，§8.3 上报 gap 之前先完成已收到的调用、§8.4 会话内开的新流 epoch；§8.5 会话的生命周期；§8.6 程序的活动集合与失败抑制、卸载与替换、程序流的 epoch。
 
 ```mermaid
 flowchart TB
@@ -281,10 +281,12 @@ flowchart TB
     subgraph RUN["集成运行（每个采纳的登记）：让它进入初始状态的 Connecting 健康观察（第 3 步，或 restart_integration 采纳新 id）或解除 Applied（上一次运行结束之后才提交）开始 · Halted 路径：IntegrationHalted 之后会话结束、最后一个进程 OS 确认退出清除行时结束（OS，或继任者第 1 步）；或实例结束。Connecting 中换进程不结束运行"]
       subgraph PROC["集成进程：拉起 + 进程表行开始（OS）· OS 确认退出、清除行结束；同一集成同时至多一个"]
         CRED["凭据副本：拉起时经继承句柄交付 · 随进程退出结束"]
-        subgraph SESS["会话 = 通道化身：拉起时核心创建、分配 SessionEpoch · 在途调用完成后核心关闭通道"]
+        subgraph SESS["会话 = 通道化身：拉起时核心创建、分配 SessionEpoch · 在途调用完成、丢弃未了的 route 义务后核心关闭通道"]
           EST["Established：声明版本 + 健康观察开始 · 会话结束"]
+          ROBL["route 义务（每条流至多一项，内存，持久订阅确认）：会话建立时为需求非空的流起；已建立期间接受会话内开 epoch 的 Gap{Source} 或需求变化时起，已有则并入 · 第一次 Routed 了结，或会话结束时在途调用完成之后、关闭通道之前丢弃，不再重发；没有已建立的会话就没有义务"]
           CALLR["在途读侧调用（read / backfill / route）：发出开始 · 封闭返回值（集成在上报 Gap{Source} 之前以 Unavailable 作答已收到的），或会话结束时的强制完成；只嵌在会话里"]
           CALLW["在途写与取证调用：发出开始 · 封闭返回值或会话结束时的强制完成；只嵌在会话里"]
+          ROBL -.->|"逐次发出 route（同一时刻至多一次在途）"| CALLR
         end
       end
     end
@@ -296,7 +298,7 @@ flowchart TB
   end
   MEMBER -.->|"每个实例一个宿主执行（未被失败抑制、所引用来源都有声明版本时）"| HEXEC
   EPOCH["流 epoch（集成来源的每条逻辑流，不嵌在实例或会话里）：该流开 epoch 的 Gap{Source} 开始（握手时集成会话 append，或会话内集成上报）· 下一条开 epoch 的 Gap{Source} 结束（backfill_incomplete 是 epoch 内的记录，不结束也不开 epoch）；边界由集成确认，身份由核心分配；握手以游标续接时跨会话、跨实例延续"]
-  PEPOCH["流 epoch（程序产出的派生流上，不沿用旧状态的替换开出的 epoch；不嵌在实例或程序成员里）：替换 Applied 事务里的 Gap{Source, program_upgrade} 开始 · 下一次这样的 Gap{Source, program_upgrade} 结束；控制面确认"]
+  PEPOCH["流 epoch（程序产出的每条派生流；不嵌在实例或程序成员里）：开始不沿用旧状态之成员的 Applied 事务里的 Gap{Source} 开始（让 id 进入活动集合的 load_program：start；不沿用旧状态的替换：program_upgrade）· 同一 id 下一个这样的 Gap{Source} 结束；unload_program、沿用旧状态的替换与实例更替不结束它；控制面确认，身份由核心分配"]
   CALLR -.->|"问的是 · 结果按它准入（不是嵌套）：发出 epoch 是调用的属性（read 由 dispatch_end 记下，backfill 为任务所在 epoch，route 由 generation 指名）；read / backfill 的结果到达时它已结束，核心记 Unavailable；route 带旧 generation，集成答 Unavailable、供给不变"| EPOCH
   HALT["不嵌套的持久事实（控制流上）：IntegrationHalted 起的 Halted 抑制 / ProgramHalted 起的失败抑制（以位置引用它的 Applied 解除）、登记的采纳；以及订阅、单据"]
 ```
@@ -318,6 +320,7 @@ sequenceDiagram
   C->>H: Unload（活动集合不变）
   Note over C,I: 3 集成会话
   C->>DB: 在途写 NoResponse → Undetermined，在途读 Unavailable（各与计数同事务）
+  C->>C: 丢弃未了的 route 义务，不再重发
   C->>I: 关闭通道
   Note over C,I: 4 进程
   C->>H: 请求退出，超时强制终止
@@ -338,7 +341,7 @@ sequenceDiagram
 读法：
 
 - 每层都在外层之内开始、在外层之前结束；每个锚点都有确认者。持久事实（`Halted`、失败抑制、采纳、订阅、单据）不嵌在实例里，由记录的 fold 跨实例恢复；前三者都在控制流上，按这条流上的位置 fold。
-- 流 epoch 也不嵌在实例或会话里：集成来源的流，握手以游标续接时它跨会话、跨实例延续，只由下一条开 epoch 的 `Gap{Source}` 结束，`backfill_incomplete` 不结束它；程序产出的派生流上，由不沿用旧状态的替换开出的 epoch，以该替换 `Applied` 里的 `Gap{Source, program_upgrade}` 开始，以下一次这样的 gap 结束，沿用旧状态的替换不开新 epoch。读侧调用与写、取证调用一样只嵌在会话里，会话结束时强制完成。发出 epoch 是读侧调用的属性，不是外层：流 epoch 何时结束由集成决定，送出 `Gap{Source}` 时仍在通道上的调用只能在它之后结束，所以 CALLR 到 EPOCH 的虚线是“问的是、结果按它准入”，不是嵌套。集成在上报 `Gap{Source}` 之前以 `Unavailable` 作答它已收到的调用；`read`、`backfill` 的结果在发出 epoch 结束之后才到核心的，由核心完成为 `Unavailable`；带旧 `generation` 的 `route` 由集成答 `Unavailable`、供给不变，核心不另判。写与取证按作用域寻址，同样只嵌在会话里。
+- 流 epoch 也不嵌在实例或会话里：集成来源的流，握手以游标续接时它跨会话、跨实例延续，只由下一条开 epoch 的 `Gap{Source}` 结束，`backfill_incomplete` 不结束它；程序产出的派生流，由开始不沿用旧状态之成员的 `Applied` 开出（让 id 进入活动集合的 `load_program` 带 `start`，不沿用旧状态的替换带 `program_upgrade`），到同一 id 下一个这样的 `Applied` 为止，`unload_program`、沿用旧状态的替换与实例更替都不结束它。读侧调用与写、取证调用一样只嵌在会话里，会话结束时强制完成。`route` 义务也嵌在会话里：它跨过多次 `route` 调用（`Unavailable` 按 pacing 再发，gap 与需求变化并入），第一次 `Routed` 了结；会话结束时，在途调用完成之后、关闭通道之前丢弃，不带进下一个会话，下一个会话建立时按那时的需求重新起。发出 epoch 是读侧调用的属性，不是外层：流 epoch 何时结束由集成决定，送出 `Gap{Source}` 时仍在通道上的调用只能在它之后结束，所以 CALLR 到 EPOCH 的虚线是“问的是、结果按它准入”，不是嵌套。集成在上报 `Gap{Source}` 之前以 `Unavailable` 作答它已收到的调用；`read`、`backfill` 的结果在发出 epoch 结束之后才到核心的，由核心完成为 `Unavailable`；带旧 `generation` 的 `route` 由集成答 `Unavailable`、供给不变，核心不另判。写与取证按作用域寻址，同样只嵌在会话里。
 - 集成运行在 `Halted` 路径上的结束锚点是最后一个进程 OS 确认退出、清除进程表的行，不是 `IntegrationHalted`：后者先提交（§7.2 第 3 步“进入 `Halted`”），只开始 `Halted` 抑制，会话与进程在它之后才结束。`Connecting` 中换进程不结束运行。解除 `Halted` 的 `Applied` 只在上一次运行结束之后提交，所以同一集成的两次运行不重叠。
 - 程序成员跨实例，宿主执行是成员与实例的共同内层；受控停止结束宿主执行而不改变成员。`unload_program` 与替换先结束宿主执行（停调度、等在途输出事务、OS 确认退出），再 append 结束成员的 `Applied`，cursor 与保留引用随之结束或转给新成员（§8.6 卸载与替换）。
 - 受控停止不为集成另写会话健康观察：实例结束锚点就是本实例各集成运行的结束；下一实例第 3 步写新的初始状态。

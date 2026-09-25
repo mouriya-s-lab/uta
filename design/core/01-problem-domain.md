@@ -112,7 +112,7 @@
 
 **P3 gap / 控制的三类：**
 
-- **来源 gap**：某范围断代。它要么是新 epoch 首条记录，含前一范围与其最后 Seq；要么（`backfill_incomplete`）是当前 epoch 内标出回填未覆盖区间的记录，不结束也不开 epoch，不重置 readiness、路由与 `generation`（§4.2、§8.4）。原因 ∈ {start, disconnect, quota, ingress_overflow, credential_rotated, schema_change, backfill_incomplete, program_upgrade}。
+- **来源 gap**：某范围断代。它要么是新 epoch 首条记录，含前一范围与其最后 Seq（该流的第一个 epoch 无前驱）；要么（`backfill_incomplete`）是当前 epoch 内标出回填未覆盖区间的记录，不结束也不开 epoch，不重置 readiness、路由与 `generation`（§4.2、§8.4）。原因 ∈ {start, disconnect, quota, ingress_overflow, credential_rotated, schema_change, backfill_incomplete, program_upgrade}。
 - **投递 gap**：某订阅对某范围的损失，是订阅的状态，不是流上的记录（流本身不缺这些记录）。字段为所属订阅与项、流、from/to 位置、原因 ∈ {slow_consumer, compacted, conflated}；自跳过时起存在，订阅方确认不低于 to 的游标时结束。程序作为订阅消费者滞后被跳过的区间也是投递 gap。
 - **状态通知**：readiness 与回填进度的变化（等待实时 / 实时；补齐中 / 已闭合 / 已到达而衔接未证明 / 未能补齐）、订阅挂起 / 恢复（附挂起原因）。它不是损失，不需确认，由健康观察或订阅状态派生。
 

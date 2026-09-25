@@ -558,7 +558,7 @@
 
 **订阅需求下发**（§8.2 `route`、§8.5 配额）。已定（验收 §10.5 #47）。
 
-- 选中：核心→集成的 IDL 操作 `route(stream, subjects, generation)`：每条流的需求全集（各订阅主体之并，加上非配额池作用域订单状态与成交流的 `All`），每个会话建立后与每个会话内新开的流 epoch 上各起一项 `route` 义务（每条流至多一项，第一次 `Routed` 了结）、需求一变再发，全集替换；`Routed` 在流上 append 路由结论记录，记这次生效的全集（`All` 或主体集）与 `refused` 及原因，不记增减，相邻两条之差即增减；上游拒绝的主体逐主体标出；`route` 只嵌在集成会话里，以 `generation` 指名它问的流 epoch，跨过流 epoch 更替只由集成按 `generation` 判定（见下文“`route` 跨过流 epoch 更替的判定者”）；配额在核心按需求计量。
+- 选中：核心→集成的 IDL 操作 `route(stream, subjects, generation)`：每条流的需求全集（各订阅主体之并，加上非配额池作用域订单状态与成交流的 `All`），由每条流至多一项的 `route` 义务下发，全集替换；义务嵌在集成会话里：会话建立时为需求非空的流起，会话已建立期间接受会话内开 epoch 的 gap 或需求变化时起或并入，第一次 `Routed` 了结，会话结束时丢弃、不带进下一个会话，没有已建立的会话时需求变化只改需求；`Routed` 在流上 append 路由结论记录，记这次生效的全集（`All` 或主体集）与 `refused` 及原因，不记增减，相邻两条之差即增减；上游拒绝的主体逐主体标出；`route` 只嵌在集成会话里，以 `generation` 指名它问的流 epoch，跨过流 epoch 更替只由集成按 `generation` 判定（见下文“`route` 跨过流 epoch 更替的判定者”）；配额在核心按需求计量。
 - Q 场景后果：Q13：集成从不收到超限主体；Q14/Q29：重连后与每个新流 epoch 上需求原样恢复，每个主体在该流 epoch 里的记录从何处起开始可见；一条记录自己说出此刻确认的供给，序号覆盖的计入只读它；被动取证与成交完整性不依赖某个消费方恰好订阅。
 - 不选：集成对声明的流一律全量推送（公共行情做不到，配额无从执行）；按订阅逐个下发（重复要求，集成要引用计数）；增减式下发（丢一次即分叉，重连要先对账）；路由结论记录只记增减（计入覆盖要从上一 epoch 或上一会话的记录累加）；路由结论记录带发出 epoch、由各读者按它过滤（覆盖、记录起点、`refused`、增减的每个读者都要各做一次同一判断，而一条已结束 epoch 的供给结论不说明任何在新 epoch 里仍成立的事）。
 - 证据：P4；§8.1（操作按意图定粒度）；域 F7、C5。
@@ -646,8 +646,8 @@
 
 **`route` 跨过流 epoch 更替的判定者**（§8.2 `route`、§8.3 集成义务、§8.4 会话内开的新流 epoch）。已定（验收 §10.5 #47、#87）。
 
-- 选中：流 epoch 的边界归集成：上游连接是它的，`Gap{origin: Source}` 也由它上报。集成在会话内上报的每条 `Gap{origin: Source}` 带一个按流、按会话的 `generation`，由集成创建，会话开始为 0，每上报一条加一并带上新值。`route` 带核心在本会话为该流最后接受的 `generation`。所带值早于集成最近上报的调用，集成答 `Unavailable`，不改变供给；gap 之后，集成只在收到带新 `generation` 的 `route` 之后才推送。核心不另判：集成从不以 `Routed` 回答旧 `generation`，集成→核心按发送顺序处理，gap 之前送出的 `Routed` 都先于它到达。每条流至多一项未了的 `route` 义务：按 pacing 的重试与接受 gap 触发的重发是同一项，gap 只更新它的目标 `generation`，第一次 `Routed` 了结它。`read` 与 `backfill` 仍由核心按自己记下的发出 epoch 处置。
-- Q 场景后果：Q14/Q29：重连之后，一条 `Routed` 不会被记成新流 epoch 的供给确认，除非它回答的是新 epoch；新 epoch 的恢复供给重发与 pacing 重试共用一项义务，在该 epoch 第一次 `Routed` 时了结，不因同一条 gap 多发一次 `route`，之后的需求变化照常下发；序号覆盖只从新 epoch 自己的路由结论记录起计入。
+- 选中：流 epoch 的边界归集成：上游连接是它的，`Gap{origin: Source}` 也由它上报。集成在会话内上报的每条 `Gap{origin: Source}` 带一个按流、按会话的 `generation`，由集成创建，会话开始为 0，每上报一条加一并带上新值。`route` 带核心在本会话为该流最后接受的 `generation`。所带值早于集成最近上报的调用，集成答 `Unavailable`，不改变供给；gap 之后，集成只在收到带新 `generation` 的 `route` 之后才推送。核心不另判：集成从不以 `Routed` 回答旧 `generation`，集成→核心按发送顺序处理，gap 之前送出的 `Routed` 都先于它到达。每条流至多一项未了的 `route` 义务，嵌在集成会话里：按 pacing 的重试与接受 gap 触发的重发是同一项，gap 并入它而不另起，第一次 `Routed` 了结它，会话结束时丢弃（§8.2 `route`“谁调、何时调”）。`read` 与 `backfill` 仍由核心按自己记下的发出 epoch 处置。
+- Q 场景后果：Q14/Q29：重连之后，一条 `Routed` 不会被记成新流 epoch 的供给确认，除非它回答的是新 epoch；新 epoch 的恢复供给重发与 pacing 重试共用一项义务，在该 epoch 第一次 `Routed` 时了结，不因同一条 gap 多发一次 `route`，之后的需求变化照常下发；会话结束时未了的义务随会话丢弃，下一个会话按那时的需求重新下发，上一会话里的撤回或重试不带过去；序号覆盖只从新 epoch 自己的路由结论记录起计入。
 - 不选：核心按发出 epoch 过滤迟到的 `Routed`、把它完成为 `Unavailable`（这次路由是否属于当前 epoch，这一件事有核心与集成两个判定者；集成已答 `Routed` 而核心不认，供给就在两边分叉）；集成上报 gap 之后，等核心回一条确认再处理 `route`（多一种 IDL 消息和一段等待状态；它要表达的“核心已接受这条 gap”，调用所带的 `generation` 本来就说出了）。
 - 证据：§0.1“权威源头与生命周期”（机制即信号）；§7.2 生命周期表；§8.3 上报 gap 之前先完成已收到的调用。
 
@@ -922,9 +922,10 @@
     - 会话建立后，fixture 在收到某流的第一次 `route` 之前不推送该流；每条需求非空的流恰收到一次全集，其主体集等于各供给项主体之并（加上非配额池作用域的订单状态流与成交流的 `All`），挂起、被拒与只投递项都不在其中；
     - 同一主体被三个订阅选中、退订其中两个：`route` 全集不变；退订第三个：该主体从下一次全集中消失，fixture 停止推送它；
     - fixture 明确拒绝一个主体：该流上一条路由结论记录列出它与原因，选中它的订阅逐主体显示“来源拒绝”，该主体仍计入配额，本会话内核心不自动重发；
-    - `route` 返回 `Unavailable`：不 append 路由结论记录，按 pacing 重发，需求未变时是同一全集，直到 `Routed`；重连后每条需求非空的流再恰收到一次全集；
+    - `route` 返回 `Unavailable`：不 append 路由结论记录，按 pacing 重发，需求未变时是同一全集，直到 `Routed`；重连后每条需求非空的流再恰收到一次全集；上一会话未了的 `route` 义务不带进新会话：某流的撤回（空集的 `route`）到会话结束仍未 `Routed`，新会话建立时该流需求为空，fixture 在新会话里收不到该流的 `route`；没有已建立的会话期间需求变了的流，核心不为它发任何 `route`，下一个会话建立时按那时的需求判定（非空才恰收到一次全集）；
     - 某流的 `route` 在途时需求再变：fixture 在上一次返回之前收不到下一次；之后收到的是新的全集，旧全集不在它之后生效；
-    - 以 `from` 订阅较早位置的订阅者，从路由结论记录看出每个主体从哪里起有记录；每条路由结论记录带这次生效的全集；握手以游标续接原 epoch 时，新会话的路由结论记录不改变已有主体的记录起点；会话内集成上报 `Gap{origin: Source}` 开新流 epoch 后，核心为该流重发 `route`，所带 `generation` 等于这条 gap 所带的值，新 epoch 有自己的路由结论记录；每个会话里各流的第一次 `route` 所带 `generation` 为 0，不沿用上一会话的值；
+    - 以 `from` 订阅较早位置的订阅者，从路由结论记录看出每个主体从哪里起有记录；每条路由结论记录带这次生效的全集；握手以游标续接原 epoch 时，新会话的路由结论记录不改变已有主体的记录起点；会话内集成上报 `Gap{origin: Source}` 开新流 epoch 后，核心为该流重发 `route`，所带 `generation` 等于这条 gap 所带的值，新 epoch 有自己的路由结论记录；`generation` 在每个会话里从 0 起、不沿用上一会话的值：核心接受该流任何一条会话内上报的 `Gap{origin: Source}` 之前发出的 `route` 带 0，之后发出的带最后接受的值；
+    - gap 先于第一次 `route`：握手以游标续接原 epoch，fixture 集成在收到该流本会话的任何 `route` 之前暂存溢出、上报 `Gap{origin: Source}`（带 1）：核心接受它之后发出的该流 `route` 都带 1，核心此前尚未发出的本会话第一次 `route` 也带 1；核心在接受之前已发出的（带 0）由集成答 `Unavailable`、供给不变；fixture 集成只以 `Routed` 回答带 1 的，新 epoch 的推送在它之后；
     - 健康把 `route` 的结果计在该逻辑流上；
     - 集成一致性：只推送最近一次 `route` 给出且未拒绝的主体；续接原 epoch 时等待 `route` 期间的上游记录在 `route` 后补送、不丢，补不上则上报 `Gap{origin: Source}`；已路由主体的供给中断时（含上游推送通道重连）上报 `Gap{origin: Source}`，会话内的每条带 `generation`：每条流的 `generation` 在会话开始时为 0，每上报一条加一并带上新值，所以本会话第一条带 1；之后在收到带这个新 `generation` 的 `route` 之前不推送该流；带旧 `generation` 的 `route` 得 `Unavailable`，供给与推送都不变。
 48. **多流订阅与执行事实的新 lane**（§8.5 订阅组）：（对应 Q13/Q15/Q29）
@@ -1066,14 +1067,15 @@
     - 停止后启动新实例：第 1 步没有要回收的行，第 2 步没有无后继的 `SendBarrier`，活动集合与停止前相同，受控停止前处于 `Halted` 的集成仍 `Halted`；
     - 注入一个不响应退出请求且无法被终止的子进程：停止以失败报告，实例表没有结束锚点，fence 未释放；
     - 停止开始之后到达的消费方连接被拒绝，已有消费方会话被关闭。
-82. **程序的活动集合与失败抑制**（§8.6、§8.5 `load_program`/`unload_program`）：（对应 Q25）
+82. **程序的活动集合与失败抑制**（§8.6、§8.5 `load_program`/`unload_program`；§8.6 程序流的 epoch）：（对应 Q25）
     - 超预算与 trap：同一事务 `ProgramHalted` + `ProgramFailed`（`ProgramHalted` 在控制流上），之后宿主被终止；核心重启后该程序不被装载；一条以位置引用该 `ProgramHalted` 的 `load_program` `Applied` 之后重新装载，从最近 `Checkpoint` `Load`；不引用它的控制记录不解除；
     - 在 `ProgramHalted` 与 `ProgramFailed` 之间注入崩溃：重启后二者要么都在、要么都不在；
     - `load_program` 之后修改程序值文件再重启核心：不装载，同一事务 `ProgramHalted{ContentUnavailable}` + `ProgramFailed`；修改装载清单再重启：活动集合不变；
     - `unload_program` 之后该程序 `Checkpoint` 的 cursor 引用解除，`advance_retention` 不再被它阻止；受控停止、宿主崩溃与失败抑制不解除该引用；程序进入活动集合之后、第一个 `Checkpoint` 之前没有登记的引用；
     - 卸载与在途 `Advance`：宿主正在 `Advance` 时发出 `unload_program`：`Applied` 只在该 `Advance` 的输出事务提交（或确知不提交）且宿主 OS 确认退出之后出现；该输出事务里的 `EffectRequest` 照常分派并各得一条 `EffectResponse`；`Applied` 之后没有该程序的 `Advance` 提交、没有新的 `Checkpoint` 与新的引用登记；替换（对同一 id 再 `load_program`）同样如此；
-    - 替换是一条 `Applied`：其间任一位置的活动集合都含该程序；新程序接受旧 `state_version` 时，`Applied` 记下沿用的 `Checkpoint`，共有输入的 cursor 与保留引用不变，新程序从该 `Checkpoint` `Load`，只有它新加的输入从其声明的起点开始；`cold_start` 或不接受时，同一事务有 `ProgramReset{Operator | Replace}`、程序流新 epoch 的 `Gap{Source}` 与重建的 cursor，旧引用解除；在该事务提交之后、新宿主第一个 `Checkpoint` 之前注入崩溃：重启后不交回旧 `Checkpoint`、不再记第二条 `ProgramReset`；
-    - `unload_program` 之后再 `load_program` 同一 id：cursor 按声明的起点在新 `Applied` 同事务建立，`Load` 不携带旧 `Checkpoint`。
+    - 替换是一条 `Applied`：其间任一位置的活动集合都含该程序；新程序接受旧 `state_version` 时，`Applied` 记下沿用的 `Checkpoint`，共有输入的 cursor 与保留引用不变，新程序从该 `Checkpoint` `Load`，只有它新加的输入从其声明的起点开始，程序流上没有新的 `Gap{Source}`；`cold_start` 或不接受时，同一事务有 `ProgramReset{Operator | Replace}`、每条程序流新 epoch 的 `Gap{Source, program_upgrade}` 与重建的 cursor，旧引用解除；在该事务提交之后、新宿主第一个 `Checkpoint` 之前注入崩溃：重启后不交回旧 `Checkpoint`、不再记第二条 `ProgramReset`；
+    - `unload_program` 之后再 `load_program` 同一 id：cursor 按声明的起点在新 `Applied` 同事务建立，`Load` 不携带旧 `Checkpoint`；
+    - 程序流的 epoch：首次 `load_program` 与卸载之后再 `load_program` 同一 id，各在自己的 `Applied` 同一事务为每条程序流 append 一条 `Gap{Source, start}`，开出新 epoch，事务里没有 `ProgramReset`；在该 `Applied` 提交之前注入崩溃：重启后既没有这个成员，也没有这条 gap；`unload_program` 的 `Applied` 不在程序流上写记录，卸载与再装载之间程序流上没有记录，卸载之前的 epoch 由再装载的这条 gap 结束；核心重启（崩溃或受控停止之后第 5 步重新 `Load`）与失败抑制之后沿用旧状态的重新装载，都不在程序流上开新 epoch。
 83. **程序装载期校验读最近声明**（§2.2 声明的两种读法、§2.5 `required_inputs`、§8.6 装载期校验、§7.2 第 5 步）：（对应 Q23/Q25）
     - 来源已有声明版本而此刻没有会话（fixture 集成断开）：`load_program` 之后的装载期校验按该来源的最近声明比对 `required_inputs`；最近声明提供所引用的字段时程序照常装载并运行，不等会话；最近声明缺该字段时按装载期校验失败处理（§8.6），错误指出该字段；校验结果与该来源此刻有没有会话无关；
     - 所引用的来源在采纳集合里而从未有过声明版本（新登记、尚未握手成功）：`load_program` 的 `Applied` 之后程序在活动集合里，核心不为它拉起宿主，控制流上没有它的 `ProgramHalted`，观察侧也没有它的 `ProgramFailed`；核心在此期间重启，第 5 步同样不拉起它、不写 `ProgramHalted`；
