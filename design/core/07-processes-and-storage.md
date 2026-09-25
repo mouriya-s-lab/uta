@@ -108,14 +108,14 @@ flowchart TB
 | 程序订阅（程序的输入 cursor 与观察项） | 让程序 id 进入活动集合的 `Applied`（首次装载，或 `unload_program` 之后再装载）同一事务建立：按各输入声明的起点建立 cursor（`Tail` 为 `At`，`Origin` 为 `Start{from}`），每条观察输入按声明的用途成为一个观察项，按 §8.5 判定接纳（持久订阅元素，在控制面的 `Applied` 事务里，§8.6 程序的输入）。替换保留它：沿用旧状态时共有输入的 cursor 原样沿用，项只在主体集与用途也相同、且不是被拒的项时沿用，否则同一事务结束旧项、建立并接纳新项；执行事实流按流：新旧成员的 `facts` 都选中的流 cursor 原样沿用，只有新成员选中的按其 `FactDecl` 的起点建立（§8.6 cursor 的生命周期） | `unload_program` 的 `Applied`（持久订阅元素，同一事务）。其中的项与 cursor 另可在替换的 `Applied` 里结束：新程序不再声明的输入（项与 cursor 都结束）；只有旧成员的 `facts` 选中的执行事实流（cursor 结束）；主体集或用途变了的项，以及被拒的项（初次接纳被拒的项从不沿用，任何替换的 `Applied` 都结束它并在同一事务建立新项、重新判定接纳；它的 cursor 照沿用规则接着走，项的结束锚点与 cursor 的不同）；不沿用时同一事务按 `Reset` 重建全部项与 cursor | 程序 id 在活动集合里的时段：跨替换，不嵌在单个成员里 | 订阅表：项、cursor 与投递缺口（缺口随 cursor，不随项，§4.2）；cursor 只由 `Advance` 的提交推进，与 `Checkpoint` 同事务，`Start{from}` 在第一次提交时成为 `At`（前导的结束锚点，§4.2） |
 | 程序宿主执行 | 拉起并写进程表，`Load`（OS、宿主） | `Unload` 或终止之后 OS 确认退出、清除该行（OS）；继任实例回收 | 程序成员 ∩ 核心实例 | 进程表 |
 | `Checkpoint` 的保留引用 | 进入活动集合之后的第一个 `Checkpoint`，与 cursor 同一事务（核心） | 下一个 `Checkpoint` 取代它；`unload_program` 的 `Applied`，或不沿用旧状态的替换 `Applied` 解除；沿用的替换原样转给新成员（核心，§2.4）；宿主的 `Unload` 与失败抑制不解除它 | 程序成员 | 引用登记 |
-| 已安装的原生 op（每个 op 名） | `install_native_op` 的 `Applied`：以值记下 op 名、声明的签名、artifact 内容 hash 与 principal（控制面，§8.7 原生 op 的安装） | 以同名移除它的 `remove_native_op` 的 `Applied`（控制面）；活动集合里有成员的 `Applied` 所记的原生 op 名集合含它时移除被拒（`InUse`），所以它不先于引用它的成员结束 | 不嵌在实例里：跨实例持续；子系统在不在是实例的运行期事实，不是它的外层 | 控制记录（控制流） |
+| 已安装的原生 op（每个 op 名） | `install_native_op` 的 `Applied`：以值记下 op 名、声明的签名、`artifact` 引用（原生计算制品目录里的文件，§7.6）、安装时读到的内容 hash 与 principal（控制面，§8.7 原生 op 的安装） | 以同名移除它的 `remove_native_op` 的 `Applied`（控制面）；活动集合里有成员的 `Applied` 所记的原生 op 名集合含它时移除被拒（`InUse`），所以它不先于引用它的成员结束 | 不嵌在实例里：跨实例持续；子系统在不在是实例的运行期事实，不是它的外层；制品文件由 Alice 管理，每次拉起引用它的宿主之前由核心重读核对（§8.7 原生 op 的执行） | 控制记录（控制流） |
 
 表外还有几种不嵌在实例里、跨实例持续的对象，都是核心作为源头的持久事实，由记录的 fold 恢复：`Halted` 抑制（`IntegrationHalted` 起，以位置引用它的解除 `Applied` 止）、程序的失败抑制（`ProgramHalted` 起，以位置引用它的 `load_program` `Applied` 止，§8.6）、集成登记的采纳（下文第 3 步），这三者都在控制流上（§7.3）；以及消费方的订阅（归属 principal，止于 `unsubscribe`，§8.5；程序订阅见上表）、单据（止于 `Close`，§6.2）。
 
 启动顺序由这张表与存储归属（§7.4、§7.5）、写边界恢复（§6.7）推出。失败分两级 [设计]：
 
 - **核心级**：核心自身不能安全运行时整体拒绝启动，不进入部分运行态。只有四种：第 1 步取不到 fence（专用退出码，此时无权写 SQLite）；第 2 步格式版本校验或迁移失败（C14）；第 2 步从快照 + 记录重建失败（状态重建不出，核心就无法判定哪些写可能已经发出）；第 3 步读取统一路径配置失败（§7.6、C14）。后三种以专用退出码与诊断报告原因。
-- **单元级**：只涉及一个集成或一个程序的失败，只使该单元不可用，其余照常启动：集成处于 `Connecting` 或 `Halted`（第 3 步会话状态）；程序声明校验失败、被失败抑制，或所引用的集成来源还没有声明版本而等待（§8.6 装载期校验）。
+- **单元级**：只涉及一个集成或一个程序的失败，只使该单元不可用，其余照常启动：集成处于 `Connecting` 或 `Halted`（第 3 步会话状态）；程序声明校验失败、被失败抑制，或所引用的集成来源（含只被 `facts` 引用的来源）在采纳集合里而还没有声明版本、因而等待（§8.6 装载期校验）。
 
 理由：集成与程序宿主各是独立故障域（§7.1、§8.6）；一个 venue 不通就让全部账户与程序停摆，违背 Q15、Q18 的隔离。C14 管的是持久格式与迁移，不管集成是否可用。
 
@@ -223,7 +223,7 @@ flowchart TB
 ### 5. 恢复观察侧与消费面
 
 1. 为已建立会话的集成，持久订阅按订阅表与核心自己的需求（每个不在配额池里的作用域订单状态流与成交流恒为 `All`）合成各流需求，按会话建立时起的 `route` 义务下发（需求非空的流才有义务，§8.2 `route`“谁调、何时调”），并续回填；`Gap{origin: Source}` 标记断代（§4.2）。
-2. 装载程序的活动集合：控制流上 `load_program` / `unload_program` 的 `Applied` 的 fold，减去未解除失败抑制的程序（§8.6）；每个程序按它的 `Applied` 所钉的内容 hash 与预算，从本成员可交回的最近 `Checkpoint`（与 cursor 同事务持久化，§8.6 `Load`）交回状态；这个 `Checkpoint` 的 `state_version` 总在该 `Applied` 所记的接受集合内（§8.6 状态迁移），装载时不再比对。装载之前按 §8.6 装载期校验的“等待的先后”判定：有观察项初次接纳已被最终拒绝的，按声明校验失败处理，不读程序值文件；否则所引用的集成来源还没有声明版本的程序留在活动集合里等待，不拉起宿主，该来源第一次握手成功之后再判定；都不是的先从装载清单所指的文件读程序值、核对它与 `Applied` 所钉的内容 hash（不符即 `ProgramHalted{ContentUnavailable}`），再对这份核对过的值做声明校验，成立才拉起宿主，以同一份值 `Load`。
+2. 装载程序的活动集合：控制流上 `load_program` / `unload_program` 的 `Applied` 的 fold，减去未解除失败抑制的程序（§8.6）；每个程序按它的 `Applied` 所钉的内容 hash 与预算，从本成员可交回的最近 `Checkpoint`（与 cursor 同事务持久化，§8.6 `Load`）交回状态；这个 `Checkpoint` 的 `state_version` 总在该 `Applied` 所记的接受集合内（§8.6 状态迁移），装载时不再比对。装载之前按 §8.6 装载期校验的“等待的先后”判定：有观察项初次接纳已被最终拒绝的，按声明校验失败处理，不读程序值文件；否则所引用的集成来源（含只被 `facts` 引用的来源）在采纳集合里而还没有声明版本的程序留在活动集合里等待，不拉起宿主，该来源第一次握手成功之后再判定；都不是的先从装载清单所指的文件读程序值、核对它与 `Applied` 所钉的内容 hash（不符即 `ProgramHalted{ContentUnavailable}`），再对这份核对过的值做声明校验；成立之后再逐个读它引用的原生 op 的制品文件、核对各自安装 `Applied` 所记的内容 hash（不符即 `ProgramHalted{NativeArtifactUnavailable}`，§8.7 原生 op 的执行），都相符才把核对过的制品内容交给子系统、拉起宿主，以同一份程序值 `Load`。
 3. 最后开放下游会话（经解释层，§8.5）。
 
 第 4、5 步只建立恢复任务与路由，不等取证收敛、回填完成或全部程序装载成功；之后才建立会话的集成，在会话建立时做同样的恢复。
@@ -287,7 +287,7 @@ flowchart TB
 | 元素 | 拥有 | 隐藏的决定 | 假设 | 抽象 |
 |---|---|---|---|---|
 | 程序解释器（值树） | 两种解释的纯语义；在程序宿主进程里运行，只求值程序宿主元素已校验过的程序值，不做需要核心状态的校验 | — | 程序状态显式可序列化 | §2.5、§4.3、§6.1 |
-| 程序宿主元素（核心，不属任一侧） | 程序的活动集合（控制流上 `load_program` / `unload_program` 的 `Applied` 的 fold，含替换）与失败抑制（`ProgramHalted`）；已安装 op 集合（控制流上 `install_native_op` / `remove_native_op` 的 `Applied` 的 fold）与 `remove_native_op` 的 `InUse` 判定（读活动成员的 `Applied` 所记的原生 op 名集合，§8.5 控制组）；装载期校验的两段（§8.6）：结构校验在 `load_program` 读到程序值时、任何 `Applied` 之前（`Id` 越界/环、`outputs` 名字重复、所指节点不存在、是 `Pooled` 或类型要从 `payload_schema` 才能求出、`inputs` 名字重复、两项 `inputs` 的 `(source, stream)` 相同、来源是 `Program(_)` 或 `AwaitAll` 与等待窗口同给、`facts` 里两项来源相同而起点不同、`Field` 叶子、`Input(name)` 指名不存在的输入），不成立即控制记录 `Rejected`；声明校验在 `Applied` 之后、`Load` 之前，对已核对内容 hash 的程序值做（各输入声明及其上的字段访问器与所引用集成来源的最近声明比对、`await-all` 的覆盖证据、各观察项的初次接纳结果、`Pooled` 的前置条件、本实例有没有子系统、原生 op 引用所指名的 op 是否在已安装 op 集合里且所声明的签名相符），以及它与等待所引用来源声明版本的先后；历代开始成员的 `Applied` 所记的输出契约，以公共值（流名与值类型）交给订阅接纳（§8.5 订阅组）；卸载与替换的顺序（先结束宿主执行，再 append `Applied`）；程序宿主进程的拉起、登记与 OS 确认退出、trap、意图速率与状态大小预算的检查、`Load`/`Advance`/`Reset`/`Unload` 协议的编排；`Advance` 的投递事件向投递调度取（§8.6 `Advance`）；`Advance` 输出事务的编排：派生记录（写“值变了”的记录时读当前流 epoch 的最新一条值记录）、`EffectRequest`（由出站请求处理器 append，见下文“执行事实 append 链的唯一写入口”）、`Checkpoint`（写在它自己的表里）与该程序的 cursor 在同一事务提交，cursor 由持久订阅元素写在程序订阅上并删去被覆盖的投递缺口，提交之后把 `EffectRequest` 交给出站请求处理器分派；`ProgramHalted`、`ProgramReset` 与 `ProgramFailed` 的 append | 宿主进程的 OS 机制（rlimit / job object） | 预算靠宿主进程，不靠类型；程序值在声明校验之前从装载清单所指的文件读取，与 `Applied` 所钉的内容 hash 不符即 `ProgramHalted{ContentUnavailable}`、不做声明校验（`load_program` 生效时用结构校验在同一动作里读到的值），核对过的同一份值交给声明校验与 `Load`（§8.6）；只读已提交的控制记录，不向宿主进程取成员事实；声明向集成会话取，初次接纳结果向持久订阅取 | §6.1、§8.6 |
+| 程序宿主元素（核心，不属任一侧） | 程序的活动集合（控制流上 `load_program` / `unload_program` 的 `Applied` 的 fold，含替换）与失败抑制（`ProgramHalted`）；已安装 op 集合（控制流上 `install_native_op` / `remove_native_op` 的 `Applied` 的 fold）与 `remove_native_op` 的 `InUse` 判定（读活动成员的 `Applied` 所记的原生 op 名集合，§8.5 控制组）；装载期校验的两段（§8.6）：结构校验在 `load_program` 读到程序值时、任何 `Applied` 之前（`Id` 越界/环、`outputs` 名字重复、所指节点不存在、是 `Pooled` 或类型要从 `payload_schema` 才能求出、`inputs` 名字重复、两项 `inputs` 的 `(source, stream)` 相同、来源是 `Program(_)` 或 `AwaitAll` 与等待窗口同给、`facts` 里两项来源相同而起点不同、`Field` 叶子、`Input(name)` 指名不存在的输入），不成立即控制记录 `Rejected`；声明校验在 `Applied` 之后、`Load` 之前，对已核对内容 hash 的程序值做（各输入声明及其上的字段访问器与所引用集成来源的最近声明比对、`await-all` 的覆盖证据、各观察项的初次接纳结果、`Pooled` 的前置条件、本实例有没有子系统、原生 op 引用所指名的 op 是否在已安装 op 集合里且所声明的签名相符），以及它与等待所引用来源声明版本的先后；声明校验成立之后、拉起宿主之前，按各 op 的安装 `Applied` 所记引用读制品文件、核对内容 hash，把核对过的内容交给子系统（§8.7 原生 op 的执行）；历代开始成员的 `Applied` 所记的输出契约，以公共值（流名与值类型）交给订阅接纳（§8.5 订阅组）；卸载与替换的顺序（先结束宿主执行，再 append `Applied`）；程序宿主进程的拉起、登记与 OS 确认退出、trap、意图速率与状态大小预算的检查、`Load`/`Advance`/`Reset`/`Unload` 协议的编排；`Advance` 的投递事件向投递调度取（§8.6 `Advance`）；`Advance` 输出事务的编排：派生记录（写“值变了”的记录时读当前流 epoch 的最新一条值记录）、`EffectRequest`（由出站请求处理器 append，见下文“执行事实 append 链的唯一写入口”）、`Checkpoint`（写在它自己的表里）与该程序的 cursor 在同一事务提交，cursor 由持久订阅元素写在程序订阅上并删去被覆盖的投递缺口，提交之后把 `EffectRequest` 交给出站请求处理器分派；`ProgramHalted`、`ProgramReset` 与 `ProgramFailed` 的 append | 宿主进程的 OS 机制（rlimit / job object） | 预算靠宿主进程，不靠类型；程序值在声明校验之前从装载清单所指的文件读取，与 `Applied` 所钉的内容 hash 不符即 `ProgramHalted{ContentUnavailable}`、不做声明校验（`load_program` 生效时用结构校验在同一动作里读到的值），核对过的同一份值交给声明校验与 `Load`（§8.6）；原生 op 的制品同样由它自己读：每次拉起宿主之前重读、核对安装 `Applied` 所记的内容 hash，不符即 `ProgramHalted{NativeArtifactUnavailable}`，子系统不读制品文件（§8.7）；只读已提交的控制记录，不向宿主进程取成员事实；声明向集成会话取，初次接纳结果向持久订阅取 | §6.1、§8.6 |
 | 程序宿主进程（外部） | 受监督子进程，内含值树解释器：按宿主协议接受 `Load`/`Advance`/`Reset`/`Unload`、返回结果；CPU / 内存由 OS 进程限制 | — | 不接触 SQLite 与凭据（§7.4、§8.6）；只经宿主协议与程序宿主元素交换值 | §8.6 |
 | 出站请求处理器 | `EffectRequest`→读/写处理器分派；读处理器立即执行成观察，写处理器以装载 principal 开单 | 副作用具体种类 | 写处理器不绕效应路径 | §6.1 |
 
@@ -316,7 +316,7 @@ flowchart TB
 |---|---|---|---|---|
 | 存储（SQLite 单写者） | 单文件、表主键、事务原子性、append-only 的 Rust 接口保证、快照、格式版本；按位置交出已提交记录的字节（两侧通用，不解析），供投递调度搬运执行事实订阅 | SQL、索引、WAL 细节 | 核心独占；集成/宿主不接触 | §7.4（持久化落点：§4.1、§6.5） |
 | 集成会话 | 每个采纳的集成登记的会话状态机（§7.2 第 3 步）与登记的采纳记录；集成进程的拉起、终止与它们的进程表登记，拉起时创建通道、交付凭据副本、分配 `SessionEpoch`（§7.1）；握手、投影与契约版本的判定；核心→集成的调用通道：全部 IDL 操作经它发出，只读当前会话的通道，每个调用恰好完成一次；每个来源的声明的两种解释：**最近声明**与**会话有效声明**（见下文）；声明版本、`IntegrationHalted`、握手时新流 epoch 首条的 `Gap{origin: Source}`，以及会话状态与调用计数这些健康观察的内容（§8.4） | 传输与重连 pacing、进程监督与通道的 OS 机制 | 只按调用的封闭返回值分“失败 / 非失败”计数，不读 Attempt、单据或订阅记录；声明只由声明版本与 `CapabilityObserved` 求出，不读 Decision、Attempt 或 STS 的输出；发起方在自己的事务里提交它给出的计数观察 | §2.2、§7.1、§7.2、§8.2–§8.4 |
-| 行情派生计算子系统（外部，可选） | `Pooled` 段视图的物化与已安装原生 op 的运行；**属子系统，不属核心** | 全部实现：布局、IPC、段生命周期、作者面、怎样取得已安装的制品 | 核心零影响；哪些 op 已安装是核心控制流的 fold（§8.7 原生 op 的安装），不由子系统报告；本实例没有子系统时声明校验拒绝含 `Pooled` 或原生 op 的程序 | §4.5、§8.7（实现归 `hpc-derivation/design.md`） |
+| 行情派生计算子系统（外部，可选） | `Pooled` 段视图的物化与已安装原生 op 的运行：只运行核心在拉起宿主之前核对过、交给它的制品内容；**属子系统，不属核心** | 全部实现：布局、IPC、段生命周期、作者面、怎样接收与运行交给它的内容 | 核心零影响；哪些 op 已安装是核心控制流的 fold（§8.7 原生 op 的安装），不由子系统报告；它不读原生计算制品目录里的文件，执行的内容由核心按安装 `Applied` 所记的 hash 核对后交出（§8.7 原生 op 的执行）；本实例没有子系统时声明校验拒绝含 `Pooled` 或原生 op 的程序 | §4.5、§8.7（实现归 `hpc-derivation/design.md`） |
 | 解释层（核心之外，下游侧） | 对外概念、状态翻译表、一次性命令与双向长连接、续传令牌的编解码；由类型生成的参数与字段 | 核心概念、核心↔解释层契约、自身落点（CLI 或核心内部） | 不持有状态：订阅、确认进度、单据都在核心；授权全在核心 | §0.1、§8.5（设计归 `design/downstream/design.md`） |
 
 **集成会话** [设计]。它解释的是两个已有的核心代数：会话状态机（闭合 sum，§7.2 第 3 步）与 IDL 操作的封闭返回值（§8.2）；它不拥有新的记录代数，健康观察是观察侧记录的一个种类（§8.4），`IntegrationHalted`、登记的采纳记录与声明版本是执行事实。
@@ -346,7 +346,7 @@ flowchart TB
 | STS 规则链 | Decision/`Outcome`/`Rejection`；授权步否决时的安全事件 |
 | IO 壳 | `SendBarrier`/`VenueAccepted`/`VenueRejected`/`NotSent`/`Undetermined`/取证 `ResolutionEvidence`/`ReconciliationReopened{SessionRestored}`/`Expired`/`Abandoned`/`CapabilityObserved`/取证 `Gap{Channel}` |
 | 效应侧归因处理器 | `ResolutionEvidence{Attributed}`（§8.1） |
-| 控制面 | 控制记录：除 `bypass_lane` 之外都落控制流（见下）；解除 `Halted` 的 `Applied` 带被解除的 `IntegrationHalted` 位置，§7.2 第 3 步；`restart_integration` 的 `Applied` 带文件 hash 与 `instance_id`，§7.2 第 3 步；`load_program` 的 `Applied` 钉住内容 hash、预算与 `state_version`，以值记下执行事实输入、引用的原生 op 名集合与输出契约，并记下所沿用的 `Checkpoint`（位置或无），解除失败抑制时带被解除的 `ProgramHalted` 位置，§8.6；`install_native_op` 的 `Applied` 以值记下 op 名、声明的签名、artifact 内容 hash 与 principal，`remove_native_op` 的记下 op 名与 principal，§8.7。另有控制动作与 `abandon` 越权时的安全事件、`ReconciliationReopened{Manual}`（§8.5） |
+| 控制面 | 控制记录：除 `bypass_lane` 之外都落控制流（见下）；解除 `Halted` 的 `Applied` 带被解除的 `IntegrationHalted` 位置，§7.2 第 3 步；`restart_integration` 的 `Applied` 带文件 hash 与 `instance_id`，§7.2 第 3 步；`load_program` 的 `Applied` 钉住内容 hash、预算与 `state_version`，以值记下执行事实输入、引用的原生 op 名集合与输出契约，并记下所沿用的 `Checkpoint`（位置或无），解除失败抑制时带被解除的 `ProgramHalted` 位置，§8.6；`install_native_op` 的 `Applied` 以值记下 op 名、声明的签名、`artifact` 引用、内容 hash 与 principal，`remove_native_op` 的记下 op 名与 principal，§8.7。另有控制动作与 `abandon` 越权时的安全事件、`ReconciliationReopened{Manual}`（§8.5） |
 | 会话入口 | 未完成握手的连接发起请求时的安全事件（§8.5） |
 | 集成会话（§7.2 第 3 步） | 登记的采纳记录（控制流）、握手成功时的声明版本（§7.5）、`IntegrationHalted`（控制流，与 `Halted` 健康观察同事务） |
 | 出站请求处理器 | `EffectRequest`、`EffectResponse`（§6.1），都落该程序的请求流（按程序 id 的执行事实流） |
@@ -406,6 +406,7 @@ flowchart TB
   HCORE -.读已提交的 load_program / unload_program / install_native_op / remove_native_op Applied 与 ProgramHalted（活动集合、失败抑制、各成员输出契约与已安装 op 集合的 fold）.-> STORE
   HCORE -.append 派生记录 · ProgramReset / ProgramFailed · 读当前流 epoch 的最新一条值记录.-> OJ
   HCORE -.append ProgramHalted · 把 Checkpoint 写在它自己的表里.-> STORE
+  HCORE -->|"拉起宿主之前：按安装 Applied 所记引用读制品、核对 hash 后交出的原生 op 内容（子系统不读制品文件）"| HPC
   SESS -->|"编排握手事务与会话内上报 gap 的事务：请它 append None{epoch} · 待接纳项转为接纳或被拒"| SUB
   DELIV -->|"跳过一段之前请它写下 Gap{Delivery}"| SUB
   CTL -->|"restart_integration / rotate_credential"| SESS
@@ -446,7 +447,7 @@ flowchart TB
 - **持久订阅↔投递调度**：持久订阅把订阅、cursor 与未确认的缺口交给投递调度去投递；投递调度要跳过一段时，请持久订阅先写下 `Gap{origin: Delivery}`（§4.2）。
 - **持久订阅↔集成会话**：持久订阅经集成会话发 `route` 与 `backfill`、取声明；集成会话编排握手事务与会话内上报 gap 的事务，请持久订阅在其中 append 新流 epoch 的 `None{epoch}`，并把待接纳的项按新声明转为接纳或被拒（§7.2 第 3 步、§8.4）。
 
-这些方向经过的都只是公共值（流名、值类型、接纳结果、位置、声明），不引入任何一侧的类型。程序宿主进程是外部进程，只经宿主协议与程序宿主元素交换值，不接触存储。观察侧任何元素都不依赖效应侧类型：观察侧元素经不属任一侧的元素得到的只是公共值，crate 依赖方向即此，观察侧代码引用效应侧类型不编译（§3.2）。
+这些方向经过的都只是公共值（流名、值类型、接纳结果、位置、声明），不引入任何一侧的类型。程序宿主进程是外部进程，只经宿主协议与程序宿主元素交换值，不接触存储。行情派生计算子系统也是外部进程：它运行的原生 op 内容只由程序宿主元素在拉起宿主之前核对后交出，它不读原生计算制品目录，也不接触存储（§8.7 原生 op 的执行）。观察侧任何元素都不依赖效应侧类型：观察侧元素经不属任一侧的元素得到的只是公共值，crate 依赖方向即此，观察侧代码引用效应侧类型不编译（§3.2）。
 
 ## 7.4 存储引擎
 
@@ -531,7 +532,7 @@ flowchart TB
   - 订阅需求来自消费方的 RPC 与程序订阅的观察项（开始成员的 `Applied` 同一事务按声明的用途建立、沿用或重建，§8.6 程序的输入）；cursor 推进来自消费方的 `ack`（确认 = 已处理，§4.2；`Start{from}` 由第一次覆盖整段前导的确认转为 `At`），程序订阅的 cursor 推进来自提交的 `Advance`：本元素在程序宿主元素编排的 `Advance` 事务里写下新 cursor（第一次提交即转为 `At`，§8.6 `Advance`）；投递缺口来自投递调度的请求：投递调度要跳过一段时先请持久订阅写下这一项，写下之后才跳过。
   - 三类写在该元素内串行化，同一订阅的需求变更、cursor 推进与投递缺口不交叠。确认一个不低于缺口 `to` 的 cursor 时（消费方的 `ack`，或程序订阅所在的 `Advance` 事务），该缺口在同一次写里删除。缺口随（订阅，流）的 cursor 存亡，不随项：cursor 沿用时它沿用（含该流的项被重建或重新接纳失败），只在 cursor 确认它、该流离开订阅、`Reset` 重建该流的 cursor，或 `rewind_cursor` 把 cursor 退到低于它的 `from` 时删除（§4.2）。
 - **读**：集成路由、投递（投递调度在每次投递与重新挂接时读未确认的缺口并先交出）、重连恢复、程序宿主元素（程序订阅各观察项的初次接纳结果，§8.6 装载期校验）、读模型 `subscriptions`（当前态，只列消费方的订阅，§8.5）。
-- **传播**：cursor 前进；消费方订阅的退回只经控制面 `rewind_cursor`（退回的 cursor 是 `At{to}`），程序订阅的 cursor 只在不沿用旧状态的替换里按声明的起点重建（§8.6 `Reset`；`Origin` 的重建为 `Start{from}`）；投递损失只存为订阅上的缺口，不写进任何流。
+- **传播**：cursor 前进；消费方订阅的退回只经控制面 `rewind_cursor`（只把 `At{pos}` 退到低于 `pos` 的 `At{to}`，cursor 仍是 `Start{from}` 时被拒，§8.5 控制组），程序订阅的 cursor 只在不沿用旧状态的替换里按声明的起点重建（§8.6 `Reset`；`Origin` 的重建为 `Start{from}`）；投递损失只存为订阅上的缺口，不写进任何流。
 
 ### 能力证据
 
@@ -584,7 +585,7 @@ flowchart TB
 ## 7.6 配置与凭据
 
 - **统一路径**：所有核心与 Alice 共享的配置，以文件形式持久化在 `OPENALICE_HOME` 下的统一路径。两个进程均从文件读取，不经进程间注入、环境变量或启动参数传递（集成进程得到凭据的方式另见下文“凭据链”）。
-- **每个文件的写者是 Alice**：核心只读，不写统一路径下的任何文件。核心只在这些时刻读一个文件：启动（§7.2 第 3 步）、读取该文件的控制动作生效时（下表“重载”列）、拉起集成进程时读该集成的凭据（§7.1 凭据链），以及装载程序时按清单读程序值文件、核对 `Applied` 所钉的内容 hash（启动第 5 步、等待中的成员重新判定时，§8.6 按钉住的内容装载）；文件变了而没有这些时刻，核心不重读。控制动作读到的文件以控制记录带它的内容 hash 记下（§8.5 控制组），启动时读到的集成登记由采纳记录记下（§7.2 第 3 步）。
+- **每个文件的写者是 Alice**：核心只读，不写统一路径下的任何文件。核心只在这些时刻读一个文件：启动（§7.2 第 3 步）、读取该文件的控制动作生效时（下表“重载”列）、拉起集成进程时读该集成的凭据（§7.1 凭据链），以及装载程序时按清单读程序值文件、核对 `Applied` 所钉的内容 hash（启动第 5 步、等待中的成员重新判定时，§8.6 按钉住的内容装载），拉起引用原生 op 的宿主之前按安装 `Applied` 所记的引用读原生计算制品、核对所记的内容 hash（§8.7 原生 op 的执行）；文件变了而没有这些时刻，核心不重读。控制动作读到的文件以控制记录带它的内容 hash 记下（§8.5 控制组），启动时读到的集成登记由采纳记录记下（§7.2 第 3 步）。
 - **格式版本只前进**：文件附带格式版本，升级只前进（C14）；迁移失败拒绝启动而非部分迁移。
 - **schema 发布**：每个文件带格式版本；schema 的文本形式（JSON schema）随 IDL 一起作为 release 产物发布，是实现阶段工件。
 - **凭据链**：`统一路径封存文件 → UTA 核心 → 该集成进程`，拉起时经继承句柄交付，副本随进程结束（§7.1）；程序与消费方只见账户身份（C7）。
@@ -603,6 +604,7 @@ flowchart TB
 | 集成登记 | Alice | 每个集成的 id、二进制路径、启动参数、负责的账户集、契约版本；id 的稳定是写者的义务（§7.2 第 3 步） | 启动时整份采纳；`restart_integration(id)` 重读该 id 的条目，id 不在文件里则 `Rejected` |
 | 策略/审批规则 | Alice | 见表下 | `reload_config(rules)`；版本 = 内容 hash |
 | 程序装载清单 | Alice | 程序值文件引用、预算、接受的 `state_version` | `load_program`（`Applied` 钉住程序值的内容 hash、预算与 `state_version`，§8.6） |
+| 原生计算制品目录 | Alice | 原生 op 的制品文件，每个文件声明 op 名与签名；`install_native_op(artifact)` 的 `artifact` 是其中一个文件的引用 | `install_native_op`（`Applied` 记下引用与读到的内容 hash，§8.5 控制组）；每次拉起引用该 op 的宿主之前按这条 `Applied` 重读、核对 hash，不符即 `ProgramHalted{NativeArtifactUnavailable}`（§8.7 原生 op 的执行） |
 | 运行期参数 | Alice | 快照频率、派生侧留存窗口、`deadline` 全局缺省（仅在策略规则未按 scope 给出时生效）、投递缓冲上限、回填深度（全局缺省与按逻辑流的取值，§8.4） | `reload_config(runtime)` |
 
 **`rotate_credential` 的重载效果**：结束目标集成的会话、终止它的进程，OS 确认退出之后以重读的封存文件拉起新进程（新 `session_seq`，进入 `Connecting`，§7.2 第 3 步）；新会话握手时强制该集成各流开新 epoch（`Gap{origin: Source, reason: credential_rotated}`），不续接。凭据的旧副本随旧进程的退出结束，新副本只在新进程里（§7.1 凭据链）。它也解除 `Halted{Refused}`，其 `Applied` 带被解除的 `IntegrationHalted` 位置；对因投影不合法或契约版本不兼容而 `Halted` 的集成被拒，那只经 `restart_integration` 解除（§7.2 第 3 步）。
