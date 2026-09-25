@@ -74,17 +74,17 @@ sequenceDiagram
   N->>DB: 快照 + 记录 fold_state：lane 上各尝试、单据、订阅表、程序活动集合
   N->>DB: 每个尝试先 fold 等待是否已结束；SendBarrier 无后继 → append Undetermined(CrashWindow)
   Note over N,I: 第 3 步 采纳集成登记，建立会话（读统一路径配置失败即拒绝启动；各集成独立推进）
-  N->>DB: append 登记的采纳记录（文件内容 hash、集成 id；发起方为本实例）
-  N->>DB: 从执行事实 fold 各集成的 Halted：最近的 IntegrationHalted 未被某条 Applied 以位置引用解除者保持 Halted，不拉起；其余 append Connecting 健康观察（本实例运行的开始锚点）
+  N->>DB: append 登记的采纳记录（控制流；文件内容 hash、集成 id；发起方为本实例 instance_id）
+  N->>DB: 从控制流 fold 各集成的 Halted：最近的 IntegrationHalted 未被某条 Applied 以位置引用解除者保持 Halted，不拉起；其余 append Connecting 健康观察（本实例运行的开始锚点）
   N->>I: 读封存文件，拉起进程：创建通道并经句柄继承交出，凭据经继承句柄交付；写进程表 (instance_id, pid, start_time, role)；分配 session_seq
   N->>I: 在这条通道上 handshake()
   alt 合法 Projection
     I-->>N: Projection（scopes / streams / capabilities）
-    N->>DB: 同事务：声明版本 + Established{epoch} 健康观察；开新 epoch 的流由集成会话 append Gap{Source}（与持久订阅的 None{epoch} 同事务）；required_inputs 比对；既有订阅按新声明重算路由
+    N->>DB: 同事务：声明版本 + Established{epoch} 健康观察；开新 epoch 的流由集成会话 append Gap{Source}（与持久订阅的 None{epoch} 同事务）；required_inputs 比对（等待该来源首个声明版本的程序随之做装载期校验，D4.2）；既有订阅按新声明重算路由
   else 投影不合法 / 契约版本不兼容 / Refused(reason)
-    N->>DB: Halted{cause}：同一事务 append IntegrationHalted（P14）与健康观察
+    N->>DB: Halted{cause}：同一事务 append IntegrationHalted（P14，控制流；开始 Halted 抑制）与健康观察
     N->>I: 提交之后：结束会话、关闭通道、请求进程退出（超时强制终止）
-    I-->>N: OS 确认退出 → 清除进程表的行；不自动重试（等 restart_integration；Refused 另可 rotate_credential）
+    I-->>N: OS 确认退出 → 清除进程表的行：本次集成运行到此结束；不自动重试（等 restart_integration；Refused 另可 rotate_credential）
   else Unavailable
     N->>I: 保持 Connecting，按 pacing 在同一通道上重握手；本步不等它
   else 通道断开 / 进程退出
@@ -99,7 +99,7 @@ sequenceDiagram
   N->>N: STS 链按记录重新评估待决单据（RuleState 由记录 fold 出）；按 deadline 重装过期计时器
   Note over N,H: 第 5 步 恢复观察侧与消费面
   N->>I: 为已建立会话的集成，持久订阅按订阅表与核心自己的需求（非配额池作用域的订单状态流与成交流恒为 All）合成全集经 route 下发，按需 backfill（不等回填完成）
-  N->>H: 活动集合中未被失败抑制的程序：读程序值并核对 Applied 所钉的内容 hash，拉起宿主并登记；比对 checkpoint 的 state_version → Load(program, checkpoint?, budget)
+  N->>H: 活动集合（控制流的 fold）中未被失败抑制、所引用来源都已有声明版本的程序：读程序值并核对 Applied 所钉的内容 hash，拉起宿主并登记；交回本成员可交回的最近 checkpoint（Applied 沿用的或之后持久化的）→ Load(program, checkpoint?, budget)；来源尚无声明版本的程序留在活动集合里等待，不拉起、不 ProgramHalted
   H-->>N: Loaded 或 LoadRejected（→ ProgramHalted；版本不被接受不是 LoadRejected：不携带 checkpoint 装载并 Reset，D4.2）
   N->>A: 开放下游会话；此前 health() 返回 Starting
 ```
@@ -108,7 +108,7 @@ sequenceDiagram
 
 - 第 2 步的结论只来自记录：`Undetermined(CrashWindow)` 在没有任何集成在线时就已 append；随后第 4 步才去问 venue。上一实例受控停止时，第 1 步没有要回收的行，第 2 步没有无后继的 `SendBarrier`。
 - 第 4 步先取证后发送：等待已结束的尝试先移出阻塞头集合，再放未发出的 `Prepared`；发送与取证都依赖该集成已建立的会话，尚无会话的集成其尝试在发出前门等会话建立（或 `deadline` 到期）。
-- 失败分两级：取不到 fence、格式版本 / 迁移 / 重建失败、统一路径配置读不出，整体拒绝启动，不进入部分运行态；单个集成 `Connecting` 或 `Halted`、单个程序装载失败或被失败抑制，只使该单元不可用，其余照常启动。`Halted` 与程序的失败抑制跨核心重启保持：它们来自执行事实 `IntegrationHalted`、`ProgramHalted`，不来自可压缩的观察记录。消费方在第 5 步之前只看到 `Starting`。
+- 失败分两级：取不到 fence、格式版本 / 迁移 / 重建失败、统一路径配置读不出，整体拒绝启动，不进入部分运行态；单个集成 `Connecting` 或 `Halted`、单个程序装载失败、被失败抑制或等待来源的首个声明版本，只使该单元不可用，其余照常启动。`Halted` 与程序的失败抑制跨核心重启保持：它们来自控制流上的执行事实 `IntegrationHalted`、`ProgramHalted`，不来自可压缩的观察记录。消费方在第 5 步之前只看到 `Starting`。
 - 旧实例的 readiness 不另写：第 3 步的 `Connecting` 记录之后，readiness 由 fold 派生为 `Disconnected`，直到新会话 `Established`（§8.4）。
 
 核出：第 4 步原文只写了取证与发送，没写 `EffectRequest` 重派与待决单据的计时器重装——已并入 §7.2 第 4 步。
@@ -123,11 +123,11 @@ stateDiagram-v2
   state "Established(SessionEpoch)：只读本会话的通道" as EST
   state "Halted{ProjectionInvalid | ContractIncompatible}" as REJ
   state "Halted{Refused(reason)}" as REF
-  [*] --> HS : 采纳的登记 / 核心启动（执行事实中没有未解除的 IntegrationHalted）；append Connecting 健康观察（运行的开始锚点）
+  [*] --> HS : 采纳的登记：核心启动（控制流上没有未解除的 IntegrationHalted），或 restart_integration 采纳本实例尚未运行的 id（与其 Applied 同事务）；append Connecting 健康观察（运行的开始锚点）
   [*] --> REJ : 核心启动（最近的 IntegrationHalted 未解除，不拉起）
   [*] --> REF : 核心启动（最近的 IntegrationHalted 未解除，不拉起）
   HS --> EST : handshake 返回合法 Projection（同事务 append 声明版本与 Established 健康观察）
-  HS --> REJ : 投影不合法（含表外写操作 / 键角色 / 目标种类）/ 契约版本不兼容（同事务 append IntegrationHalted 与健康观察，不降级；提交后结束会话、终止进程，OS 确认退出）
+  HS --> REJ : 投影不合法（含表外写操作 / 键角色 / 目标种类）/ 契约版本不兼容（同事务 append IntegrationHalted 与健康观察，不降级；提交后结束会话、终止进程，OS 确认退出、清除行时本次运行结束）
   HS --> REF : handshake 返回 Refused（上游明确拒绝身份或配置；同上）
   HS --> HS : handshake 返回 Unavailable → 按 pacing 在同一通道上重握手
   HS --> HS : 通道断开 / 进程退出 → 结束该会话；OS 确认退出后拉起新进程、新通道（session_seq += 1）
@@ -135,7 +135,7 @@ stateDiagram-v2
   EST --> HS : 通道断开 / 集成进程退出（含集成因上游吊销身份而关闭通道退出）；在途调用恰好完成一次（写 NoResponse、读 Unavailable），然后关闭通道
   EST --> HS : rotate_credential / restart_integration（同上）
   EST --> EST : 从本会话通道读入的推送 → 盖上 SessionEpoch、分配 LogPosition
-  REF --> HS : rotate_credential / restart_integration（运维 principal；Applied 以位置引用该 IntegrationHalted，与 Connecting 健康观察同事务；提交且旧进程 OS 确认退出后才拉起）
+  REF --> HS : rotate_credential / restart_integration（运维 principal；上一次运行结束（旧进程 OS 确认退出、行已清除）之后才提交 Applied，它以位置引用该 IntegrationHalted、与 Connecting 健康观察同事务，开始新一次运行；提交后才拉起）
   REJ --> HS : restart_integration（同上）
   REJ --> REJ : rotate_credential → 控制记录 Rejected
   note right of EST
@@ -177,7 +177,7 @@ flowchart LR
     STS["STS 规则链（含授权步否决时的安全事件）"]
     IOE["IO 壳：SendBarrier（写操作 · 键 · 键角色）/ VenueAccepted / VenueRejected / NotSent / Undetermined / Expired / Abandoned /<br/>ResolutionEvidence / ReconciliationReopened{SessionRestored} / CapabilityObserved / 取证 Gap{Channel}"]
     ATTR["效应侧归因处理器：ResolutionEvidence{Attributed}"]
-    CTL["控制面：控制记录（含 bypass_lane；解除 Halted 的 Applied 引用 IntegrationHalted；load_program 的 Applied 钉内容 hash，解除失败抑制时引用 ProgramHalted）· 越权安全事件 · ReconciliationReopened{Manual}"]
+    CTL["控制面：控制记录（bypass_lane 随其 lane 流，其余都在控制流；解除 Halted 的 Applied 引用 IntegrationHalted；restart_integration 的 Applied 带文件 hash 与 instance_id；load_program 的 Applied 钉内容 hash、记下沿用的 Checkpoint，解除失败抑制时引用 ProgramHalted）· 越权安全事件 · ReconciliationReopened{Manual}"]
     SESS["会话入口：未完成握手请求的安全事件"]
     OUT["出站请求处理器：EffectRequest · EffectResponse"]
     SUBEL["持久订阅元素"]
@@ -188,7 +188,7 @@ flowchart LR
   end
   subgraph T["SQLite 表"]
     OJ[("观察 Journal<br/>RetractableDelta，可压缩")]
-    EJ[("执行事实 Journal<br/>纯 append")]
+    EJ[("执行事实 Journal<br/>纯 append；lane 流 · 声明流 · 请求流 · 控制流")]
     SUB[("订阅表 / cursor")]
     CAP[("能力证据")]
     CK[("Checkpoint + 程序 cursor")]
@@ -211,29 +211,30 @@ flowchart LR
   SUBEL -->|"需求 · cursor · 逐项状态 · 投递缺口 Gap{Delivery}"| SUB
   SUBEL -->|"回填的结果项与读结论记录 · 回填进度健康观察 · 覆盖检查点 · 路由结论记录"| OJ
   ISESS --> CAP
-  ISESS -->|"登记的采纳记录 · 声明版本 · IntegrationHalted"| EJ
+  ISESS -->|"登记的采纳记录 · IntegrationHalted（控制流）· 声明版本"| EJ
   ISESS -->|"集成进程的行"| PT
   ISESS -->|"会话健康观察 · 调用计数（计数由发起方同事务提交）· 握手时新流 epoch 的 Gap{Source}（与持久订阅的 None{epoch} 同事务）"| OJ
   HOSTP -->|"程序宿主进程的行"| PT
   IOE --> CAP
   HOSTP --> CK
   HOSTP -->|"程序观察 ProgramReset / ProgramFailed"| OJ
-  HOSTP -->|"ProgramHalted（与 ProgramFailed 同事务）"| EJ
+  HOSTP -->|"ProgramHalted（控制流，与 ProgramFailed 同事务）"| EJ
   FENCE -->|"新实例一行、instance_id += 1（与 fence 同事务）；受控停止的结束锚点"| IID
   RET --> RB
   TK -.->|"Prepared 同事务自动登记 basis"| RB
   IOE -.->|"ResolutionEvidence 自动登记引用"| RB
   ATTR -.->|"ResolutionEvidence 自动登记引用"| RB
-  CTL -.->|"unload_program 的 Applied 解除程序 cursor 引用"| RB
-  HOSTP -.->|"Checkpoint 自动登记 cursor"| RB
+  CTL -.->|"unload_program 与不沿用旧状态的替换的 Applied 解除程序 cursor 引用（在宿主 OS 确认退出之后 append）"| RB
+  CTL -->|"load_program 的 Applied 同事务定下程序 cursor（替换沿用时原样沿用）"| CK
+  HOSTP -.->|"进入活动集合后每个 Checkpoint 自动登记 cursor"| RB
 ```
 
 读法：
 
-- 观察 J 有七类写者（含一次性读元素的读结果、集成会话的会话健康观察与握手时的新 epoch `Gap{Source}`、持久订阅的回填结果、回填进度与路由结论、宿主协议的程序观察），执行 J 有九类（含会话入口的安全事件、集成会话的采纳记录、声明版本与 `IntegrationHalted`、程序宿主元素的 `ProgramHalted`）；两侧共享存储原语但类型宇宙不共享（§4.1）。
+- 观察 J 有七类写者（含一次性读元素的读结果、集成会话的会话健康观察与握手时的新 epoch `Gap{Source}`、持久订阅的回填结果、回填进度与路由结论、宿主协议的程序观察），执行 J 有九类（含会话入口的安全事件、集成会话的采纳记录、声明版本与 `IntegrationHalted`、程序宿主元素的 `ProgramHalted`）；两侧共享存储原语但类型宇宙不共享（§4.1）。采纳记录、`IntegrationHalted`、`ProgramHalted` 与除 `bypass_lane` 外的控制记录都在一条控制流上（§7.3），采纳集合、`Halted`、活动集合与失败抑制都只按这条流上的位置 fold。
 - 进程表有两个写者，按 `role` 分行：集成会话写集成进程的行，程序宿主元素写宿主进程的行（§7.5）。
 - 读模型不写任何表：它是按种类对执行 J、观察 J 的只读 fold（`subscriptions` 读订阅表当前态，§8.5），供 `read_model` 读取。
-- 引用登记不是独立写者动作：随 `Prepared`/`Checkpoint`/`ResolutionEvidence` 的 append 自动写入，随尝试等待结束（结果确立、`Expired`、`Abandoned`）、下一 checkpoint 或 `unload_program` 自动解除（D8.1）。
+- 引用登记不是独立写者动作：随 `Prepared`/`Checkpoint`/`ResolutionEvidence` 的 append 自动写入，随尝试等待结束（结果确立、`Expired`、`Abandoned`）、下一 checkpoint、`unload_program` 或不沿用旧状态的替换自动解除（D8.1）。
 - 核心不写统一路径下的任何文件（§7.6）。
 
 核出：无。
@@ -259,7 +260,10 @@ flowchart LR
 | 调用结果的记录（回执、取证、读结论、`Gap{Channel}`、`Undetermined`）+ 该调用的计数健康观察 | §7.3、§8.4 | 二者皆无：调用结果未落，计数不前进；不存在“计了数却无结果”的持久态 |
 | 握手成功：声明版本 + `Established` 健康观察 + 开新 epoch 的流的 `Gap{Source}` 与各自的 `None{epoch}` 回填进度 | §7.2 第 3 步、§8.2 `handshake`、§8.4 | 二者皆无：会话未建立，重启后在新进程的新通道上再握手 |
 | `IntegrationHalted` + `Halted` 健康观察（进程的终止在提交之后，另由 OS 确认） | §7.2 第 3 步 | 二者皆无：仍在上一状态，重启按执行事实重判；已提交而进程未确认退出：继任实例第 1 步回收 |
-| 解除 `Halted` 的控制记录 `Applied`（引用 `IntegrationHalted`）+ `Connecting` 健康观察 | §7.2 第 3 步 | 二者皆无：仍 `Halted`，没有握手发生 |
+| 解除 `Halted` 的控制记录 `Applied`（引用 `IntegrationHalted`）+ `Connecting` 健康观察；只在上一次集成运行结束（进程 OS 确认退出、行已清除）之后提交 | §7.2 第 3 步 | 二者皆无：仍 `Halted`，没有握手发生 |
+| `restart_integration` 采纳本实例尚未运行的 id：`Applied`（带文件 hash 与 `instance_id`）+ `Connecting` 健康观察 | §7.2 第 3 步、§8.5 | 二者皆无：该 id 不在采纳集合里，没有运行、没有进程 |
+| `load_program` 的 `Applied`（钉内容 hash、记下沿用的 `Checkpoint`）+ 程序全部输入的 cursor；替换不沿用旧状态时另加 `ProgramReset`、程序流新 epoch 的 `Gap{Source}`、旧保留引用的解除 | §8.5、§8.6 卸载与替换 | 二者皆无：旧成员照旧（替换时旧宿主已结束，重启照常装载旧成员）；已提交：按 `Applied` 所记沿用或不携带装载，不重复 `Reset` |
+| `unload_program` 的 `Applied` + 程序 cursor 的结束 + 保留引用的解除（宿主已 OS 确认退出之后） | §8.6 卸载与替换 | 二者皆无：程序仍在活动集合里，重启照常装载 |
 | `ProgramHalted` + `ProgramFailed` 观察（宿主的终止在提交之后） | §8.6 | 二者皆无：重启时程序仍在活动集合里且未被抑制，按 `Checkpoint` 重新装载；超预算或 trap 若再发生，再记一次 |
 
 读法：`SendBarrier` 不在任何集合里——它单独 durable append（fsync）后才允许该尝试的写调用，这正是把崩溃窗口二分的屏障（D6.1）。
@@ -274,7 +278,7 @@ flowchart LR
 flowchart TB
   subgraph INST["核心实例：fence 事务开始（OS、SQLite）· 结束锚点或继任者的 fence 结束"]
     CS["消费方会话：handshake 开始（OS 对端凭据）· 传输关闭结束"]
-    subgraph RUN["集成运行（每个采纳的登记）：Connecting 健康观察或解除 Applied 开始 · IntegrationHalted 或实例结束"]
+    subgraph RUN["集成运行（每个采纳的登记）：让它进入初始状态的 Connecting 健康观察（第 3 步，或 restart_integration 采纳新 id）或解除 Applied（上一次运行结束之后才提交）开始 · Halted 路径：IntegrationHalted 之后会话结束、最后一个进程 OS 确认退出清除行时结束（OS，或继任者第 1 步）；或实例结束。Connecting 中换进程不结束运行"]
       subgraph PROC["集成进程：拉起 + 进程表行开始（OS）· OS 确认退出、清除行结束；同一集成同时至多一个"]
         CRED["凭据副本：拉起时经继承句柄交付 · 随进程退出结束"]
         subgraph SESS["会话 = 通道化身：拉起时核心创建、分配 SessionEpoch · 在途调用完成后核心关闭通道"]
@@ -285,11 +289,12 @@ flowchart TB
     end
     HEXEC["程序宿主执行：拉起 + 行 + Load 开始 · Unload 或终止后 OS 确认退出结束"]
   end
-  subgraph MEMBER["程序成员（跨实例）：load_program Applied 开始（钉内容 hash）· unload_program Applied 结束"]
-    CKREF["Checkpoint 的保留引用：随成员存在，unload_program 解除"]
+  subgraph MEMBER["程序成员（跨实例）：load_program Applied 开始（钉内容 hash）· unload_program 或替换的 Applied 结束，只在宿主执行结束之后 append；替换的同一个 Applied 开始新成员"]
+    CUR["输入 cursor：开始成员的 Applied 同事务建立 · unload_program 或替换的 Applied 结束（沿用时共有输入原样转给新成员）"]
+    CKREF["Checkpoint 的保留引用：进入活动集合后第一个 Checkpoint 登记 · unload_program 或不沿用旧状态的替换 Applied 解除；Unload 与失败抑制不解除"]
   end
-  MEMBER -.->|"每个实例一个宿主执行（未被失败抑制时）"| HEXEC
-  HALT["不嵌套的持久事实：IntegrationHalted / ProgramHalted（以位置引用它的 Applied 解除）、登记的采纳、流 epoch、订阅、单据"]
+  MEMBER -.->|"每个实例一个宿主执行（未被失败抑制、所引用来源都有声明版本时）"| HEXEC
+  HALT["不嵌套的持久事实（控制流上）：IntegrationHalted 起的 Halted 抑制 / ProgramHalted 起的失败抑制（以位置引用它的 Applied 解除）、登记的采纳；以及流 epoch、订阅、单据"]
 ```
 
 ```mermaid
@@ -328,8 +333,9 @@ sequenceDiagram
 
 读法：
 
-- 每层都在外层之内开始、在外层之前结束；每个锚点都有确认者。持久事实（`Halted`、失败抑制、采纳、订阅、单据）不嵌在实例里，由记录的 fold 跨实例恢复。
-- 程序成员跨实例，宿主执行是成员与实例的共同内层；受控停止结束宿主执行而不改变成员。
+- 每层都在外层之内开始、在外层之前结束；每个锚点都有确认者。持久事实（`Halted`、失败抑制、采纳、订阅、单据）不嵌在实例里，由记录的 fold 跨实例恢复；前三者都在控制流上，按这条流上的位置 fold。
+- 集成运行在 `Halted` 路径上的结束锚点是最后一个进程 OS 确认退出、清除进程表的行，不是 `IntegrationHalted`：后者先提交（§7.2 第 3 步“进入 `Halted`”），只开始 `Halted` 抑制，会话与进程在它之后才结束。`Connecting` 中换进程不结束运行。解除 `Halted` 的 `Applied` 只在上一次运行结束之后提交，所以同一集成的两次运行不重叠。
+- 程序成员跨实例，宿主执行是成员与实例的共同内层；受控停止结束宿主执行而不改变成员。`unload_program` 与替换先结束宿主执行（停调度、等在途输出事务、OS 确认退出），再 append 结束成员的 `Applied`，cursor 与保留引用随之结束或转给新成员（§8.6 卸载与替换）。
 - 受控停止不为集成另写会话健康观察：实例结束锚点就是本实例各集成运行的结束；下一实例第 3 步写新的初始状态。
 
 核出：无。

@@ -20,9 +20,9 @@ stateDiagram-v2
   state "程序 Checkpoint 的 cursor" as C {
     state "已登记" as C1
     state "已解除" as C2
-    [*] --> C1 : 程序进入活动集合后首个 Checkpoint 与 cursor 同事务持久化
-    C1 --> C1 : 下一个 Checkpoint 持久化即替换；宿主 Unload、受控停止、失败抑制都不解除
-    C1 --> C2 : unload_program 的 Applied（程序离开活动集合；最近 Checkpoint 保留作审计）
+    [*] --> C1 : 程序进入活动集合后的第一个 Checkpoint 与 cursor 同事务持久化（此前没有登记）
+    C1 --> C1 : 下一个 Checkpoint 持久化即替换；沿用旧状态的替换原样转给新成员；宿主 Unload、受控停止、失败抑制都不解除
+    C1 --> C2 : unload_program 的 Applied，或不沿用旧状态的替换的 Applied（都在宿主 OS 确认退出之后 append；最近 Checkpoint 保留作审计）
   }
   state "取证 ResolutionEvidence 引用的观察位置" as R {
     state "已登记" as R1
@@ -53,7 +53,7 @@ flowchart TB
   MONO -->|"否"| RJ0["Rejected(NotForward)"]
   MONO -->|"是"| MIN["核心算该流已登记引用的最早位置 min(s)"]
   MIN --> CMP{"to(s) ≤ min(s)？"}
-  CMP -->|"否"| RJ["Rejected(ReferencedBelow{min})<br/>要越过只能先让持有者解除：该尝试等待结束（结果确立、Expired、Abandoned）/ 程序推进 checkpoint 或 unload_program"]
+  CMP -->|"否"| RJ["Rejected(ReferencedBelow{min})<br/>要越过只能先让持有者解除：该尝试等待结束（结果确立、Expired、Abandoned）/ 程序推进 checkpoint、unload_program 或不沿用旧状态的替换"]
   CMP -->|"是"| WIN{"to(s) ≤ 该流配置窗口下界？"}
   WIN -->|"否"| RJ2["Rejected(InsideWindow{bound})"]
   WIN -->|"是，且各流都通过"| APPLY["写各流新边界；控制记录 Applied(position)"]

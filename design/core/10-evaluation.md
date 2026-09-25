@@ -411,7 +411,7 @@
 
 **集成的会话状态与身份拒绝**（§7.2 第 3 步、§8.2 `handshake`）。已定（证伪 §10.4 #17；验收 §10.5 #36）。
 
-- 选中：集成会话为每个集成运行 `Connecting` / `Established` / `Halted{cause}`；上游明确拒绝身份或配置时 `handshake` 返回 `Refused`，整个集成登记 `Halted`，只由 `rotate_credential` 或 `restart_integration` 解除；持久的 `Halted` 是执行事实 `IntegrationHalted` 加上以位置引用它的解除 `Applied` 的 fold，核心重启不解除；`IntegrationHalted` 提交之后才终止进程，进程的结束另由 OS 确认。上游暂时不可达返回 `Unavailable`，在同一通道上按 pacing 再握手。
+- 选中：集成会话为每个集成运行 `Connecting` / `Established` / `Halted{cause}`；上游明确拒绝身份或配置时 `handshake` 返回 `Refused`，整个集成登记 `Halted`，只由 `rotate_credential` 或 `restart_integration` 解除；持久的 `Halted` 是控制流上执行事实 `IntegrationHalted` 加上以位置引用它的解除 `Applied` 的 fold，核心重启不解除；`IntegrationHalted` 提交之后才终止进程，进程的结束另由 OS 确认，最后一个进程 OS 确认退出、清除进程表的行才是这次集成运行的结束；解除 `Applied` 只在上一次运行结束之后提交。上游暂时不可达返回 `Unavailable`，在同一通道上按 pacing 再握手。
 - Q 场景后果：Q18/Q32：运维能分清“等一等”与“去处理”；被拒的凭据不被反复登录。
 - 不选：
   - 拒绝按传输失败重连：同一份凭据反复登录，“离线”与“需处理”不可分；
@@ -421,7 +421,7 @@
 
 **健康面的字段**（§8.4）。已定（验收 §10.5 #38）。
 
-- 选中：会话状态、逐流 readiness、逐流当前 epoch 的回填进度、按调用目标（作用域或逻辑流）的连续失败数与最近成功时间，全部是健康观察记录的 fold，按 `as_of` 时已采纳的集成登记每个集成一份；每条健康观察是其键上的完整当前值，健康流按键保留；readiness 带到达时会话的 `SessionEpoch`，只在该会话是最近一条会话记录且为 `Established` 时有效，其余时候各流的 `Disconnected` 由会话状态派生；删去 `reach` 与 `tier`。
+- 选中：会话状态、逐流 readiness、逐流当前 epoch 的回填进度、按调用目标（作用域或逻辑流）的连续失败数与最近成功时间，全部是健康观察记录的 fold；成员是 `as_of` 时的采纳集合（控制流的 fold），每个集成一份；每条健康观察是其键上的完整当前值，健康流按键保留；readiness 带到达时会话的 `SessionEpoch`，只在该会话是最近一条会话记录且为 `Established` 时有效，其余时候各流的 `Disconnected` 由会话状态派生；删去 `reach` 与 `tier`。
 - Q 场景后果：Q32：“公共可用、私有失败”可按目标看到；健康读模型可按不低于保留边界的历史 `as_of` 重建，保留边界推进与核心重启都不改变当前健康；断线与重启不会留下旧会话的 `Live`。
 - 不选：
   - 保留单一 `reach` 阶梯：合成一个可达度，丢掉哪一面不通；
@@ -470,7 +470,7 @@
 
 **集成登记的采纳**（§7.2 第 3 步、§7.6、§8.5 `restart_integration`）。已定（证伪 §10.4 #34；验收 §10.5 #80）。
 
-- 选中：集成登记文件的源头是 Alice；核心只在启动第 3 步与 `restart_integration` 时读它，每次读都以执行事实记下采纳（启动时的采纳记录带文件内容 hash、发起者为本实例；`restart_integration` 的 `Applied` 带文件 hash）。文件在两次读之间的改动不生效；`restart_integration` 的集成不在文件里得 `Rejected(UnknownIntegration)`。下次启动时文件里已没有的集成不再运行、`health()` 不再列出，它的记录与订阅保留；要来源自己供给或作答的新一次性读与供给项得“来源未登记”，只读 UTA 日志的只投递项与执行事实 selector 按声明历史接纳，已移除来源的历史仍可订阅审计。
+- 选中：集成登记文件的源头是 Alice；核心只在启动第 3 步与 `restart_integration` 时读它，每次读都以控制流上的执行事实记下采纳（启动时的采纳记录带文件内容 hash、发起者为本实例 `instance_id`；`restart_integration` 的 `Applied` 带文件 hash 与 `instance_id`）；采纳集合是控制流上最近一条采纳记录加其后带同一 `instance_id` 的 `Applied` 的 fold，不比较不同流上记录的先后。文件在两次读之间的改动不生效；`restart_integration` 的集成不在文件里得 `Rejected(UnknownIntegration)`。下次启动时文件里已没有的集成不再运行、`health()` 不再列出，它的记录与订阅保留；要来源自己供给或作答的新一次性读与供给项得“来源未登记”，只读 UTA 日志的只投递项与执行事实 selector 按声明历史接纳，已移除来源的历史仍可订阅审计。
 - Q 场景后果：Q18/Q21：运行中的集成集合与各集成按哪份登记运行都可从执行事实回答；改文件不在运维不知情时改变运行的集成。
 - 不选：
   - 监视文件变更自动重载：文件成了运行态的第二个源头，半写与连续改动都要另行仲裁；
@@ -491,10 +491,17 @@
 
 **程序的活动集合与失败抑制**（§8.6、§8.5 `load_program`/`unload_program`）。已定（证伪 §10.4 #36；验收 §10.5 #82）。
 
-- 选中：活动集合是 `load_program`/`unload_program` 的 `Applied` 的 fold，`Applied` 钉住程序值的内容 hash；每次拉起宿主按钉住的内容装载，不符即 `ContentUnavailable`。超预算、trap、内容不符与装载期校验失败，同一事务 append 执行事实 `ProgramHalted` 与观察 `ProgramFailed`，提交之后才终止宿主；`ProgramHalted` 跨重启保持，只由以位置引用它的 `load_program` `Applied` 解除。`Checkpoint` 引用在 `unload_program` 时解除。
+- 选中：活动集合是控制流上 `load_program`/`unload_program` 的 `Applied` 的 fold，`Applied` 钉住程序值的内容 hash；每次拉起宿主按钉住的内容装载，不符即 `ContentUnavailable`。超预算、trap、内容不符与装载期校验失败，同一事务 append 执行事实 `ProgramHalted` 与观察 `ProgramFailed`，提交之后才终止宿主；`ProgramHalted` 跨重启保持，只由以位置引用它的 `load_program` `Applied` 解除。`unload_program` 与替换（对已在集合里的程序再 `load_program`）先结束宿主执行（停调度、等在途输出事务、OS 确认退出），再 append 结束成员的 `Applied`；替换是一条 `Applied`，沿用旧状态时 cursor 与 `Checkpoint` 引用原样转给新成员，否则同一事务照 `Reset` 处理。cursor 在开始成员的 `Applied` 同事务建立；`Checkpoint` 引用从进入集合后的第一个 `Checkpoint` 登记，在 `unload_program` 或不沿用的替换时解除。所引用来源尚无声明版本的程序等待，不装载、不 `ProgramHalted`。
 - Q 场景后果：Q25：超预算的程序重启后不被自动重新装载，其他程序照常；改清单或程序值文件不悄悄改变运行的程序。
-- 不选：以装载清单为活动集合（两个源头）；由 `ProgramFailed` 观察 fold 失败状态（依赖可压缩记录）；核心另存一份程序值（无实测需要的近处副本）。
+- 不选：以装载清单为活动集合（两个源头）；由 `ProgramFailed` 观察 fold 失败状态（依赖可压缩记录）；核心另存一份程序值（无实测需要的近处副本）；先 append `unload_program` 的 `Applied` 再 `Unload`（在途 `Advance` 可能在成员结束之后提交，为已不在集合里的程序登记一条无人解除的引用）；替换 = `unload_program` + `load_program`（中间一段程序不在集合里，cursor 与引用先结束再重建，沿用无从表达）；cursor 在首次装载时建立（等待声明或崩溃使 `Tail` 漂移）。
 - 证据：§8.6；§7.2 第 3 步（与 `Halted` 同构）。
+
+**控制流**（§7.3、§7.2 第 3 步、§8.6）。已定（验收 §10.5 #43/#80/#82）。
+
+- 选中：每个用户状态根一条不属任何来源的执行事实流，承载登记的采纳记录、除 `bypass_lane` 之外的全部控制记录、`IntegrationHalted` 与 `ProgramHalted`；采纳集合、持久 `Halted`、程序的活动集合与失败抑制都只按这条流上的位置 fold；`restart_integration` 的 `Applied` 带 `instance_id`，采纳集合 = 最近一条采纳记录加其后带同一 `instance_id` 的 `Applied`。它有自己的执行事实 selector，只能 `ordered`、可从起点。
+- Q 场景后果：Q18/Q21/Q32：任一历史 `as_of` 上健康列哪些集成、哪些程序在运行、哪些被抑制，都由一条流上的位置确定，消费方可以订阅它自行 fold 出同样的结果。
+- 不选：这些记录不指定流（fold 就要比较不同流上记录的先后，执行事实侧没有跨流的全局序，§2.3）；采纳单独一条流（其余控制事实照样没有流，活动集合与 `Halted` 仍要另找流身份）；按来源分流（采纳记录一次列出全部集成，程序与控制动作不属任何来源）；以实例表承载采纳（实例表没有位置，不能按 `as_of` 切面）。
+- 证据：§0.1 同步等待；§2.3；§7.2 第 3 步。
 
 **声明的两种解释**（§7.3 集成会话、§7.2 会话 epoch）。已定（验收 §10.5 #73）。
 
@@ -869,7 +876,8 @@
 43. **健康与 `Halted` 跨保留与重启**（§2.4、§7.2 第 3 步、§8.4、§8.5）：（对应 Q28/Q32）
     - 注入一串调用结果与会话变化后推进健康流的保留边界并执行压缩：每个键在边界之下恰留一条基线；`read_model(health)` 在压缩前后对任一 `as_of ≥ 边界` 相等；一个从边界订阅健康流的新消费者，先收到各键基线、再收到边界起的记录，自行 fold 与读模型相等；`as_of` 低于边界得 `BeyondRetention`；
     - `Halted{Refused}` 后推进保留边界、再重启核心：集成仍 `Halted{Refused}`，不被拉起；一条以位置引用该 `IntegrationHalted` 的 `restart_integration` `Applied` 之后重启核心：集成进入 `Connecting`；不引用它的控制记录不解除；
-    - 在 `IntegrationHalted` 与健康观察之间、在解除 `Applied` 与 `Connecting` 健康观察之间注入崩溃：重启后两者要么都在、要么都不在；解除事务提交之前 fixture 未收到握手。
+    - 在 `IntegrationHalted` 与健康观察之间、在解除 `Applied` 与 `Connecting` 健康观察之间注入崩溃：重启后两者要么都在、要么都不在；解除事务提交之前 fixture 未收到握手；
+    - fixture 集成在 `IntegrationHalted` 提交后迟迟不退出（响应退出请求前延迟，之后被强制终止）：其间发出的 `restart_integration` 的 `Applied` 只在该进程 OS 确认退出、进程表的行清除之后出现在控制流上，新进程在它之后才被拉起；fixture 从未观测到同一集成的两个进程同时存在。在确认之前注入核心崩溃：继任实例第 1 步回收该进程之后，`Halted` 照旧，由新的解除动作开始新一次运行。
 44. **集成会话与调用计数**（§7.2 第 3 步、§7.3、§8.4）：（对应 Q2/Q32）
     - 在途写与在途读各一个时切断会话：写恰得一个 `NoResponse`（→ `Undetermined`）、读恰得一个 `Unavailable`，各恰一条计数健康观察；之后让集成在已关闭的通道上送出同一调用的回应：核心读不到它，不产生第二个结果、记录或计数；
     - IO 壳、持久订阅与消费方对同一目标并发调用：每个结果恰推进计数一次，健康里的连续失败数等于按提交顺序独立重算的值；
@@ -1022,8 +1030,9 @@
     - `rotate_credential` 期间，fixture 观测到旧进程的退出先于新进程的拉起，新旧进程从不同时存在；新进程握手用的是轮换之后的凭据；其他集成的流 `Seq` 连续；
     - 核心在旧进程 OS 确认退出之前崩溃：继任实例第 1 步回收它之后才为该集成拉起新进程。
 80. **集成登记的采纳**（§7.2 第 3 步、§7.6、§8.5）：（对应 Q18/Q21）
-    - 启动第 3 步恰 append 一条采纳记录，带登记文件的内容 hash 与本实例的 `instance_id`；运行期修改登记文件：运行的集成、健康列出的集成都不变；
-    - 同一文件同时加入 Y、删去 Z：`restart_integration(Y)` 的 `Applied` 带文件 hash，Y 被拉起、握手，`health()` 同时列出 Y 与 Z（只采纳 Y 的条目）；`restart_integration(Z)`：`Rejected(UnknownIntegration)`，Z 本实例的运行不受影响；
+    - 启动第 3 步恰 append 一条采纳记录（控制流），带登记文件的内容 hash 与本实例的 `instance_id`；运行期修改登记文件：运行的集成、健康列出的集成都不变；
+    - 同一文件同时加入 Y、删去 Z：`restart_integration(Y)` 的 `Applied` 带文件 hash 与本实例的 `instance_id`，与 Y 的 `Connecting` 健康观察同一事务，之后 Y 被拉起、握手，`health()` 同时列出 Y 与 Z（只采纳 Y 的条目）；`restart_integration(Z)`：`Rejected(UnknownIntegration)`，Z 本实例的运行不受影响；
+    - 历史切面：在两个实例之间做上述改动，对每个实例内、`restart_integration(Y)` 之前与之后的控制流位置各读一次 `read_model(health, as_of)`：列出的集成恰为该位置之前最近一条采纳记录的 id 加其后带同一 `instance_id` 的 `Applied` 的 id；上一实例的 `restart_integration` `Applied` 不进入下一实例的采纳集合；从起点订阅控制流、按同一规则自行 fold 的结果与之相等；
     - 下次启动后 Z 不被拉起，`health()` 不列 Z；Z 的流记录、声明历史与订阅仍可读，核心没有为 Z 新 append 任何记录；新的 `read` 与供给项对 Z 得“来源未登记”；以只投递项订 Z 历史上声明过的流、以执行事实 selector 订 Z 历史上声明过的作用域都被接纳，从 `from` 起收到已 append 的记录；订 Z 从未声明过的流或作用域被拒；
     - 统一路径下没有核心写的文件。
 81. **受控停止**（§7.2 受控停止、生命周期表）：在各目标 OS 上以服务管理器与终端中断发出停止请求：（对应 Q20/Q21）
@@ -1032,10 +1041,13 @@
     - 注入一个不响应退出请求且无法被终止的子进程：停止以失败报告，实例表没有结束锚点，fence 未释放；
     - 停止开始之后到达的消费方连接被拒绝，已有消费方会话被关闭。
 82. **程序的活动集合与失败抑制**（§8.6、§8.5 `load_program`/`unload_program`）：（对应 Q25）
-    - 超预算与 trap：同一事务 `ProgramHalted` + `ProgramFailed`，之后宿主被终止；核心重启后该程序不被装载；一条以位置引用该 `ProgramHalted` 的 `load_program` `Applied` 之后重新装载，从最近 `Checkpoint` `Load`；不引用它的控制记录不解除；
+    - 超预算与 trap：同一事务 `ProgramHalted` + `ProgramFailed`（`ProgramHalted` 在控制流上），之后宿主被终止；核心重启后该程序不被装载；一条以位置引用该 `ProgramHalted` 的 `load_program` `Applied` 之后重新装载，从最近 `Checkpoint` `Load`；不引用它的控制记录不解除；
     - 在 `ProgramHalted` 与 `ProgramFailed` 之间注入崩溃：重启后二者要么都在、要么都不在；
     - `load_program` 之后修改程序值文件再重启核心：不装载，同一事务 `ProgramHalted{ContentUnavailable}` + `ProgramFailed`；修改装载清单再重启：活动集合不变；
-    - `unload_program` 之后该程序 `Checkpoint` 的 cursor 引用解除，`advance_retention` 不再被它阻止；受控停止与宿主崩溃不解除该引用。
+    - `unload_program` 之后该程序 `Checkpoint` 的 cursor 引用解除，`advance_retention` 不再被它阻止；受控停止、宿主崩溃与失败抑制不解除该引用；程序进入活动集合之后、第一个 `Checkpoint` 之前没有登记的引用；
+    - 卸载与在途 `Advance`：宿主正在 `Advance` 时发出 `unload_program`：`Applied` 只在该 `Advance` 的输出事务提交（或确知不提交）且宿主 OS 确认退出之后出现；该输出事务里的 `EffectRequest` 照常分派并各得一条 `EffectResponse`；`Applied` 之后没有该程序的 `Advance` 提交、没有新的 `Checkpoint` 与新的引用登记；替换（对同一 id 再 `load_program`）同样如此；
+    - 替换是一条 `Applied`：其间任一位置的活动集合都含该程序；新程序接受旧 `state_version` 时，`Applied` 记下沿用的 `Checkpoint`，共有输入的 cursor 与保留引用不变，新程序从该 `Checkpoint` `Load`，只有它新加的输入从其声明的起点开始；`cold_start` 或不接受时，同一事务有 `ProgramReset{Operator | Replace}`、程序流新 epoch 的 `Gap{Source}` 与重建的 cursor，旧引用解除；在该事务提交之后、新宿主第一个 `Checkpoint` 之前注入崩溃：重启后不交回旧 `Checkpoint`、不再记第二条 `ProgramReset`；
+    - `unload_program` 之后再 `load_program` 同一 id：cursor 按声明的起点在新 `Applied` 同事务建立，`Load` 不携带旧 `Checkpoint`。
 
 ## 10.6 明确不做
 

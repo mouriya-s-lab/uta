@@ -276,13 +276,13 @@
 - **核心内部结果**（会话状态见 §7.2 第 3 步）：
   - 合法 `Projection` → 会话 `Established`；同一事务 append 该握手的声明版本（§7.5）与 `Established` 健康观察；更新路由表；`required_inputs` 比对；既有订阅按新声明重算路由（见下）；
   - 该集成的每条观察流按 P3 决定是否开新 `StreamId.epoch`：集成能以 venue 游标证明续接，则续用原 epoch、`Seq` 接续；否则新 epoch 首条为 `Gap{origin: Source}`，由集成会话在同一事务 append（`rotate_credential` 之后的握手一律开新 epoch，原因 `credential_rotated`，§7.6）。会话 epoch 与流 epoch 独立；
-  - `Refused(reason)` → `Halted{Refused(reason)}`：集成会话 append `IntegrationHalted`（P14，§7.2 第 3 步），提交之后结束该会话并终止该集成进程（OS 确认退出），不自动重握手，等 `rotate_credential` 或 `restart_integration`；
+  - `Refused(reason)` → `Halted{Refused(reason)}`：集成会话 append `IntegrationHalted`（P14，§7.2 第 3 步），提交之后结束该会话并终止该集成进程；OS 确认退出、清除进程表的行，这一次集成运行才结束（§7.2 生命周期表）。不自动重握手，等 `rotate_credential` 或 `restart_integration`；
   - `Unavailable` → 仍 `Connecting`，按 pacing 在同一通道上再握手。
 - **错误**：
   - 通道断开、集成进程退出 → 该会话结束，进程 OS 确认退出之后拉起新进程与新会话（新 `session_seq`，按 pacing）；
   - 投影不合法（含表外的写操作、键角色或目标种类，§8.1 静态校验）→ `Halted{ProjectionInvalid}`，append `IntegrationHalted`；
   - 契约版本不兼容 → `Halted{ContractIncompatible}`，append `IntegrationHalted`，不降级运行；
-  - `Halted` 只影响该集成：它记下的是核心不再自动握手的决定，提交之后核心终止它的进程、不自动重试；投影与契约版本的拒绝只经 `restart_integration` 解除（§7.2 第 3 步）；
+  - `Halted` 只影响该集成：它记下的是核心不再自动握手的决定，开始 `Halted` 抑制；提交之后核心终止它的进程、不自动重试，进程 OS 确认退出、清除进程表的行时这次运行结束。投影与契约版本的拒绝只经 `restart_integration` 解除（§7.2 第 3 步）；
   - 一条通道上的握手串行：上一次返回之前不发下一次；旧会话的通道已关闭，它的握手结果读不到（§7.2 第 3 步）；
   - 能力比对缺失 → 引用该字段的树 fail-closed（§2.5）。
 - **重试**：`Unavailable` 时在同一通道上幂等重发；通道断开时在新进程的新通道上重发；`Halted` 不自动重发。
@@ -610,7 +610,7 @@
 
 **安静的无序号流** [设计]：没有可衔接序号而一直没有实时记录的流，在首条记录到达前不回填；健康里可见它仍是 `Starting`、没有回填进度，读模型的 `gaps` 仍列着该 epoch 起点的 `Gap{origin: Source}`。回填只是推迟：首条记录一到，`live_from` 随之确定，回填窗口取 `[起点, live_from)` 内上游给得出的历史，终态为 `Reached`，与实时的衔接同样未证明（见上文“衔接”）。等待期间要历史的消费方用带 `range` 的一次性 `read`（§8.2）取，它不推进完备进度，也不闭合 gap。理由：这类流的回填终点只能是首条实时记录的事件时间，此前没有落在该流坐标上的终点。不选：以订阅确认时刻或核心的当前时间作 `live_from`：它不在该流的事件时间坐标上，确认之前发出、事件时间更晚的记录会同时出现在回填与实时里，或两边都不在；也不选：先无终点地回填到“现在”、首条记录到达后再补一段：两段之间的衔接同样无从证明，却多出一次回填与一种进度状态。
 
-**健康面**（P16）[设计]：按 `as_of` 时的采纳集合（§7.2 第 3 步）每个集成一份 `IntegrationHealth`，只由健康观察 fold 出，经读模型对解释层可见（§8.5）。被移除的登记不在其中：它的健康观察仍在健康流里，可订阅、可按历史 `as_of` 读，核心不为它补写记录。
+**健康面**（P16）[设计]：每个集成一份 `IntegrationHealth`，经读模型对解释层可见（§8.5）。它有两个输入：成员是 `as_of` 时的采纳集合，由控制流上的执行事实（采纳记录与之后带同一 `instance_id` 的 `restart_integration` `Applied`）按 `as_of` 在控制流上的位置 fold 出（§7.2 第 3 步、§7.3）；每个成员的各字段只由健康观察 fold 出（下表）。被移除的登记不在其中：它的健康观察仍在健康流里，可订阅、可按历史 `as_of` 读，核心不为它补写记录。
 
 | 字段 | 含义 | 源头与写者 |
 |---|---|---|
@@ -626,7 +626,7 @@
 - 回填进度：流 epoch 起点的 `Gap{origin: Source}` 与该逻辑流的 `None{epoch}` 在同一事务 append；这一 epoch 建立任务时由 `Backfilling{起点}` 取代。上一 epoch 的 `Closed` 或 `Reached` 因此不会被当作新 epoch 的进度，崩溃也不会把 gap 与 `None` 分开。
 - 会话：核心启动第 3 步（§7.2）让各集成进入初始状态时，集成会话为每个集成 append 一条会话健康观察：进入 `Connecting` 的为 `Connecting{since = 本步时刻}`，它是本实例对该集成的开始锚点；恢复为 `Halted` 的为 `Halted{cause, since}`，原因与起始时间沿用那条未解除的 `IntegrationHalted`（其所在事务的时刻），不以本次启动的时刻当作停止的开始。第 5 步开放下游会话之前，旧实例的 `Established` 因此不会显得仍在。
 - readiness：不另写。它只在带着当前已建立会话的 `SessionEpoch` 时有效（上文 fold），旧会话、旧实例的 `Live` 随会话记录的更替自动失效，所以不为各流 append `Disconnected`。
-- 理由：集成失效或核心重启时，旧值的写者恰好不再写；按键保留又使旧值一直可见。会话与回填进度由它们的写者（集成会话、持久订阅）在失效点写新值；readiness 的写者是集成，失效时它恰好写不了，所以由它所属的会话限定有效范围，而不是由核心代写一条集成没说过的话。不选：由读模型按流的当前 epoch 过滤回填进度：`IntegrationHealth` 就要从健康观察之外再读一个输入，同一 `as_of` 上两个输入分属不同的流；也不选：重启时不写会话、等第一次状态变化：`Halted` 的集成不再有状态变化，旧的 `Established` 会一直显示；也不选：由核心为各流 append `Disconnected{since}`：同一个键有两个写者，且 `since` 只能取核心写它的时刻，把重启时刻冒充断线时刻。
+- 理由：集成失效或核心重启时，旧值的写者恰好不再写；按键保留又使旧值一直可见。会话与回填进度由它们的写者（集成会话、持久订阅）在失效点写新值；readiness 的写者是集成，失效时它恰好写不了，所以由它所属的会话限定有效范围，而不是由核心代写一条集成没说过的话。不选：由读模型按流的当前 epoch 过滤回填进度：回填进度这个字段的值就要从健康观察之外再读各观察流的 epoch，同一个键的值由两条流合成；也不选：重启时不写会话、等第一次状态变化：`Halted` 的集成不再有状态变化，旧的 `Established` 会一直显示；也不选：由核心为各流 append `Disconnected{since}`：同一个键有两个写者，且 `since` 只能取核心写它的时刻，把重启时刻冒充断线时刻。
 
 调用结果的计数：
 
@@ -769,14 +769,14 @@
 
 - 动作轴：写（append 控制记录）。
 - 核心内部结果：
-  - 每个动作的结果 `Applied(position) | Rejected(reason)` 作为控制记录 append，带 principal、动作、所读配置文件的内容 hash。
+  - 每个动作的结果 `Applied(position) | Rejected(reason)` 作为控制记录 append，带 principal、动作、所读配置文件的内容 hash。控制记录都在控制流上（§7.3），只有 `bypass_lane` 的随它所绕过的 lane 的流（§6.4）。
   - 生效动作再触发相应记录：新 epoch、`Gap`、保留边界推进；`bypass_lane` 的 `Applied` 本身就是 lane 步读取的绕过事实，带该单据的 `WriteLaneKey`、当时的 `current_version` 与当时的阻塞头位置集（§6.4）。
-  - `restart_integration(id)`：重读集成登记文件中该 id 的条目，`Applied` 带文件 hash，即采纳这一条目（§7.2 第 3 步）；结束该集成的会话、终止进程，OS 确认退出之后按条目拉起新进程。文件里新加的 id 也经它开始运行。
+  - `restart_integration(id)`：重读集成登记文件中该 id 的条目，`Applied` 带文件 hash 与本实例的 `instance_id`，即本实例采纳这一条目（控制流上的采纳集合，§7.2 第 3 步）。对正在运行的集成：结束它的会话、终止进程，OS 确认退出之后按条目拉起新进程，这是同一次运行里的换进程。文件里新加、本实例尚未运行的 id 也经它开始运行：`Applied` 与该集成转入 `Connecting` 的健康观察同一事务，这是它的运行的开始锚点，提交之后才拉起进程。
   - `rotate_credential(integration)`：结束会话、终止进程，OS 确认退出之后以重读的封存文件拉起新进程；新会话的各流开新 epoch（`credential_rotated`，§7.6）。
-  - 解除 `Halted` 的 `restart_integration` / `rotate_credential`：`Applied` 带被解除的 `IntegrationHalted` 位置，与转入 `Connecting` 的健康观察同一事务；这一事务提交、且上一个进程已 OS 确认退出之后才拉起进程、握手（§7.2 第 3 步）。
+  - 解除 `Halted` 的 `restart_integration` / `rotate_credential`：`Applied` 带被解除的 `IntegrationHalted` 位置，与转入 `Connecting` 的健康观察同一事务。这一事务只在该集成上一次运行结束（上一个进程 OS 确认退出、进程表的行已清除）之后提交，提交之后才拉起进程、握手（§7.2 第 3 步）。
   - `advance_retention` 的 `to` 为每条要推进的观察流一个新边界（§2.4）。
-  - `load_program(manifest_ref, cold_start?)`：从装载清单读该程序的条目与程序值文件，`Applied` 钉住程序值的内容 hash、预算与接受的 `state_version`，该程序由此进入活动集合（§8.6）；程序在失败抑制中时，`Applied` 带被解除的 `ProgramHalted` 位置。`cold_start` 缺省为假；为真时不携带已持久化的 `Checkpoint` 装载，记 `ProgramReset{Operator}`（§8.6）。
-  - `unload_program(id)`：`Applied` 使该程序离开活动集合，其 `Checkpoint` cursor 的保留引用随之解除（§2.4、§8.6）。
+  - `load_program(manifest_ref, cold_start?)`：从装载清单读该程序的条目与程序值文件，`Applied` 钉住程序值的内容 hash、预算与接受的 `state_version`，并在同一事务定下该程序全部输入的 cursor（§8.6 程序的输入）。id 不在活动集合里时，该程序由此进入活动集合，cursor 按各输入声明的起点建立。id 已在活动集合里（含失败抑制中的）时，这是一次**替换**：按 §8.6“卸载与替换”先结束旧宿主执行，再以这一条 `Applied` 结束旧成员、开始新成员。失败抑制中的程序，`Applied` 另带被解除的 `ProgramHalted` 位置。替换**沿用**旧状态，当且仅当 `cold_start` 为假，且旧成员没有 `Checkpoint` 或新程序接受它的 `state_version`：新旧程序共有的输入 cursor 与保留引用原样沿用，新程序才有的输入按声明的起点建立，旧程序才有的输入的 cursor 结束，全在这一事务里。不沿用时同一事务按 `Reset` 处理（`ProgramReset{Replace | Operator}`，§8.6）。`Applied` 记下它沿用的 `Checkpoint`（位置或无）。`cold_start` 缺省为假。
+  - `unload_program(id)`：按 §8.6“卸载与替换”先结束该程序的宿主执行（停止调度 `Advance`、等在途输出事务提交或确知不提交、`Unload` 且 OS 确认退出），然后才 append `Applied`：该程序离开活动集合，它的全部 cursor 结束，`Checkpoint` 的保留引用解除（§2.4、§8.6）。
 - 错误：
   - 越权 → `Unauthorized`；
   - 配置文件不合法 → `Rejected(reason)`，并保留上一有效版本（§7.6）；
@@ -802,7 +802,7 @@
 - 不要求渠道已穷尽：principal 可在任一时刻放弃跟踪；在途取证总是先完成。
 - 没有人工写结果的操作：尝试的结果是上游事实的副本，只由上游证据给出（§6.6 不选）。
 
-**健康**：`health() → Vec<IntegrationHealth>`，采纳集合（§7.2 第 3 步）中每个集成一份：会话状态、逐流 readiness、回填进度、按调用目标的连续失败数与最近成功时间（§8.4）。它等于 `read_model(health)` 的当前态：每个字段按 §8.4 从健康流 fold 出，按键保留使它在保留边界推进与核心重启之后不变（§2.4）；会话状态为 `Halted` 时带 `IntegrationHalted` 记下的原因（§7.2 第 3 步）。被移除的登记不在其中：它的健康观察仍在健康流里，可订阅、可按历史 `as_of` 读，核心不为它补写记录。动作轴：读。核心内部结果：无。启动期同其他操作返回 `Starting`（见“会话与 principal”）。
+**健康**：`health() → Vec<IntegrationHealth>`，当前采纳集合（控制流的 fold，§7.2 第 3 步）中每个集成一份：会话状态、逐流 readiness、回填进度、按调用目标的连续失败数与最近成功时间（§8.4）。它等于 `read_model(health)` 的当前态：成员取自控制流，每个字段按 §8.4 从健康流 fold 出，按键保留使它在保留边界推进与核心重启之后不变（§2.4）；会话状态为 `Halted` 时带 `IntegrationHalted` 记下的原因（§7.2 第 3 步）。被移除的登记不在其中：它的健康观察仍在健康流里，可订阅、可按历史 `as_of` 读，核心不为它补写记录。动作轴：读。核心内部结果：无。启动期同其他操作返回 `Starting`（见“会话与 principal”）。
 
 ### 读模型集合与一致性
 
@@ -860,7 +860,7 @@
 **程序与宿主的约束：**
 
 - 程序 = 值代数的规范序列化形式：按 schema 校验的 JSON 值树，与 `DerivationNode`/`DecisionStep` 一一对应。任何面向 AI 的文本糖必须编译到同一值，且不是核心的一部分；表达力扩展 = 加构造子（§2.5）。
-- 装载期校验：`Id` 越界与环、`required_inputs` 与握手声明比对、声明的执行事实输入按执行事实 selector 的接纳规则（§8.5 订阅组）判定，不成立即 fail-closed。
+- 装载期校验：`Id` 越界与环；`required_inputs` 与所引用各来源的**最近声明**比对（§7.3）；声明的执行事实输入按执行事实 selector 的接纳规则（§8.5 订阅组）判定；不成立即 fail-closed。所引用的某个来源还没有任何声明版本时不判定：程序留在活动集合里，核心不为它拉起宿主，也不 append `ProgramHalted`；该来源第一次握手成功（append 它的第一个声明版本）之后再做这次校验，照常装载或 `LoadRejected`。
 - 预算靠宿主不靠类型：CPU / 内存 / 意图速率 / 状态大小的预算由宿主进程隔离（C4）。超预算被隔离并报告，其他程序、账户、核心不受影响。
 - 状态显式可序列化：程序状态只经 `Checkpoint` 序列化，不依赖运行时快照。
 - 隔离边界：程序无写能力（Intent 是值而非外部调用）；程序不接触 SQLite 与凭据（C7、H2）；宿主仅作为解释器的宿主，不进入设计中心。
@@ -869,18 +869,36 @@
 
 - **输入就是声明**：程序只经三种输入看到记录：值树的 `required_inputs` 所指的观察流、值树声明的执行事实输入 `(来源, WriteScope?)`（与执行事实订阅同一个 selector，含此后出现的 lane 流，§8.5 订阅组），以及隐含的该程序自己的请求流（§6.1）。宿主与投递不按记录内容挑选，只按位置搬运；解释②在程序内按自己的锚点认出自己的事实（§6.1）。
 - **每个输入声明起点**：`Tail`（缺省：cursor 建立时该流的流末）或 `Origin`（执行事实流的第一条记录；观察流的当前保留边界）。请求流的起点是 `Tail`。建立之后才出现的 lane 流一律从它的第一条记录起。
-- **cursor 的生命周期**：该程序的 cursor（每条输入流一个位置）在 `load_program` 的 `Applied` 之后首次装载时按各输入声明的起点建立；此后只由 `Advance` 的提交推进，与 `Checkpoint` 同事务；`Reset` 时丢弃状态，全部输入的 cursor（含请求流）按声明的起点重新建立，同一事务写入；`unload_program` 的 `Applied` 结束它。
+- **cursor 的生命周期**：该程序的 cursor（每条输入流一个位置）在让它进入活动集合（或替换它）的 `load_program` `Applied` 的同一事务里定下：按各输入声明的起点建立，`Tail` 取该 `Applied` 提交时该流的流末；替换沿用旧状态时共有输入的 cursor 原样沿用（§8.5 `load_program`）。此后只由 `Advance` 的提交推进，与 `Checkpoint` 同事务；`Reset` 时丢弃状态，全部输入的 cursor（含请求流）按声明的起点重新建立，同一事务写入；`unload_program` 的 `Applied` 结束它，不沿用旧状态的替换在同一事务按 `Reset` 重建它。
+- 理由：cursor 在 `Applied` 里定下，`Tail` 就是控制动作生效那一刻的流末；推迟到首次装载，等待来源的声明（上文“程序与宿主的约束”）或崩溃都会让起点漂移。
 - 写请求的作用域必须在声明的执行事实输入之内，否则 `NotDrafted(ScopeNotObserved)`（§6.1 构造规则）。
 - 代价：执行事实输入投来声明作用域里全部 principal 的单据与尝试，唤起的 `Advance` 计入程序预算（§6.1）。
 
 ### 程序的活动集合与失败抑制 [设计]
 
-- **源头**：装载清单与程序值文件是 Alice 写的目录；哪些程序在运行、各按哪份内容运行，是核心自己的控制事实。`load_program` 的 `Applied` 钉住程序值的内容 hash、预算与接受的 `state_version`，该程序进入活动集合；`unload_program` 的 `Applied` 使它离开。活动集合就是这些 `Applied` 的 fold（§7.5），改清单或程序值文件本身不改变它。
+- **源头**：装载清单与程序值文件是 Alice 写的目录；哪些程序在运行、各按哪份内容运行，是核心自己的控制事实。`load_program` 的 `Applied` 钉住程序值的内容 hash、预算与接受的 `state_version`，该程序进入活动集合，或替换已在其中的同一程序（见下文“卸载与替换”）；`unload_program` 的 `Applied` 使它离开。活动集合就是控制流上这些 `Applied` 的 fold（§7.3、§7.5），改清单或程序值文件本身不改变它。
 - **按钉住的内容装载**：每次拉起宿主（`load_program` 生效时、启动第 5 步）核心从清单所指的文件读程序值，内容 hash 与 `Applied` 所钉的不符（文件被改或删去），就不装载，按失败抑制处理（原因 `ContentUnavailable`）；不以文件此刻的内容代替已钉住的内容。
 - **失败抑制**：超预算、trap、宿主进程异常退出、内容不符与装载期校验失败，核心在同一事务 append 执行事实 `ProgramHalted{program, reason}` 与程序观察 `ProgramFailed{reason}`，提交之后才终止宿主进程（OS 确认退出、清除登记）。`ProgramHalted` 断言核心不再自动装载它的决定，跨核心重启保持；只有以位置引用它的 `load_program` `Applied` 解除。`ProgramFailed` 只供展示。程序被抑制时仍在活动集合里，它的 `Checkpoint` 仍被引用，重新装载时交回。
-- **保留引用**：程序 `Checkpoint` 的 cursor 引用从该程序进入活动集合起一直登记，由下一个 `Checkpoint` 取代，在 `unload_program` 的 `Applied` 时解除（§2.4）；宿主的 `Unload`（含受控停止）不解除它。
+- **保留引用**：程序 `Checkpoint` 的 cursor 引用在该程序进入活动集合之后的第一个 `Checkpoint` 持久化时登记（此前没有登记），由下一个 `Checkpoint` 取代；在 `unload_program` 的 `Applied`，或不沿用旧状态的替换 `Applied` 时解除（§2.4）；沿用旧状态的替换把它原样转给新成员。宿主的 `Unload`（含受控停止）与失败抑制都不解除它。
 - 理由：与集成的 `Halted` 同理（§7.2 第 3 步）：“重启不自动重试”要由不压缩的执行事实承载，观察记录可被压缩；活动集合只有一个源头，清单是目录不是状态；只存清单引用而不钉内容，重启就可能在同一引用下装载另一份程序。
 - 不选：**以装载清单为活动集合**：清单与控制记录成为两个源头，重启装载哪些程序取决于重启时刻文件的样子；**由 `ProgramFailed` 观察 fold 出失败状态**：重启正确性依赖可压缩的观察记录；**核心另存一份程序值**：程序值的源头是作者的文件，钉住 hash 足以发现它变了，复制一份是没有实测需要的近处副本。
+
+### 卸载与替换 [设计]
+
+`unload_program` 与替换（对已在活动集合里的程序 `load_program`，§8.5）都结束一个程序成员。成员结束之前，先结束它的内层，顺序同受控停止第 2 步（§7.2）：
+
+1. 停止为该程序调度 `Advance`；
+2. 等在途 `Advance` 的输出事务提交，或确知它不提交；
+3. `Unload` 宿主（失败抑制中的程序，宿主已在抑制时被终止），OS 确认退出、清除进程表的行；
+4. 然后才 append `Applied`，它是旧成员的结束锚点：
+   - `unload_program`：程序离开活动集合，全部 cursor 结束，保留引用解除；
+   - 替换：同一个 `Applied` 结束旧成员、开始新成员（钉新的内容 hash、预算与接受的 `state_version`）。沿用旧状态时，共有输入的 cursor 与保留引用在这一事务里原样沿用，`Applied` 记下沿用的 `Checkpoint`；不沿用时（`cold_start`，或新程序不接受旧 `Checkpoint` 的 `state_version`），这一事务照 `Reset` 处理：append `ProgramReset{Operator | Replace}`、程序流开新 epoch、全部输入的 cursor 按声明的起点重建、旧保留引用解除，`Applied` 记下沿用的 `Checkpoint` 为无；
+5. 替换提交之后才拉起新宿主，按下文 `Load` 交回沿用的 `Checkpoint`，或不携带。
+
+- 第 2 步之前已提交的 `EffectRequest` 照常有效，照常分派与响应（§6.1）；第 2 步之后该程序不再有输出事务。
+- 离开活动集合之后再 `load_program` 同一 id，是新成员：cursor 按声明的起点重新建立，不交回旧 `Checkpoint`（它只作记录保留）。
+- 理由：`Applied` 是成员的结束锚点，也结束 cursor 与保留引用；先写它，在途的 `Advance` 仍可能提交，推进已结束的 cursor、写下新 `Checkpoint`，为一个已不在集合里的程序登记一条无人解除的引用，并落下它的 `EffectRequest`。替换若拆成 `unload_program` 与 `load_program` 两个动作，中间有一段程序不在集合里，cursor 与引用先结束再重建，沿用无从表达。
+- 不选：**先 append `Applied` 再 `Unload`**（原顺序）：见上；**以 `ProgramReset` 观察判定不沿用**：观察记录可被压缩，重启时装载哪个 `Checkpoint` 要由执行事实决定，所以由 `Applied` 记下沿用的 `Checkpoint`。
 
 ### 宿主协议
 
@@ -888,9 +906,9 @@
 
 **`Load(program, checkpoint?, budget) → Loaded{state_version} | LoadRejected(reason)`**（核心→宿主）
 
-- 装载程序值；`checkpoint` 是最近一次持久化的 `Checkpoint{bytes, state_version}`。
+- 装载程序值；`checkpoint` 是本成员可交回的最近 `Checkpoint{bytes, state_version}`：开始本成员的 `Applied` 所沿用的那个，或该 `Applied` 之后持久化的最近一个；都没有则不携带。开始本成员之前的 `Checkpoint` 不交回。
 - 装载期校验失败 → `LoadRejected`，程序不运行。
-- `checkpoint` 的 `state_version` 不在程序声明接受的版本内，不是装载失败，按状态迁移处理（见下）：核心在 `Load` 前比对，不携带该 `checkpoint` 装载，并 `Reset`。
+- `checkpoint` 的 `state_version` 不在程序声明接受的版本内，不是装载失败，按状态迁移处理（见下）：核心在 `Load` 前比对，不携带该 `checkpoint` 装载，并 `Reset(StateVersionMismatch)`。替换时的比对在 `Applied` 里已做过（上文“卸载与替换”），不在这里再做。
 
 **`Advance(records, to: cursor) → Output{effects, derivations, checkpoint}`**（核心→宿主）
 
@@ -901,12 +919,12 @@
 
 **`Reset(reason)`**（核心→宿主）
 
-- 丢弃状态、冷启动；`reason ∈ {StateVersionMismatch, Replace, Operator}`，三者依次由装载时版本不符、替换程序时新程序不接受旧版本、控制面 `load_program(…, cold_start)` 触发。
-- append 程序观察 `ProgramReset{reason}`；程序流开新 epoch（`Gap{origin: Source, reason: program_upgrade}`，§4.2），按 H9 回填；全部输入的 cursor（含请求流）按各输入声明的起点重新建立，与 `ProgramReset` 同一事务（见上文“程序的输入”）。丢弃的状态里记着的请求，其之后到达的结果对新状态只是请求流与执行事实流上的普通记录。
+- 丢弃状态、冷启动；`reason ∈ {StateVersionMismatch, Replace, Operator}`，三者依次由装载时交回的 `Checkpoint` 版本不被接受、替换时新程序不接受旧版本、`cold_start` 的替换触发。
+- append 程序观察 `ProgramReset{reason}`；程序流开新 epoch（`Gap{origin: Source, reason: program_upgrade}`，§4.2），按 H9 回填；全部输入的 cursor（含请求流）按各输入声明的起点重新建立，与 `ProgramReset` 同一事务（见上文“程序的输入”）。`Replace` 与 `Operator` 的这一事务就是替换的 `Applied` 事务（上文“卸载与替换”），宿主随后不携带 `checkpoint` 装载。丢弃的状态里记着的请求，其之后到达的结果对新状态只是请求流与执行事实流上的普通记录。
 
 **`Unload`**（核心→宿主）
 
-- 请求宿主进程退出，超时后强制终止，OS 确认退出之后清除登记；最近已持久化的 `Checkpoint` 保留供 `Load`。`Unload` 结束的是宿主执行，不改变活动集合：`unload_program` 与受控停止第 2 步（§7.2）都经它结束宿主，只有前者使程序离开活动集合。
+- 请求宿主进程退出，超时后强制终止，OS 确认退出之后清除登记。`Unload` 结束的是宿主执行，不改变活动集合、cursor 与保留引用：受控停止第 2 步（§7.2）经它结束宿主，最近已持久化的 `Checkpoint` 留给下一实例 `Load`；`unload_program` 与替换也经它结束宿主，OS 确认退出之后才 append 它们的 `Applied`（上文“卸载与替换”），只有它们改变活动集合。
 
 ### 预算、迁移与恢复
 
@@ -914,12 +932,12 @@
   - 核心 append `ProgramHalted{reason: Budget(kind) | Trap}` 与失败观察 `ProgramFailed{reason}`（同一事务），然后终止宿主进程；
   - 程序停在失败抑制，直到控制面 `load_program` 重新装载（其 `Applied` 引用这条 `ProgramHalted`）；
   - 其他程序、账户、核心不受影响。
-- **状态迁移**：`Checkpoint` 带 `state_version`；程序值声明它接受的 `state_version`，核心在 `Load` 前比对：
-  - 接受 → 携带 `checkpoint` 装载，续跑；
-  - 不接受 → `Reset(StateVersionMismatch)`；替换程序 = `Unload` 旧 + `Load` 新（携旧 checkpoint），新程序不接受旧版本则 `Reset(Replace)`；
+- **状态迁移**：`Checkpoint` 带 `state_version`；程序值声明它接受的 `state_version`，核心比对：
+  - `Load` 前比对本成员可交回的 `Checkpoint`：接受 → 携带装载，续跑；不接受 → 不携带装载，`Reset(StateVersionMismatch)`；
+  - 替换在 `Applied` 里比对旧 `Checkpoint`：接受 → 沿用；不接受 → 该事务按 `Reset(Replace)` 处理（上文“卸载与替换”）；
   - 两种都显式记录（C14），不以 `LoadRejected` 拒绝运行。
-- **运维冷启动**：`load_program(manifest_ref, cold_start = true)`（§8.5）不携带 `checkpoint` 装载，`Reset(Operator)`。这是失败抑制中的程序在已持久化状态本身导致反复 trap 时的出口；运行中的程序经 `unload_program` 再 `load_program(…, cold_start = true)` 冷启动。
-- **崩溃恢复**：核心重启后，第 5 步装载活动集合中未被失败抑制的程序，从与 cursor 同事务持久化的最近 `Checkpoint` `Load`（§7.2 第 5 步）；宿主崩溃是 trap，按失败抑制处理，重新装载时同样从最近 `Checkpoint` `Load`。程序因此不会看到已折入状态的记录（§4.2）。
+- **运维冷启动**：`load_program(manifest_ref, cold_start = true)`（§8.5）对已在活动集合里的程序是一次不沿用旧状态的替换，`Applied` 事务按 `Reset(Operator)` 处理，宿主不携带 `checkpoint` 装载。失败抑制中的程序在已持久化状态本身导致反复 trap 时由它脱出；运行中的程序也以它冷启动，不必先 `unload_program`。
+- **崩溃恢复**：核心重启后，第 5 步装载活动集合中未被失败抑制的程序，从本成员可交回的最近 `Checkpoint` `Load`（它与 cursor 同事务持久化，§7.2 第 5 步）；宿主崩溃是 trap，按失败抑制处理，重新装载时同样从最近 `Checkpoint` `Load`。程序因此不会看到已折入状态的记录（§4.2）。替换的 `Applied` 之前崩溃，旧成员照旧；之后崩溃，新成员按它的 `Applied` 所记沿用或不携带装载，不重复 `Reset`。
 
 ## 8.7 核心↔可选行情派生计算子系统
 

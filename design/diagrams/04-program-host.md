@@ -31,7 +31,7 @@ sequenceDiagram
     Note over C,DB: 崩在 COMMIT 前：整批不存在，重启重放同一批（#16）
     C->>O: 逐条分派 EffectRequest（事务之后）
     alt 读处理器（一次执行，不自行重试）
-      alt 未调用集成（按 §8.2 read 的判定顺序：来源未登记 / 从未有声明 / 流未声明 / 最近声明 read 为 Unsupported 或 Unknown / 请求不合 schema / 来源无会话）
+      alt 未调用集成（按 §8.2 read 的判定顺序：来源未登记 / 从未有声明 / 来源无会话 / 流不在会话有效声明里 / 会话有效声明的 read 为 Unsupported 或 Unknown / 请求不合 schema）
         O->>DB: EffectResponse{request: pos, NotCalled(reason)}（不调用集成、不 append 观察记录）
         Note over C: 程序的解释②在自己的请求流上看到这条 EffectResponse（§6.1）
       else 调用
@@ -69,37 +69,45 @@ sequenceDiagram
 
 ## D4.2 程序生命周期
 
-对照：§8.6 `Load`/`Reset`/`Unload`、程序的活动集合与失败抑制、预算语义、状态迁移、运维冷启动；§8.5 `load_program`/`unload_program`；§4.2 `program_upgrade`；§7.2 生命周期表与受控停止。
+对照：§8.6 装载期校验、`Load`/`Reset`/`Unload`、程序的活动集合与失败抑制、卸载与替换、预算语义、状态迁移、运维冷启动；§8.5 `load_program`/`unload_program`；§4.2 `program_upgrade`；§7.2 生命周期表与受控停止。
 
 ```mermaid
 stateDiagram-v2
-  [*] --> Loading : load_program(manifest_ref, cold_start?) 的 Applied（钉内容 hash，进入活动集合）或 启动第 5 步（活动集合中未被抑制的程序）
-  Loading --> Running : Load(program, checkpoint?, budget) → Loaded{state_version}
-  Loading --> Halted : 程序值内容 hash 与 Applied 所钉不符 / LoadRejected（Id 越界/环、required_inputs 缺、含 Pooled 而子系统未装）→ 同事务 ProgramHalted{ContentUnavailable 或 LoadRejected(reason)} + ProgramFailed
+  state "等待来源的声明" as WAIT
+  state "结束宿主执行中" as DRAIN
   state "Reset 处理中" as RST
-  Loading --> RST : 核心 Load 前比对：checkpoint 的 state_version 不被程序接受 → 不携带装载，Reset(StateVersionMismatch)；替换时 Reset(Replace)
-  Loading --> RST : load_program(…, cold_start = true) → 不携带 checkpoint 装载，Reset(Operator)
+  [*] --> Loading : load_program 的 Applied（id 不在活动集合里：钉内容 hash，同事务按各输入声明的起点建立全部 cursor）/ 启动第 5 步（活动集合中未被抑制的程序）
+  [*] --> WAIT : 同上，但所引用的某个来源还没有任何声明版本：不拉起宿主、不 ProgramHalted，留在活动集合里
+  WAIT --> Loading : 该来源第一次握手成功（append 声明版本）→ 做装载期校验
+  WAIT --> Unloaded : unload_program 的 Applied（没有宿主，直接 append）
+  Loading --> Running : Load(program, checkpoint?, budget) → Loaded{state_version}；checkpoint 是本成员可交回的（Applied 沿用的，或其后持久化的最近一个）
+  Loading --> Halted : 程序值内容 hash 与 Applied 所钉不符 / LoadRejected（Id 越界/环、required_inputs 与最近声明不符、含 Pooled 而子系统未装）→ 同事务 ProgramHalted{ContentUnavailable 或 LoadRejected(reason)} + ProgramFailed
+  Loading --> RST : 核心 Load 前比对：本成员可交回的 checkpoint 的 state_version 不被接受 → 不携带装载，Reset(StateVersionMismatch)
   RST --> Running : append ProgramReset，同事务按各输入声明的起点重建全部输入 cursor（含请求流）；程序流新 epoch Gap{Source, program_upgrade}；按 H9 回填
   Running --> Running : Advance 循环（D4.1）
   Running --> Halted : 超预算 / trap（宿主异常退出）→ 同事务 ProgramHalted + ProgramFailed，提交后终止宿主、OS 确认退出后清除登记
-  Running --> Stopped : 受控停止第 2 步 → Unload；活动集合不变，下一实例第 5 步重新 Load
-  Running --> Unloaded : unload_program 的 Applied → Unload，离开活动集合，Checkpoint cursor 引用解除（Checkpoint 本身保留）
-  Halted --> Loading : load_program 的 Applied 以位置引用 ProgramHalted（重新钉内容 hash；携最近 Checkpoint，状态本身致 trap 时用 cold_start）
+  Running --> Stopped : 受控停止第 2 步 → Unload；活动集合、cursor 与引用不变，下一实例第 5 步重新 Load
+  Running --> DRAIN : unload_program，或替换（对该 id 再 load_program）生效：停止调度 Advance，等在途输出事务提交或确知不提交，Unload，OS 确认退出、清除行；此时还没有 Applied
+  DRAIN --> Unloaded : 然后 append unload_program 的 Applied：离开活动集合，全部 cursor 结束，Checkpoint cursor 引用解除（Checkpoint 只作记录保留）
+  DRAIN --> Loading : 然后 append 替换的 Applied：同一条结束旧成员、开始新成员。沿用（非 cold_start，且无旧 Checkpoint 或新程序接受其 state_version）：共有输入 cursor 与引用原样沿用，Applied 记下沿用的 Checkpoint；不沿用：同事务 ProgramReset{Replace 或 Operator}、程序流新 epoch、cursor 按起点重建、旧引用解除
+  Halted --> Loading : 替换的 Applied（宿主已 OS 确认退出之后），以位置引用 ProgramHalted（重新钉内容 hash；沿用规则同上，状态本身致 trap 时用 cold_start）
   Halted --> Halted : 核心重启：ProgramHalted 未被解除，第 5 步不装载
-  Unloaded --> Loading : 再 load_program；替换程序 = unload_program 旧 + load_program 新（携旧 checkpoint；新程序不接受旧版本 → Reset(Replace)）
+  Halted --> Unloaded : unload_program 的 Applied（宿主已 OS 确认退出之后）
+  Unloaded --> Loading : 再 load_program：新成员，cursor 在其 Applied 同事务按起点建立，不交回旧 Checkpoint
   Stopped --> [*]
   note right of Running
-    核心崩溃：重启后从与 cursor 同事务持久化的
-    最近 Checkpoint 重新 Load，重放 cursor 之后的记录，
+    核心崩溃：重启后从本成员可交回的最近 Checkpoint
+    （与 cursor 同事务持久化）重新 Load，重放 cursor 之后的记录，
     不重复 Emit（#16）
   end note
 ```
 
 读法：
 
-- `Halted` 是失败抑制：它由执行事实 `ProgramHalted` 承载，跨核心重启保持，不自动恢复——超预算是程序作者的问题，由控制面 principal 决定是否重装；其他程序、账户、核心不受影响。`ProgramFailed` 只供展示。
-- 活动集合是 `load_program`/`unload_program` 的 `Applied` 的 fold；改装载清单或程序值文件不改变它，内容与所钉 hash 不符时不装载。
-- 宿主执行在程序成员与核心实例两者之内：`Stopped`（受控停止）与崩溃都只结束宿主执行，成员与 `Checkpoint` 引用不变。
+- `Halted` 是失败抑制：它由控制流上的执行事实 `ProgramHalted` 承载，跨核心重启保持，不自动恢复——超预算是程序作者的问题，由控制面 principal 决定是否重装；其他程序、账户、核心不受影响。`ProgramFailed` 只供展示。
+- 活动集合是控制流上 `load_program`/`unload_program` 的 `Applied` 的 fold；改装载清单或程序值文件不改变它，内容与所钉 hash 不符时不装载。替换是一个动作、一条 `Applied`，中间没有程序不在集合里的时刻。
+- 宿主执行在程序成员与核心实例两者之内：`Stopped`（受控停止）与崩溃都只结束宿主执行，成员、cursor 与 `Checkpoint` 引用不变；`unload_program` 与替换先经“结束宿主执行中”结束它，再写结束成员的 `Applied`。
+- 等待来源的声明不是失败：没有 `ProgramHalted`，来源一有声明版本就照常校验与装载（§8.6）。
 
 核出：无。
 
@@ -109,7 +117,7 @@ stateDiagram-v2
 
 ```mermaid
 flowchart TB
-  ER[("EffectRequest 记录 @pos（执行 J，该程序的请求流，永存）<br/>effect_kind · basis · key · 载荷")]
+  ER[("EffectRequest 记录 @pos（执行 J，该程序的请求流，永存）<br/>effect_kind · basis · 载荷")]
   REG{"effect_kind 注册为？"}
   ER --> REG
   REG -->|"读处理器"| RD["一次执行：按 §8.2 read 的判定顺序"]
