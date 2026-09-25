@@ -18,7 +18,7 @@ sequenceDiagram
   J->>DL: 程序 cursor 之后有新记录
   C->>DL: 取程序订阅的投递事件（cursor 之后的记录、未确认 Gap{Delivery}、覆盖推进）
   DL-->>C: 投递事件
-  C->>H: Advance(events, to = cursor')：每条流上按位置先后的投递事件——cursor 为 Start{from} 的流先交出前导（该流此刻在 from 之下留下的记录）、程序订阅上未确认的 Gap{Delivery}{流, from, to, reason}（排在该流 to 之后的记录之前）、各输入流 cursor 之后的记录、await-all 输入的覆盖推进{流, through}（每次 Load 之后的第一次 Advance 先在每个 await-all 输入的起始位置给出 through：At{p} 为 fold 到 p 为止，Start{from} 为 from 之下的严格前缀，排在前导与第一条不低于起始位置的记录之前；起始位置低于覆盖检查点的 folded_below 时不给，由紧随开头 Gap{Delivery, compacted} 的那条取代；Gap{Delivery} 之后同样给出；不存进 Checkpoint）；cursor' 不确认任何未交出的留存记录或缺口：At 流不越过这批交出的最后一个位置，Start{from} 流取交出的最后一个位置与 from 前一位置中较大者
+  C->>H: Advance(events, to = cursor')：每条流上按位置先后的投递事件——cursor 为 Start{from} 的流先交出前导（该流此刻在 from 之下留下的记录）、程序订阅上未确认的 Gap{Delivery}{流, from, to, reason}（排在该流 to 之后的记录之前）、各输入流 cursor 之后的记录、await-all 输入的覆盖推进{流, through}（每次 Load 之后的第一次 Advance 先在每个 await-all 输入的起始位置给出 through：At{p} 为 fold 到 p 为止，Start{from} 为 from 之下的严格前缀，排在前导与第一条不低于起始位置的记录之前；每个 Gap{Delivery} 之后给出到它末位为止的 through；每条 through 只在它 fold 到的位置在当前流 epoch 里、且不低于该 epoch 覆盖检查点的 folded_below 前一位置时给出，恰在该位置时就是检查点的 through，所以起始位置低于 folded_below 时没有初始事件，末位更低的开头缺口之后也没有，由此后第一条可算的 through 取代初始事件；不存进 Checkpoint）；cursor' 不确认任何未交出的留存记录或缺口：At 流不越过这批交出的最后一个位置，Start{from} 流取交出的最后一个位置与 from 前一位置中较大者
   Note over H: 解释①：nodes 增量 DAG，cutoff<br/>解释②：rules fold → On / Require / Expire / Emit
   H-->>C: Output{effects, derivations, checkpoint{bytes, state_version}}
   alt Output 超预算（意图速率 / 状态大小）
@@ -84,15 +84,15 @@ sequenceDiagram
 stateDiagram-v2
   state "等待所引用集成来源的声明版本" as WAIT
   state "结束宿主执行中" as DRAIN
-  state "装载中：有最终被拒的项即失败（不读文件）；否则核对程序值与 Applied 所钉的内容 hash，再做声明校验，成立后核对所引用原生 op 的制品 hash，都成立才以同一份值 Load" as Loading
+  state "装载中：有最终被拒的项即失败（不读文件）；否则核对程序值与 Applied 所钉的内容 hash，再做声明校验，成立后核对所引用原生 op 的制品 hash，再把核对过的内容交给子系统，被接受才以同一份值 Load" as Loading
   [*] --> Loading : load_program 读到的程序值通过结构校验（不通过只得控制记录 Rejected，没有 Applied，不进入本图）之后 append 的 Applied（id 不在活动集合里：以值记下成员事实：装载 principal、内容 hash、预算、接受的 state_version 集合、facts 声明的执行事实输入、值树引用的原生 op 名集合、输出契约（outputs 各项的 (name, 值类型)）；同事务建立程序订阅（按各输入声明的起点的全部 cursor：Tail 为 At，Origin 为 Start{from}；与观察输入的订阅项），并为新成员的每条程序流开新 epoch：Gap{Source, start}）/ 启动第 5 步（活动集合中未被抑制的程序；不开 epoch）；按“等待的先后”：有观察项初次接纳已被最终拒绝，或所引用的集成来源都已有声明版本
   [*] --> WAIT : 同上，但没有最终被拒的项，而所引用的某个集成来源还没有任何声明版本：不拉起宿主、不 ProgramHalted，留在活动集合里
   WAIT --> Loading : 该集成来源第一次握手成功、append 声明版本，待接纳的项随之转为接纳或被拒；有项被拒（最终的拒绝），或所引用的集成来源都已有声明版本
   WAIT --> Unloaded : unload_program 的 Applied（没有宿主，跳过第 1–3 步，直接 append）
   WAIT --> Loading : 替换的 Applied（没有宿主，跳过第 1–3 步，直接 append；沿用规则同 DRAIN→Loading），新成员有最终被拒的项或所引用的集成来源都已有声明版本
   WAIT --> WAIT : 替换的 Applied（同上），但新成员没有最终被拒的项，所引用的某个集成来源还没有声明版本：新成员等待，不拉起宿主
-  Loading --> Running : hash 相符、声明校验成立、所引用原生 op 的制品与其安装 Applied 所记 hash 相符（核对过的内容交给子系统）→ Load(program, checkpoint?, budget) → Loaded{state_version}；program 就是核对过、校验过的那一份值；checkpoint 是本成员可交回的（Applied 沿用的，或其后持久化的最近一个），其 state_version 总在本成员接受的集合内，Load 不比对；宿主进程的解释器不再校验
-  Loading --> Halted : 依次判定：有观察项初次接纳已被最终拒绝（如来源未登记或 QuotaExceeded，即使另有来源还没有声明版本）→ LoadRejected，不读程序值文件；否则程序值内容 hash 与 Applied 所钉不符（load_program 生效时即结构校验读到的那一份，启动第 5 步与等待之后从文件读）→ ContentUnavailable，不做声明校验；否则声明校验不成立（各输入声明与所引用集成来源的最近声明不符（流、字段与类型标签、await-all 的覆盖证据）；执行事实输入的作用域不成立；含 Pooled 或原生 op 而本实例没有子系统、原生 op 引用所指名的 op 不在已安装 op 集合里或所声明的签名与之不符、或前置条件不满足）→ LoadRejected(reason)；否则某个所引用原生 op 的制品文件读不到或与其安装 Applied 所记 hash 不符 → NativeArtifactUnavailable（不是 Trap，宿主未拉起）；都是同事务 ProgramHalted{…} + ProgramFailed
+  Loading --> Running : hash 相符、声明校验成立、所引用原生 op 的制品与其安装 Applied 所记 hash 相符，核对过的内容交给子系统并被接受（只为这次宿主执行）→ Load(program, checkpoint?, budget) → Loaded{state_version}；program 就是核对过、校验过的那一份值；checkpoint 是本成员可交回的（Applied 沿用的，或其后持久化的最近一个），其 state_version 总在本成员接受的集合内，Load 不比对；宿主进程的解释器不再校验
+  Loading --> Halted : 依次判定：有观察项初次接纳已被最终拒绝（如来源未登记或 QuotaExceeded，即使另有来源还没有声明版本）→ LoadRejected，不读程序值文件；否则程序值内容 hash 与 Applied 所钉不符（load_program 生效时即结构校验读到的那一份，启动第 5 步与等待之后从文件读）→ ContentUnavailable，不做声明校验；否则声明校验不成立（各输入声明与所引用集成来源的最近声明不符（流、字段与类型标签、await-all 的覆盖证据）；执行事实输入的作用域不成立；含 Pooled 或原生 op 而本实例没有子系统、原生 op 引用所指名的 op 不在已安装 op 集合里或所声明的签名与之不符、或前置条件不满足）→ LoadRejected(reason)；否则某个所引用原生 op 的制品文件读不到或与其安装 Applied 所记 hash 不符 → NativeArtifactUnavailable（不是 Trap，宿主未拉起）；否则核对过的内容交给子系统而未被接受（子系统不在、联系不上或拒绝）→ LoadRejected(NativeHandoverFailed)（宿主未拉起）；都是同事务 ProgramHalted{…} + ProgramFailed
   Running --> Running : Advance 循环（D4.1）
   Running --> Halted : 超预算 / Output 的 checkpoint 版本不在本成员接受的集合内（视同 trap）/ trap（宿主异常退出）→ Output 不落，同事务 ProgramHalted + ProgramFailed，提交后终止宿主、OS 确认退出后清除登记
   Running --> Stopped : 受控停止第 2 步 → Unload；活动集合、cursor 与引用不变，下一实例第 5 步重新 Load
@@ -119,7 +119,7 @@ stateDiagram-v2
 - `Halted` 是失败抑制：它由控制流上的执行事实 `ProgramHalted` 承载，跨核心重启保持，不自动恢复——超预算是程序作者的问题，由控制面 principal 决定是否重装；其他程序、账户、核心不受影响。`ProgramFailed` 只供展示。
 - 活动集合是控制流上 `load_program`/`unload_program` 的 `Applied` 的 fold；改装载清单或程序值文件不改变它，内容与所钉 hash 不符时不装载。替换是一个动作、一条 `Applied`，中间没有程序不在集合里的时刻。
 - 宿主执行在程序成员与核心实例两者之内：`Stopped`（受控停止）与崩溃都只结束宿主执行，成员、cursor 与 `Checkpoint` 引用不变；`unload_program` 与替换先经“结束宿主执行中”结束它，再写结束成员的 `Applied`；没有宿主的成员（等待所引用集成来源的声明版本、`Halted`）跳过这一步。
-- 装载期校验分两段（§8.6 装载期校验）：结构校验只看程序值，在 `load_program` 读到它时、任何 `Applied` 之前由程序宿主元素做，不成立只有控制记录 `Rejected`（输入来源是 `Program(_)`、两个输入同在一条流上、`facts` 里同一来源的起点不同即在此被拒），本图没有这个成员；声明校验在 `Applied` 之后、`Load` 之前做（“装载中”），原生 op 按控制流上的已安装 op 集合核对（§8.7 原生 op 的安装）。等待声明版本不是失败：没有 `ProgramHalted`。先后是：有观察项初次接纳已被最终拒绝（它以“被拒”留在程序订阅里，重启后结论不变）即失败，不等，也不读程序值文件；否则某个所引用的集成来源（含只被 `facts` 引用的来源）在采纳集合里而还没有声明版本就等待，不拉起宿主（本图各转移里的“所引用的集成来源还没有声明版本”都指这种来源）；都不是才核对程序值的内容 hash（不符即 `ContentUnavailable`），再对这一份值做声明校验；成立之后按各 op 的安装 `Applied` 重读、核对所引用原生 op 的制品（不符即 `NativeArtifactUnavailable`，它在任何代码执行之前，不是 trap；§8.7 原生 op 的执行），都相符才把核对过的制品内容交给子系统，并以这一份程序值 `Load`。任何开始新成员的 `Applied`（首次装载、替换、卸载后再装载）以及启动第 5 步的每次装载都按这一先后。程序订阅跨替换留下，由 `unload_program` 的 `Applied` 结束。
+- 装载期校验分两段（§8.6 装载期校验）：结构校验只看程序值，在 `load_program` 读到它时、任何 `Applied` 之前由程序宿主元素做，不成立只有控制记录 `Rejected`（输入来源是 `Program(_)`、两个输入同在一条流上、`facts` 里同一来源的起点不同即在此被拒），本图没有这个成员；声明校验在 `Applied` 之后、`Load` 之前做（“装载中”），原生 op 按控制流上的已安装 op 集合核对（§8.7 原生 op 的安装）。等待声明版本不是失败：没有 `ProgramHalted`。先后是：有观察项初次接纳已被最终拒绝（它以“被拒”留在程序订阅里，重启后结论不变）即失败，不等，也不读程序值文件；否则某个所引用的集成来源（含只被 `facts` 引用的来源）在采纳集合里而还没有声明版本就等待，不拉起宿主（本图各转移里的“所引用的集成来源还没有声明版本”都指这种来源）；都不是才核对程序值的内容 hash（不符即 `ContentUnavailable`），再对这一份值做声明校验；成立之后按各 op 的安装 `Applied` 重读、核对所引用原生 op 的制品（不符即 `NativeArtifactUnavailable`，它在任何代码执行之前，不是 trap；§8.7 原生 op 的执行），都相符才把核对过的制品内容交给子系统，只为这次宿主执行（交出未被接受即 `LoadRejected(NativeHandoverFailed)`，同样不拉起宿主），被接受才以这一份程序值 `Load`。任何开始新成员的 `Applied`（首次装载、替换、卸载后再装载）以及启动第 5 步的每次装载都按这一先后。程序订阅跨替换留下，由 `unload_program` 的 `Applied` 结束。
 - 没有装载时的 `Reset`：本成员可交回的 `Checkpoint` 总被本成员接受（替换的 `Applied` 比对沿用的，`Output` 检查其后持久化的，§8.6 状态迁移）；`ProgramReset` 只在不沿用的替换 `Applied` 事务里出现。
 - 程序流的 epoch 由开始不沿用旧状态之成员的 `Applied` 开出，与该 `Applied` 同一事务，只开在这个新成员的程序流上：让 id 进入活动集合的 `load_program`（`[*]` 与 `Unloaded` 出发的那条）为 `start`，不沿用的替换为 `program_upgrade`；该 id 下第一次被声明的流，这条 gap 无前驱，不论原因是哪一个。每条程序流的 epoch 到该流下一条开 epoch 的 `Gap{Source}` 为止，即同一 id 此后第一个声明该流、不沿用旧状态的成员开始时；开始的成员不声明的流不写记录，epoch 照旧开着。卸载、沿用的替换（要求输出契约相同）、`Stopped` 与崩溃之后的重新 `Load` 都不开也不结束它。装载开 epoch 而不是 `Reset`，没有 `ProgramReset`（§8.6 程序流的 epoch）。
 - 成员结束之后，它已提交的 `EffectRequest` 仍按开始它的 `Applied` 所记事实分派与重派（D4.3）。

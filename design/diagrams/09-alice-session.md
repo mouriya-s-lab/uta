@@ -144,7 +144,7 @@ flowchart LR
   A2 --> F2["凭据链 文件 → 核心 → 集成；该集成新 session_seq<br/>各流强制新 epoch Gap{Source, credential_rotated}"]
   A3 --> F3["终止并重新拉起集成进程；新 session_seq；各流按游标证明决定续接或新 epoch"]
   A4 --> F4["宿主 Load / Unload（D4.2）<br/>load_program，id 不在活动集合里：新成员每条程序流 Gap{Source, start}，不是 Reset<br/>load_program，id 已在活动集合里：沿用的替换（非 cold_start、输出契约相同、无旧 Checkpoint 或接受其 state_version）不写程序流；不沿用的替换：ProgramReset{cold_start 为 Operator，否则 Replace} + 新成员每条程序流 Gap{Source, program_upgrade}<br/>新成员不声明的流不写记录；unload_program 不写程序流，epoch 都不结束"]
-  A4n --> F4n["install：读 artifact（原生计算制品目录里的文件；读不到或不合法 → Rejected），Applied 以值记下 op 名、声明的签名、artifact 引用与内容 hash；同名已安装 → Rejected(AlreadyInstalled)<br/>remove：活动成员的 Applied 所记原生 op 名集合含它 → Rejected(InUse)；未安装 → Rejected(NotInstalled)<br/>已安装 op 集合 = 这些 Applied 的 fold，声明校验读它（§8.7）；不看本实例有没有子系统<br/>每次拉起引用它的宿主之前，核心按这条 Applied 重读制品、核对 hash，不符 → ProgramHalted{NativeArtifactUnavailable}（D4.2）"]
+  A4n --> F4n["install：读 artifact（原生计算制品目录里的文件；读不到或不合法 → Rejected），Applied 以值记下 op 名、声明的签名、artifact 引用与内容 hash；同名已安装 → Rejected(AlreadyInstalled)<br/>remove：活动成员的 Applied 所记原生 op 名集合含它 → Rejected(InUse)；未安装 → Rejected(NotInstalled)<br/>已安装 op 集合 = 这些 Applied 的 fold，声明校验读它（§8.7）；不看本实例有没有子系统<br/>每次拉起引用它的宿主之前，核心按这条 Applied 重读制品、核对 hash，不符 → ProgramHalted{NativeArtifactUnavailable}；相符的内容只为这次宿主执行交给子系统，未被接受 → ProgramHalted{LoadRejected(NativeHandoverFailed)}（D4.2）"]
   A5 --> F5["写快照（仅加速重建，不改 append-only）"]
   A6 --> F6["D8.2"]
   A7 --> F7["消费方订阅所涉各流的 cursor 都是 At{pos} 且 to 低于 pos：退回为 At{to}（to 算作已确认）；from 高于新 cursor 的未确认投递缺口同一次写删除；此后重投，重新跳过时再记缺口，被删的段按逐段规则重新成为 compacted 缺口（显式控制动作，不是恢复路径）<br/>任一流的 cursor 是 Start{from} → Rejected(CursorNotConfirmed)；to 不低于 pos → Rejected(NotBackward)；被拒时不改任何 cursor 与缺口"]

@@ -158,6 +158,7 @@ flowchart LR
 | `remove_native_op` 的 `Rejected(NotInstalled)` | 没有安装这个组件 |
 | `remove_native_op` 的 `Rejected(InUse)` | 仍有策略程序使用该组件（含已停止或正在等待启动的），未移除；先卸载这些策略程序，或更新为不使用它的版本 |
 | `ProgramHalted{NativeArtifactUnavailable}` | 策略程序已停止，未启动：它使用的组件文件在安装之后被改动或已不存在（附组件名）；恢复安装时的组件文件后重新装载策略程序，或卸载它、移除并重新安装该组件 |
+| `ProgramHalted{LoadRejected(NativeHandoverFailed)}` | 策略程序已停止，未启动：计算子系统此刻不可用，或没有接收它使用的组件（附组件名）；计算子系统恢复后重新装载策略程序 |
 | 订阅 `QuotaExceeded` | 订阅超出该来源的数量上限（附上限） |
 | 订阅待接纳 | 已登记，来源尚未连接过；来源首次连接后生效或被拒 |
 | 订阅由待接纳转被拒 | 来源连接后不提供所订数据，订阅未生效 |

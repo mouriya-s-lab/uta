@@ -20,7 +20,7 @@ stateDiagram-v2
   state "程序 Checkpoint 的 cursor" as C {
     state "已登记" as C1
     state "已解除" as C2
-    [*] --> C1 : 程序进入活动集合后的第一个 Checkpoint 与 cursor 同事务持久化（此前没有登记）
+    [*] --> C1 : 程序进入活动集合后的第一个 Checkpoint 与 cursor 同事务持久化（此前没有登记；登记时可能已在边界之下，照样阻止推进）
     C1 --> C1 : 下一个 Checkpoint 持久化即替换；沿用旧状态的替换原样转给新成员；宿主 Unload、受控停止、失败抑制都不解除
     C1 --> C2 : unload_program 的 Applied，或不沿用旧状态的替换的 Applied（都在宿主 OS 确认退出之后 append；最近 Checkpoint 保留作审计）
   }
@@ -35,7 +35,7 @@ stateDiagram-v2
 读法：
 
 - 登记方是核心、消费者不手工登记；解除随持有者生命周期自动发生。
-- 解除后的历史引用仍可读作审计；落到边界之下读得 `BeyondRetention`，不阻止压缩。
+- 解除后的历史引用仍可读作审计；已解除的引用落到边界之下读得 `BeyondRetention`，不阻止压缩。未解除的引用即使已在边界之下（程序第一个 `Checkpoint` 登记的 cursor 可能如此）也照样阻止边界推进，直到被取代或解除（§2.4 不变量）。
 - `Undetermined` 停等时，它的 `basis` 与取证引用钉住保留边界；解除随该尝试等待结束自动发生——任一入口（`Attributed Found`、`ReconciliationReopened` 后的自动取证、`abandon` 之后 IO 壳 append 的 `Abandoned`，D6.2）都行，没有绕过记录的旁路。
 
 核出：无。
@@ -58,7 +58,7 @@ flowchart TB
   WIN -->|"否"| RJ2["Rejected(InsideWindow{bound})"]
   WIN -->|"是，且各流都通过"| APPLY["写各流新边界；控制记录 Applied(position)"]
   APPLY --> COMPACT["compact_below_retention：仅观察侧 RetractableDelta 表，逐流按该流保留规则删边界之下，只删不改<br/>一般观察流：边界之下全部删去<br/>健康流：只删被同键后续记录取代的，每键最新一条留作基线<br/>程序流：只删被同一流 epoch 里后续值记录取代的值记录，每个流 epoch 最新一条值记录原样留作基线（撤回部分照留），开 epoch 的 Gap{Source} 留下<br/>执行 J 没有保留边界：不压缩、不删除"]
-  COMPACT --> INV["不变量 §6.9-3：所有已登记引用 ≥ 其所在观察流的边界"]
+  COMPACT --> INV["不变量 §6.9-3：边界推进不越过所在观察流已登记引用的最早位置；程序 Checkpoint 的 cursor 引用登记时可能已在边界之下（第一次提交的 cursor 为 from 的前一位置或一段被删位置的末位），此后阻止推进直到下一个 Checkpoint 取代它；未登记者得 BeyondRetention"]
 ```
 
 读法：边界按观察流分别维持、只前进（`LogPosition` 只在同一 `StreamId` 内有序）；执行事实永不删除；派生历史的 `DELETE` 只在各流边界之下，留下的记录一条也不改写。健康流与程序流是状态值的流，按键 / 按流 epoch 留基线，所以任一 `as_of ≥ 边界` 的 fold 与压缩前相等；从边界订阅的消费者 cursor 为 `Start{边界}`，每次挂接先收到边界之下留下的记录（前导），第一次覆盖整段前导的确认之前断连或崩溃就再收一遍，确认之后成为 `At`，前导之下被删的段不是它的损失（§4.2 cursor 与确认）；cursor 为 `At` 而落在边界之下的订阅者得到的 `Gap{Delivery, compacted}` 只覆盖被删去的位置（每一段连续被删的位置一项），各段之间的基线照常按位置投递（§2.4、§4.2）。程序流的 fold 取最新一条值记录的正贡献，撤回部分只指名被取代的位置，所以基线指名已删记录不影响结果：新 fold、已折入被删记录的订阅者与收到压缩缺口的订阅者，收到基线之后都持有同一个值（§4.1 程序流的 fold）。
