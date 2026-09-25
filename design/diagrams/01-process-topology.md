@@ -189,7 +189,6 @@ flowchart LR
   subgraph T["SQLite 表"]
     OJ[("观察 Journal<br/>RetractableDelta，可压缩")]
     EJ[("执行事实 Journal<br/>纯 append")]
-    RS[("RuleState")]
     SUB[("订阅表 / cursor")]
     CAP[("能力证据")]
     CK[("Checkpoint + 程序 cursor")]
@@ -204,7 +203,6 @@ flowchart LR
   IOR --> OJ
   TK --> EJ
   STS --> EJ
-  STS --> RS
   IOE --> EJ
   ATTR --> EJ
   CTL --> EJ
@@ -247,7 +245,7 @@ flowchart LR
 | 同一 SQLite 事务内必须一起提交 | 依据 | 崩在中途的后果（§9.2） |
 |---|---|---|
 | `Close(Prepared(position))` + `Prepared` | §6.2、§7.4 | #1：二者皆无，单据仍 `AwaitingDecision` |
-| Decision / `Outcome` / `Rejection` 记录 + `RuleState` 更新 | §7.4 | 链步未发生，重启按 `RuleState` 重跑该步 |
+| Decision / `Outcome` / `Rejection` 记录 | §7.4 | 链步未发生，重启按记录重新求值该步（`RuleState` 由记录 fold 出，§6.3） |
 | 程序写处理器的 `Draft` + `SubmitForDecision` + `EffectResponse{Drafted}` | §6.1 | #21：无 `EffectResponse` → 重派开单 |
 | 读处理器的结果项与读结论记录 / `Gap{Channel}` + `EffectResponse{Concluded / Unavailable}` | §6.1 | #21：无 `EffectResponse` → 重新执行一次 |
 | 写调用（`submit` / `cancel`）的 `Ack`：`VenueAccepted`（含 `Evidence`）+ 该回应的观察记录（订单状态；每笔可识别执行一条成交记录）+ 该调用的计数健康观察 | §6.5 记录模型、§8.4 | #5：视为无后继 → `Undetermined` → by-key 取证重得同一状态 |

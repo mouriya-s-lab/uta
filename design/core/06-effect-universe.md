@@ -10,7 +10,7 @@
 
 ```rust
 enum DecisionStep { On(Pattern, Box<DecisionStep>), Emit(EffectRequest), Require(Guard, OnFail), Expire(Deadline, Box<DecisionStep>) }
-Emit(EffectRequest { effect_kind: EffectKind, payload: Bytes, basis: Basis, key: Option<Key> })
+Emit(EffectRequest { effect_kind: EffectKind, payload: Bytes, basis: Basis })
 ```
 
 ### 规则
@@ -34,7 +34,7 @@ Emit(EffectRequest { effect_kind: EffectKind, payload: Bytes, basis: Basis, key:
 **写处理器：**
 
 - 请求被当作 Intent，进入单据 → STS → IO 壳的完整效应路径；结果是执行事实与决议记录。
-- **构造**：写处理器从请求载荷构造意图，只要求意图的锚点（§8.1）：`WriteLaneKey`、交易协议的操作种类之一、`basis`，撤单 / 改单还要 `target: VenueRef | IdemKey`；平仓的 `target: PositionRef` 由核心从 `basis` 所指的持仓观察记录构造（§6.2）。锚点构造不出（缺锚点、操作种类不在交易协议的封闭集合内、平仓所指的持仓观察记录取不出 `PositionRef`，§6.2）即不是意图，不开单，记 `NotDrafted(Malformed{reason})`（见下）。参数（守卫字段与载荷）不在构造时判定：参数是否合规是单据 fold 的状态，送审时由输入约束步否决（§6.2、§6.3），所以程序发出的非法参数与人起的非法参数得到同一对记录（意图 + 否决，Q8）。[设计]
+- **构造**：写处理器从请求载荷构造意图，只要求意图的锚点（§8.1）：`WriteLaneKey`、交易协议的操作种类之一、`basis`，撤单 / 改单还要 `target: VenueRef | IdemKey`；平仓的 `target: PositionRef` 由核心从 `basis` 所指的持仓观察记录构造（§6.2）。锚点构造不出（缺锚点、操作种类不在交易协议的封闭集合内、`IdemKey` 不是该作用域内某次尝试的 `SendBarrier` 记为订单键的键、平仓所指的持仓观察记录取不出 `PositionRef`，§6.2）即不是意图，不开单，记 `NotDrafted(Malformed{reason})`（见下）。参数（守卫字段与载荷）不在构造时判定：参数是否合规是单据 fold 的状态，送审时由输入约束步否决（§6.2、§6.3），所以程序发出的非法参数与人起的非法参数得到同一对记录（意图 + 否决，Q8）。[设计]
 - **负责人**：写处理器以程序的**装载 principal**（装载该程序的人或服务账户）为 `responsible` 开单（§6.2）。程序本身不是 principal。
 - 该 principal 的授权范围决定单据能否不经人工直接放行（授权步，§6.3）。
 - 开单的 `Draft.basis` 含该 `EffectRequest` 记录的位置：执行事实侧位置作因果依据（§5.1）。
@@ -51,7 +51,7 @@ Emit(EffectRequest { effect_kind: EffectKind, payload: Bytes, basis: Basis, key:
 - 理由：观察记录可压缩（§2.4），`EffectRequest` 永存（§7.5）；“是否已处理”必须能从与请求同寿命的事实重建。
 - `Concluded` 引用的读结论记录落到保留边界下后，`EffectResponse` 仍成立，不钉住保留。
 - `Unhandled` 请求没有 `EffectResponse`，也不重派。
-- **程序看得到自己的响应** [设计]：程序解释②可以匹配该程序自己发出的请求的 `EffectResponse`（执行事实，属效应侧；决策半边本就是对日志的 fold）；解释①的节点不消费 `EffectResponse`。理由：未调用与 `NotDrafted` 都不产生观察记录，程序只有经响应才看得到它们，而伪造观察记录去承载它们会把效应侧结论放进观察宇宙。
+- **程序看得到自己的请求的结果** [设计]：程序解释②可以匹配该程序自己发出的请求的 `EffectResponse`，以及从它经位置可达的执行事实：`Drafted(ticket_id)` 所指单据的记录（含 `Close` 的结局；放行时 `Close(Prepared(p))` 给出尝试位置 `p`），与 `p` 这次尝试的记录（`SendBarrier`、回执、`NotSent`、`Undetermined`、`ResolutionEvidence`、`Expired`、`Abandoned`，§6.5）。它们与 `EffectResponse` 同属该程序自己的请求在效应侧留下的事实，决策半边本就是对日志的 fold，不另设输入种类或订阅。解释①的节点不消费它们。理由：未调用与 `NotDrafted` 都不产生观察记录，程序只有经响应才看得到它们，而伪造观察记录去承载它们会把效应侧结论放进观察宇宙；程序若要组合多次写（例如先撤单、确认后再下单，§6.2 改单），它自己的尝试有没有结局只能从这些事实得知。撤单的回执或 `Found` 只说明撤单请求到达，不说明目标订单已结束：目标订单的状态要从订单状态观察读（§6.6 撤单的取证）。
 
 **请求与响应的关联是引用，不是事务。** `EffectRequest` 记录随程序 `Advance` 输出持久化（§8.6），处理器在其后执行。核心重启时 fold 出**无 `EffectResponse`** 的已注册请求（§9.2 #21）：
 
@@ -93,7 +93,7 @@ Emit(EffectRequest { effect_kind: EffectKind, payload: Bytes, basis: Basis, key:
 
 ## 6.2 单据 `Ticket`
 
-> 图：D5.1 单据状态机、D5.2 意图构造与参数合规、D5.3 顺序固定链（参数合规在输入约束步）、D5.5 两层对账与检查目录重算（`design/diagrams/05-ticket-and-sts.md`）；D6.4 `Replace` 两腿计划（`06-io-shell-attempt.md`）。
+> 图：D5.1 单据状态机、D5.2 意图构造与参数合规、D5.3 顺序固定链（参数合规在输入约束步）、D5.5 两层对账与检查目录重算（`design/diagrams/05-ticket-and-sts.md`）。
 
 单据是意图形成期的抽象，它的锁 = 责任持有。
 
@@ -128,7 +128,7 @@ type AlignmentChecks<Intent> = Vec<AlignmentCheck<Intent>>;
 enum CheckResult { Aligned, Diverged(Divergence), Undecidable(Reason) }     // 输入齐全时的三种结果；Undecidable 的原因：范围内有 gap，或该流没有本项主体（该 instrument / 该持仓）的观察
 type IntentAlignment = Map<CheckName, Aligned | Diverged(Divergence) | Undecidable(Reason) | InputMissing(Set<StreamKind>)>;
 //                                                                   ^ 该项需要的输入观察侧没有（集成不提供该流）
-enum ParameterValidity { Valid, Invalid(NonEmpty<Violation>), NotSupported, SchemaMismatch, TargetNotAccepted }  // 含义见“参数合规”
+enum ParameterValidity { Valid, Invalid(NonEmpty<Violation>), CapabilityNotEstablished(Unknown | NoSession), NotSupported, SchemaMismatch, TargetNotAccepted }  // 含义见“参数合规”
 
 enum TicketAction<Intent> {
     Draft   { by: Principal, initial: Intent, basis: Basis },  // 建立单据 = 取得锁 = 声明负责
@@ -158,7 +158,7 @@ enum TicketAction<Intent> {
 | `AwaitingDecision` | `Close(Expired \| DecisionRejected)` | `Closed` |
 | `Drafting` \| `AwaitingDecision` | `Transfer` | 同态 |
 
-- `Closed` 无出边：之后任何 `TicketAction` 被拒，含再次 `Close`。`Prepared` 之后的命运属 Attempt 链（§6.5），不再经单据。
+- `Closed` 无出边：之后任何 `TicketAction` 被拒，含再次 `Close`。`Prepared` 之后的命运属尝试（§6.5），不再经单据。
 - `AwaitingDecision` 期间 `Revise` 被拒：决定绑定的 current_version 不能变（C11）。
 
 **触发者：**
@@ -183,27 +183,29 @@ IO 壳不知道单据的存在。
 
 每个订单意图，无论来自解释层代开的会话还是程序的写处理器，都按**目标来源为该操作声明的意图参数 schema** 判定参数是否合规，在任何 `Prepared` 之前。
 
-- **schema 从哪来。** 每个 `Supported` 的写能力 `(scope, OperationKind)` 在其 `CapabilityProof` 里声明它接受的意图参数 schema 身份 `(schema_id, schema_version)`（§2.2、§8.1）：交易协议该操作种类的公共意图 schema（随 IDL 发布），或该集成以它为基础只增加字段与约束的扩展 schema，因而合扩展者必合公共者。schema 覆盖意图的全部参数：已注册的守卫字段与载荷（订单类型、time-in-force、来源专有选项等没有处理器读的参数）。
+- **schema 从哪来。** 每个 `Supported` 的写能力 `(scope, OperationKind)` 在其 `CapabilityProof` 里声明它接受的意图参数 schema 身份 `(schema_id, schema_version)`（§2.2、§8.1）：交易协议该操作种类的公共意图 schema（随 IDL 发布），或该集成以它为基础只增加字段与约束的扩展 schema，因而合扩展者必合公共者。schema 覆盖意图的全部参数：已注册的守卫字段与载荷（订单类型、time-in-force、来源专有选项等没有处理器读的参数）。判定读的是该来源的**会话有效声明**（§7.3 集成会话：只在该来源会话 `Established` 时存在，等于这一会话的声明版本及其 `CapabilityObserved` 的 fold），不读离线时留下的最近声明。
 - **schema 语言。** JSON Schema，与配置文件的 schema 同一语言（§7.6），钉在一个 draft 版本与一个关键字子集上，`format` 只作注解不作断言；schema 与一个参考校验器随 IDL 发布，两个实现对同一参数得出同一结论由此可测（§10.5 #30、#31）。类型相关的必填与互斥（限价单要限价、追踪单的偏移量与百分比二选一、某来源只对市价单接受名义金额、某来源不支持的选项被禁止）写成 schema 自身的条件约束；合规与否只由该语言的校验语义决定，没有第二道由实现各自补写的语义校验。来源相关的限制由该来源的 schema 选定，不是交易协议的全局事实。
 - **意图带身份。** 每版意图带它的参数所依据的 schema 身份，版本 hash 覆盖它。下游的参数在构建期按某个 schema 版本生成（`design/downstream/design.md` 第 4 节），程序按它读到的声明写参数；带身份使“按哪一版写的”不靠猜。
-- **守卫字段的数量规则**（交易协议注册的字段，不随来源变）：下单与改单的新单部分，`quantity` 与 `notional` 恰有一个，有限且为正；平仓只可带 `quantity`（有限且为正），不带 `notional`；撤单两者都不带。C10 的“数量 / 名义有限且为正”即此。改单另声明新单的**数量口径**：绝对量（新单就按意图所带的 `quantity` 或 `notional` 下）或剩余量（只与 `quantity` 合法；新单数量 = 意图的 `quantity` − 目标订单终态观察的 `cumulative_filled_quantity`，≤ 0 即不下新单，§6.5）。
+- **守卫字段的数量规则**（交易协议注册的字段，不随来源变）：下单与改单的新单部分，`quantity` 与 `notional` 恰有一个，有限且为正；平仓只可带 `quantity`（有限且为正），不带 `notional`；撤单两者都不带。C10 的“数量 / 名义有限且为正”即此。改单另带新单的**数量口径**：绝对量（改后的订单按意图所带的 `quantity` 或 `notional`）或剩余量（只与 `quantity` 合法：改后的订单按意图的 `quantity` 减去原单已成交的量）。口径的含义由上游在改单的那一次写里按它自己的成交记录落实（见“交易协议”改单）；核心只按 schema 校验口径是否被接受，不据它计算任何数量。
 - **结果是单据 fold 的状态** `parameter_validity`：
   - `Valid`；
   - `Invalid(violations)`：参数不合该 schema 或违反数量规则，逐项列出违反之处；
-  - `NotSupported`、`SchemaMismatch`、`TargetNotAccepted`：该版本对目标来源的写能力不可执行，三者依次是下文“可执行性”的三个条件不成立，原因可区分：来源不提供这个操作（没有补救）；按新版 schema 重写参数即可；换一种目标身份（例如按 venue 订单身份）另起或改写即可。
-  - 从 `Draft` 起即求值，每次 `Revise` 对完整的新版本重算（不只校验 diff），能力证据变化时重算；负责人与审批人经读模型 `tickets` 看得到（§8.5）。
-- **在哪里否决。** 输入约束步（§6.3）无条件读取它：不是 `Valid` 即 `Rejection`（带违反项，或 `NotSupported` / `SchemaMismatch` / `TargetNotAccepted`）+ `Close(DecisionRejected)`。它不是检查项，策略不能把它降为 advisory。草稿可以带着不合规的参数保存与修改，送审之前没有任何外部写；不合规的版本一经送审必得一对记录：意图与否决（Q8）。放行之后到发送之间可执行性若变，发出前门再核对一次（§6.5）。
+  - `CapabilityNotEstablished(Unknown | NoSession)`：可执行性此刻无从判定：会话有效声明对该 `(scope, OperationKind)` 为 `Unknown`，或该来源此刻没有已建立的会话（没有会话有效声明）。它不是来源的否定，是非终结状态：单据等待（§6.3 输入约束步），会话建立或能力证据变化时重算，出口是等来确立的能力，或 `deadline` 到期（过期步）；
+  - `NotSupported`、`SchemaMismatch`、`TargetNotAccepted`：会话有效声明已确立，而该版本对它不可执行，三者依次是下文“可执行性”的三个条件不成立，原因可区分：来源声明不提供这个操作（`Unsupported`，没有补救）；按新版 schema 重写参数即可；换一种目标身份（例如按 venue 订单身份）另起或改写即可。
+  - 从 `Draft` 起即求值，每次 `Revise` 对完整的新版本重算（不只校验 diff），能力证据变化与该来源会话进入或离开 `Established` 时重算；负责人与审批人经读模型 `tickets` 看得到（§8.5）。
+- **在哪里否决。** 输入约束步（§6.3）无条件读取它：`Invalid`、`NotSupported`、`SchemaMismatch`、`TargetNotAccepted` 即 `Rejection`（带违反项或原因）+ `Close(DecisionRejected)`；`CapabilityNotEstablished` 使单据停在输入约束步等待，不产生记录。它不是检查项，策略不能把它降为 advisory。草稿可以带着不合规的参数保存与修改，送审之前没有任何外部写；已确立为不合规的版本一经送审必得一对记录：意图与否决（Q8）。放行之后到发送之间可执行性若变，发出前门再核对一次（§6.5）。
 - **核心仍不解释载荷。** 这是协议输入边界上的形状校验：核心按 schema 判定合不合规，不读取载荷里的值参与任何计算；没有处理器读的参数校验之后原样交给集成（§2.1）。意图参数 schema 是 UTA 的契约，不是上游请求格式。
-- **构造不出的不是意图。** 缺锚点（`WriteLaneKey`、操作种类、`basis`；撤单 / 改单的 `target`）、操作种类不在交易协议的封闭集合内、`IdemKey` 目标不恰是该作用域内一条本地 `SendBarrier` 记为订单键的键（没有这样的腿，或有不止一条；见“交易协议”订单身份来源之二），或平仓所指的持仓观察记录取不出合规的 `PositionRef`（平仓的 `target` 由核心从该记录构造，见“交易协议”），意图构造不出，不开单：会话的 `draft` 得 `Rejected(Malformed)`、不 append 任何记录（与畸形记录在入口被拒同理，§2.1）；程序的请求得 `EffectResponse{NotDrafted(Malformed)}`（§6.1）。
+- **构造不出的不是意图。** 缺锚点（`WriteLaneKey`、操作种类、`basis`；撤单 / 改单的 `target`）、操作种类不在交易协议的封闭集合内、`IdemKey` 目标不是该作用域内某次尝试的 `SendBarrier` 记为订单键的键（键由核心按尝试单射铸造，至多对应一次尝试，§6.5；见“交易协议”订单身份来源之二），或平仓所指的持仓观察记录取不出合规的 `PositionRef`（平仓的 `target` 由核心从该记录构造，见“交易协议”），意图构造不出，不开单：会话的 `draft` 得 `Rejected(Malformed)`、不 append 任何记录（与畸形记录在入口被拒同理，§2.1）；程序的请求得 `EffectResponse{NotDrafted(Malformed)}`（§6.1）。`revise` 交来的下一版构造不出时同样得 `Rejected(Malformed)`：不 append，单据与其 `current_version` 不变。
 
-理由：程序不可信、会输出非法值（H2），只在解释层校验就留下程序这条绕过口；而参数到了集成才被发现不合规，集成只能在 `SendBarrier` 之后本地拒绝，按契约记 `NoResponse` → `Undetermined`（§8.3），一笔确未发出的单就占住 lane、要人工决议。参数合规作为单据状态，既让负责人在草稿期就看到问题，又让所有来源在同一步得到同一对记录。
+理由：程序不可信、会输出非法值（H2），只在解释层校验就留下程序这条绕过口；而参数到了集成才被发现不合规，集成只能在 `SendBarrier` 之后不发，返回 `NotSent`（§8.3）：审批人已批准、`SendBarrier` 已在、冷却已计时，负责人却要到那时才知道这一版注定发不出。参数合规作为单据状态，既让负责人在草稿期就看到问题，又让所有来源在同一步得到同一对记录。能力未确立单列为等待而不是 `NotSupported`：来源没有说“不提供”，把 `Unknown` 或离线记成来源的否定，就是替来源写了一条它没说过的结论（§0.1 权威源头与生命周期）。
 
 不选：
 
 - **只在解释层按生成的参数校验**：程序发出的意图绕过它（H2）。
 - **作为一项检查（`AlignmentCheck`）**：检查项可被策略设为 advisory，且检查读观察、到放行门才生效，审批人会先批准一张注定不能发的单。
 - **在 `draft` / `revise` 时拒绝参数不合规的版本**：留不下 Q8 要求的意图与否决记录；schema 声明在草稿与放行之间还会随握手变化，构造期的判定本就要重算。
-- **交给集成拒绝**：见理由，`SendBarrier` 之后的本地拒绝只能是 `NoResponse`。
+- **交给集成拒绝**：见理由，`SendBarrier` 之后的本地拒绝只能是 `NotSent`，批准、屏障与冷却都已发生。
+- **能力未确立即否决（`Unknown` 视同 `Unsupported`，或离线时按最近声明判定）**：来源没有给出否定，否决记录却说“来源不提供”；瞬断就关闭送审中的单据。
 - **把参数约束写成组合子值树**（与规则、检查同一表示，§2.5）：值树不能同时充当下游在构建期生成参数的来源（`design/downstream/design.md` 第 4 节），同一份约束就要写两遍；JSON Schema 既是生成来源又是校验依据，钉住版本与参考校验器后两实现结论相同。
 
 ### 两层对账：偏离是状态
@@ -212,10 +214,10 @@ IO 壳不知道单据的存在。
 
 两层输入不同：
 
-- **第一层（`basis_validity`）**：只读 `basis` 位置集与各流的完备位置 / 撤回 / 保留边界（§5.2）。
+- **第一层（`basis_validity`）**：只读 `basis` 位置集与各流当前已提交的流末、撤回、保留边界（§5.2）。
 - **第二层（`alignment`）**：读 `required_inputs` 各流**当前流末**的 `fold_state`，经单向边“钩子读观察值”（§5.1）。
   - 当前流末 = 该 `StreamId` 已提交的全部记录，含 `one_shot` 与 `backfilled`，各带质量标记。
-  - 不以完备位置截断：一次性读不推进完备进度，截断就看不见为补齐输入而读来的观察（§3.4）。
+  - 不按任何完备进度截断：一次性读不推进完备进度（§4.2），截断就看不见为补齐输入而读来的观察（§3.4）。
   - 不读 `basis` 位置处的旧值，否则世界变了单据不会变。
 
 **`checked_as_of`。** 每次评估把实际消费的位置集记为 `checked_as_of: Set<LogPosition>`，随 `CheckResult` 进入单据 fold。它还写进依据它放行或否决的 Decision/`Outcome`/`Rejection` 记录（§6.3）。
@@ -226,7 +228,7 @@ IO 壳不知道单据的存在。
 **重算触发**（本身不是 `TicketAction`）：
 
 - `basis` 引用的流或 `required_inputs` 各流推进、被撤回、出现 gap；
-- 能力证据变化（也重算参数合规）；
+- 能力证据变化，该来源会话进入或离开 `Established`（也重算参数合规）；
 - 保留边界推进；
 - 策略必要项集、检查参数 / `Lag` 变化。
 
@@ -248,7 +250,8 @@ IO 壳不知道单据的存在。
 
 **能力项恒为必要项**，是唯一不由策略声明、恒求值的必要项。
 
-- 意图对当前能力证据**可执行**（交易协议“可执行性”）才 `Aligned`；否则 `Diverged`，偏离原因即不成立的那个条件（`Unsupported`/`Unknown`、声明的 schema 已不是意图所带的那个、目标种类不被接受，§2.2）。
+- 意图对会话有效声明**可执行**（交易协议“可执行性”）才 `Aligned`；已确立而不可执行即 `Diverged`，偏离原因即不成立的那个条件（`Unsupported`、声明的 schema 已不是意图所带的那个、目标种类不被接受，§2.2）。
+- 能力未确立（会话有效声明为 `Unknown`，或该来源没有已建立的会话，即参数合规的 `CapabilityNotEstablished`）时，能力项不给结论：它不是 `Diverged`，单据停在放行门前等待（§6.3 放行门），会话建立或能力证据变化时重算，`deadline` 到期由过期步关闭。
 - 策略不能把它降为 advisory：IO 壳对无能力的操作没有转移可走（§6.5）。
 
 ### 钩子
@@ -293,14 +296,14 @@ IO 壳不知道单据的存在。
 
 **操作种类是封闭集合** [设计]：`Place`（下单）、`Cancel`（撤单）、`Replace`（改单）、`Close`（平仓）。`OperationKind` 是锚点（§8.1），集合外的值构造不出意图（见“参数合规”）。加一种是轴 B（§8.3）。
 
-| 操作种类 | `target` | 守卫字段 | 可声明的腿计划（各腿的写操作，§2.2） |
+| 操作种类 | `target` | 守卫字段 | 写操作（一次上游写，§2.2） |
 |---|---|---|---|
-| `Place` | 无 | `side`、`instrument`、`quantity` 与 `notional` 恰有一个 | `[submit]` |
-| `Cancel` | 订单身份 `VenueRef \| IdemKey` | 无 | `[cancel]` |
-| `Replace` | 订单身份 `VenueRef \| IdemKey` | 新单部分同 `Place`；数量口径 | `[submit]`（原子）或 `[cancel, submit]`（两腿），见下 |
-| `Close` | 持仓身份 `PositionRef`（含 instrument） | `instrument` 由 `PositionRef` 给出，不单独填；`quantity` 可有可无 | `[submit]` |
+| `Place` | 无 | `side`、`instrument`、`quantity` 与 `notional` 恰有一个 | `submit` |
+| `Cancel` | 订单身份 `VenueRef \| IdemKey` | 无 | `cancel` |
+| `Replace` | 订单身份 `VenueRef \| IdemKey` | 新单部分同 `Place`；数量口径 | `submit`，上游以这一次写原子地完成改单，见下 |
+| `Close` | 持仓身份 `PositionRef`（含 instrument） | `instrument` 由 `PositionRef` 给出，不单独填；`quantity` 可有可无 | `submit` |
 
-表外的腿计划使握手投影不合法；撤单腿的键角色只能是 `None` 或 `RequestKey`，没有键的腿不能声明 by-key 与 replay-by-key 渠道，撤单腿不能声明 listing 与成交 / 持仓对账渠道（它们返回的记录不会归因到撤单请求，§6.6 撤单腿的取证）。
+一个操作种类恰是一次上游写：一次意图放行得一次尝试，一次尝试至多一次写调用（§6.5、§8.1）。声明表外的写操作使握手投影不合法；撤单的键角色只能是 `None` 或 `RequestKey`，不带键的写不能声明 by-key 与 replay-by-key 渠道，撤单不能声明 listing 与成交 / 持仓对账渠道（它们返回的记录不会归因到撤单请求，§6.6 撤单的取证）。
 
 **目标身份是构造前提，“仍在”是 advisory。** 带 `target` 的意图类型在构造时**必须**携带目标身份（parse-don't-validate）。无目标即构造不出意图，不需要事后规则。身份进意图的 `target`，其来源记录的位置进 `basis`（§2.3）。
 
@@ -315,20 +318,22 @@ IO 壳不知道单据的存在。
 - 构造期只保证“目标存在且与账户作用域匹配”，**不**保证 venue 此刻能按该身份撤单、改单或平仓。撤单与改单的那一半是下文的可执行性：有调用方键 ≠ 能按键撤单（F6）。
 - “原单仍在”来自观察侧 listing，按 F10 只能是 advisory，永不作为撤单放行的必要项。否则最安全的动作在 listing 滞后时被 fail-closed。
 
-**可执行性** [设计]。一版意图对目标来源的写能力**可执行**，当且仅当在当前能力证据（§7.5）中：
+**可执行性** [设计]。一版意图对目标来源的写能力**可执行**，当且仅当在该来源的会话有效声明（§7.3 集成会话；只在会话 `Established` 时存在）中：
 
 1. 该 `(WriteLaneKey, OperationKind)` 为 `Supported`；
 2. 其 `CapabilityProof` 声明的意图参数 schema 身份等于意图所带的那个；
 3. 意图以订单身份为 `target`（`Cancel`、`Replace`）时，`target` 的种类（`VenueRef` 或 `IdemKey`）在声明的 `target_kinds` 里。
 
-这是一个谓词，三处读它，只是求值时刻不同：参数合规（依次得 `NotSupported`、`SchemaMismatch`、`TargetNotAccepted`，送审即在输入约束步否决，见“参数合规”）；能力项（放行门，§6.3）；发出前门的能力条件（§6.5）。
+该来源没有会话有效声明（此刻没有已建立的会话），或第 1 条的判定为 `Unknown`，可执行性**未确立**：它不成立也不被否定，读它的三处都等待而不否决。
 
-- 理由：只有调用方键、没有 venue 订单身份的撤单（例如撤一条结果未知的下单腿，§6.4）落在只能按 venue 订单身份撤单的来源上，集成只能本地不发、返回 `NoResponse`，撤单腿自己也成了 `Undetermined`（§8.3），为让队首可判定而发的写反而多占一条阻塞头。目标种类与参数 schema 一样只回答“这一版能不能被这个来源执行”，与世界状态无关，所以与 `NotSupported` 同在参数合规里：负责人从起单就看得到，送审即关闭，不会有人先批准一张注定发不出的单。
-- 同一 `(scope, OperationKind)` 的各目标种类共用一个腿计划与各腿渠道；上游按目标种类走不同执行路径的，集成只声明它能按所声明计划执行的那些种类（会推翻它的观测见 §10.4 #20）。
+这是一个谓词，三处读它，只是求值时刻不同：参数合规（依次得 `NotSupported`、`SchemaMismatch`、`TargetNotAccepted`，送审即在输入约束步否决；未确立得 `CapabilityNotEstablished`，在输入约束步等待，见“参数合规”）；能力项（放行门，§6.3）；发出前门的能力条件（§6.5）。
+
+- 理由：只有调用方键、没有 venue 订单身份的撤单（例如撤一次结果未知的尝试投放的订单，§6.4）落在只能按 venue 订单身份撤单的来源上，集成只能不发、返回 `NotSent`（§8.3）：审批与屏障都已发生，撤单才被发现发不出。目标种类与参数 schema 一样只回答“这一版能不能被这个来源执行”，与世界状态无关，所以与 `NotSupported` 同在参数合规里：负责人从起单就看得到，送审即关闭，不会有人先批准一张注定发不出的单。
+- 同一 `(scope, OperationKind)` 的各目标种类共用一个写声明与一组取证渠道；上游按目标种类走不同执行路径的，集成只声明它能按所声明写操作执行的那些种类（会推翻它的观测见 §10.4 #20）。
 - 不选：
   - **只放在能力项**：审批人先批准，再在放行门失败；
   - **写进意图参数 schema**：`target` 是锚点，不是参数；
-  - **交给集成判断**：只能是 `NoResponse` → `Undetermined`，正是要消除的缺陷；
+  - **交给集成判断**：只能在屏障之后得 `NotSent`，正是要消除的缺陷；
   - **按订单或 instrument 细分**：没有证据需要，§10.4 #20 是会推翻它的观测。
 
 **平仓是有 venue 锁的操作种类** [设计]。
@@ -337,56 +342,50 @@ IO 壳不知道单据的存在。
 - 数量口径由该来源的意图参数 schema 定（见“参数合规”）：上游原生支持“按执行时的整个持仓平掉”，schema 才允许省略 `quantity`（全平）；上游只能下有界的 reduce-only 单，schema 要求 `quantity`（至多减少这么多）。在 `submit` 里先读持仓再按读到的数量下 reduce-only 单，保证不增仓但不是“全平”：读与执行之间持仓可能变大。
 - 集成在一次 `submit` 内可以先读后写，改变上游状态的调用至多一次（§8.1）。
 - 下游仍可以自己组装一张反向 `Place`：那是业务，UTA 对它不作不增仓的任何保证。
-- 理由：P6 与既有入口 A31/A34 把平仓列为操作；有的上游按持仓身份平仓，反向单根本不是平仓；而“平仓穿过零变成反向开仓”是与改单新腿加仓（§6.5）同类的伤害。UTA 自己的持仓观察只是对新鲜度的有界赌注（§6.8），不能担保不增仓；担保只能来自上游的锁。
+- 理由：P6 与既有入口 A31/A34 把平仓列为操作；有的上游按持仓身份平仓，反向单根本不是平仓；而“平仓穿过零变成反向开仓”是加仓一类的伤害。UTA 自己的持仓观察只是对新鲜度的有界赌注（§6.8），不能担保不增仓；担保只能来自上游的锁。
 - 不选：
   - **不设平仓操作种类，平仓一律是下游组装的反向下单**：按持仓身份平仓的上游从此不可达，不增仓的保证对 UTA 与下游都不可见。
   - **反向下单 + UTA 发送前重查持仓**：把本地观察当作权威（§0.1），读与执行之间仍可穿过零。
   - **按 instrument 在目录观察上声明“此处平仓不增仓”**：保证只对部分品种成立的来源因此仍可平那些品种；但不增仓是安全断言，放在观察上就随观察的新鲜度成立，陈旧的观察会把一次普通反向单当成有锁的平仓。保证只对部分品种成立的来源以 schema 把接受域收窄到有上游保证的请求，否则声明 `Unsupported`；接受域之外的品种由下游自己组装平仓。
 
-**改单是单一意图类型 `Replace`，不是两张单据；怎样执行由声明的腿计划定** [设计]。
+**改单是单一意图类型 `Replace`，一次上游写原子完成，否则不支持** [设计]。
 
-- `(scope, Replace)` 的 `CapabilityProof` 声明两种腿计划之一：
-  - **原子** `[submit]`：一条腿、一次 `submit`，上游以一次写完成撤旧下新（或原地改单）。数量口径由上游在这次写里落实，所以该来源的改单意图参数 schema 只接受上游原子操作能按原义执行的口径；不能按原义执行的口径不进 schema，或不声明原子计划。这只保证执行的是意图声明的口径，不是不增仓的保证：改单本可以加量。
-  - **两腿** `[cancel, submit]`：IO 壳在**同一条 Attempt 链**里解释为 `SendBarrier(cancel) → TargetTerminal（目标终态判定成立）→ SendBarrier(new)`。每条腿各自至多一次上游写、各有自己的 `SendBarrier`（§8.1 的“写意图至多一次上游写”按腿成立）。
-- 两种计划下各腿都以 `(scope, Replace)` 的能力证据为准（发出前门，§6.5），取证用腿计划里该腿自己的渠道（§6.6）。
-- 计划由 IO 壳在第一条腿过发出前门时按当时的能力证据选定，第一条腿的 `SendBarrier` 记下它所用的写操作（§6.5）；此后链按记录走，不按之后变化的声明重解。
-- 两腿计划的新单数量按意图的数量口径（见“参数合规”的数量规则）从目标终态判定选中的那条订单状态观察算出，与所据观察一起先落成执行事实 `TargetTerminal`，再过发出前门（§6.5）。这是 `>>=`：第二腿读第一腿的结果，发生在 IO 壳内，不是单据层的两次起单。
-- 撤单腿 `Undetermined` 时整条链停在对账，新单腿不发。
-- 撤单腿收敛后，链等待目标终态（转移表，§6.5）。新单腿仍要过发出前门；意图的 `deadline` 已过则记 `Expired(deadline)`，新单腿永不发出。
-- 理由：两种执行发给上游的写次数与中间态不同，外部可观测；只有集成知道上游能否一次完成，所以它是声明的值，IO 壳按值选，不由任何一方临场判断。各腿自带取证渠道，因为撤单腿与新单腿是两次不同的写：不带键的撤单无法按键回读，若与新单腿共用一张渠道表，撤单腿会在 by-key 上一直得 `Unavailable`、不换渠道（§6.6），只能等人工。
+- `(scope, Replace)` 的 `Supported` 断言的是上游自己的保证：该来源意图参数 schema 接受的每一个改单请求，上游以**一次写**完成撤旧下新（或原地改单），并按意图所带的数量口径的原义落实（剩余量口径下“原单已成交的量”由上游按它自己的成交记录在这次写里计入）。不能按原义执行的口径不进 schema；不能以一次写完成改单的来源声明 `Unsupported`。
+- 这只保证执行的是意图声明的口径，不是不增仓的保证：改单本可以加量。
+- 核心不从观察计算任何数量，也不在尝试之内编排第二次写。需要“先撤、确认原单已结束、再下”的调用方，自己把撤单与下单作为**两张单据**组合：各自走完整的单据、STS 与 IO 壳，各有自己的授权、审批、冷却与尝试。撤单的回执或 `Found` 只说明撤单请求到达了上游，**不**证明原单已结束（§6.6 撤单的取证）；原单是否结束、成交了多少，要由调用方从订单状态观察判断（程序经 §6.1 看得到自己的尝试结局与观察流），这是业务（§0.1 下单的组合方式）。
+- 理由：一次写之内的原子改单，结果是上游对这一次写的回答；拆成两次写，第二次写的时机与数量就要由核心从它手边的观察（原单终态与累计成交量的某条副本）得出，而那是上游的状态，核心只能请求并等待，不能在副本上作出结论去授权一次不可逆的写（§0.1 权威源头与生命周期）。撤了再下的时机与数量本是业务，放在调用方，它按自己的风险承担去读、去等、再下新单；新单作为一张独立的 `Place` 照常过授权、审批与冷却。
 - 不选：
-  - **把两种执行做成两个操作种类**：`OperationKind` 是锚点与策略键，负责人的意图是同一个“改单”，执行方式是上游的性质；
-  - **总是两腿**：丢掉上游的原子保证，凭空多出一段没有挂单的窗口；
-  - **由集成在一次 `submit` 里自行决定**：要么两次上游写（§8.1 禁止），要么本地不发得 `NoResponse` → `Undetermined`；
-  - **每一步都按当前声明重读计划**：两腿之间一次重握手就能把做了一半的两腿链改读成原子，对一张已撤的目标再发改单。
+  - **核心以两腿计划 `[cancel, submit]` 执行不能原子改单的来源**：新单的数量与放行只能来自核心对原单终态观察的选取，上游之后更正终态或累计量时已发出的新单收不回；新单还绕过了 `Place` 的授权、审批与冷却。会推翻这一取舍的观测见 §10.4 #19；
+  - **把两种执行做成两个操作种类**：同上，非原子的那一种仍要核心编排第二次写；
+  - **由集成在一次 `submit` 里自行先撤后下**：两次上游写（§8.1 禁止），`SendBarrier` 二分崩溃窗口的保证不再成立。
 
 **`ResolutionEvidence` 指尝试，终态与成交量是观察记录。**
 
-- 执行侧 `ResolutionEvidence` 的 found/absent 回答“我的提交到达了吗”。
-- 派生侧观察记录反映目标订单的终态与累计成交量。
+- 执行侧 `ResolutionEvidence` 的 found/absent 回答“我的这次写到达了吗”。
+- 派生侧观察记录反映订单的状态与累计成交量。
 - 二者来自同一次 venue 交互：`Found` 时同一事务落执行侧一条记录与观察侧该回应的观察记录（回应含订单状态时订单状态一条，及每笔可识别执行一条成交记录，§6.5、§8.1），`Found` 以位置引用命中的那条观察记录，`Evidence`（契约载荷与原始负载）留在执行侧（记录模型，§6.5）。
 
-**检查目录** [设计]。交易协议的第二层检查项是下表这个闭合集合（`CheckName` 按操作种类闭合，§7.7）。每项对同一组记录与同一组参数给出同一结果；数值一律按精确有理数计算（§2.6），不做舍入。“最近观察”指该流当前流末的 `fold_state` 中该主体最近的记录（见“两层对账”）；订单状态与持仓的“最近”按 §8.1“订单身份与最近观察”的规则取（订单按 `venue_order_id`，带 venue 序号而低于同 epoch 已见最大序号的记录不取代当前选中者）；订单或持仓的身份出现在两条流上为跨流冲突，依赖它的检查项为 `Undecidable`。
+**检查目录** [设计]。交易协议的第二层检查项是下表这个闭合集合（`CheckName` 按操作种类闭合，§7.7）。每项对同一组记录与同一组参数给出同一结果；数值一律按精确有理数计算（§2.6），不做舍入。“最近观察”指该流当前流末的 `fold_state` 中该主体最近的记录（见“两层对账”）；订单状态与持仓的“最近”按 §8.1“订单身份与最近观察”的规则取（只按来源给出的定序证据排序）：最近观察**顺序未确立**（同一身份有两条以上内容不同、彼此不可比的记录），或订单、持仓的身份出现在两条流上（跨流冲突），依赖它的检查项为 `Undecidable`。
 
 | 检查项 | 适用 | `required_inputs` | `Aligned` / `Diverged` / `Undecidable` | 规则文件参数 |
 |---|---|---|---|---|
 | 能力 | 全部 | ∅（读能力证据，执行事实，不是观察流） | 见“门只看必要项” | 无；恒为必要项 |
 | 可交易性 | `Place`、`Replace`、`Close` | 目录 | 该作用域该 instrument 的最近目录观察声明本操作种类“可写” / 声明“不可写” / 没有该 instrument 的目录观察 | 无；它判断的是最近观察的声明，不承诺上游此刻可写；观察陈旧的后果是上游对一笔真写的回应（通常 `VenueRejected`），不越过写边界的任何安全不变量 |
 | 敞口 | `Place`、`Replace` 的新单部分 | 持仓、余额、目录、报价 | 见下 / 情景值 > `ratio · E` / 见下 | `ratio`（> 0） |
-| 持仓在 | `Close` | 持仓 | 目标持仓的最近观察为未平，且带 `quantity` 时其绝对数量 ≥ `quantity` / 已平或数量不足 / 没有目标持仓的观察，或目标持仓身份为跨流冲突 | 无 |
-| 原单仍在 | `Cancel`、`Replace` | 订单状态 | 目标订单的最近观察为非终态 / 为终态 / 没有目标订单的观察，或目标订单身份为跨流冲突 | 无；只能 advisory（F10） |
+| 持仓在 | `Close` | 持仓 | 目标持仓的最近观察为未平，且带 `quantity` 时其绝对数量 ≥ `quantity` / 已平或数量不足 / 没有目标持仓的观察，最近观察顺序未确立，或目标持仓身份为跨流冲突 | 无 |
+| 原单仍在 | `Cancel`、`Replace` | 订单状态 | 目标订单的最近观察为非终态 / 为终态 / 没有目标订单的观察，最近观察顺序未确立，或目标订单身份为跨流冲突 | 无；只能 advisory（F10） |
 
 **敞口的情景值。** 它回答“按声明数量全部成交之后，这个 instrument 在该作用域的名义敞口占权益多少”，是按合约价格的情景估值，不是风险模型：不算 delta、不做换汇、不算保证金。
 
 - `s`：`side` 买为 +1、卖为 −1。
-- `q0`：该作用域该 instrument 的持仓在其所在持仓流上的最近观察中的带符号数量；同一 instrument 有多于一个持仓身份（多空分仓），或其持仓身份为跨流冲突（§8.1“订单身份与最近观察”），时 `Undecidable`，不净额化，也不在两条流之间任取其一。
+- `q0`：该作用域该 instrument 的持仓在其所在持仓流上的最近观察中的带符号数量；同一 instrument 有多于一个持仓身份（多空分仓），其最近观察顺序未确立，或其持仓身份为跨流冲突（§8.1“订单身份与最近观察”），时 `Undecidable`，不净额化，也不在不可比的记录或两条流之间任取其一。
 - `p`：意图参数带限价（公共意图 schema 的限价字段）时取限价，否则取最近报价观察中公共报价 schema 指定的参考价字段。
 - `m`：最近目录观察中的合约乘数。
 - `V`：意图带 `notional` 时取它，否则 `quantity · p · m`。
 - `E`：该作用域最近余额观察中的权益。
 - 情景值 = `|q0 · p · m + s · V|`；`Aligned` 当且仅当情景值 ≤ `ratio · E`。
 - `Undecidable`：任一所需主体没有观察；`p ≤ 0`、`m ≤ 0` 或 `E ≤ 0`；`p`、`V`、`E` 的币种不全相同。缺值与 gap 都不放行必要项；实际消费的观察进 `checked_as_of`。
-- `Replace` 以意图声明的新单数量作全部成交的情景，不是对实际新腿数量的上界担保：新腿数量取目标终态后才知道，原单在此期间的成交也不在 `q0` 里。
+- `Replace` 以意图声明的新单数量作全部成交的情景：剩余量口径下上游实际改成的数量不大于它；原单在改单之前的成交不在 `q0` 里，所以它不是对改后敞口的担保。
 
 **目录之外的 guard 是下游的决定者。** 目录与 STS 参数（§6.3）之外的任何规则（按策略、按组合、按外部模型的判断）由下游代码实现：一个 principal 订阅待决单据并经 `decide` 作决定（§8.5），或程序在 `Emit` 之前自己把关。其边界：
 
@@ -440,8 +439,8 @@ IO 壳不知道单据的存在。
 ```rust
 trait Rule {
     type Context;    // 本次判断依据：时钟、授权策略、能力证据
-    type RuleState;  // 规则必须记住的状态：冷却、待决集合版本、lane 阻塞头、过期
-    type Input;      // 本次输入：意图、决定、超时、回执、对账证据
+    type RuleState;  // 规则判断要用的状态：冷却、待决集合版本、lane 阻塞头、过期；每次求值由记录 fold 出，不另存（见下）
+    type Input;      // 本次输入：意图、决定、deadline 到时、回执、对账证据
     type Rejection;  // 规则层具名 enum，包装组合子层的失败 kind；无 catch-all
     type Outcome;    // 接受转换产生的事实
     fn step(ctx: &Context, st: RuleState, input: Input) -> Result<(RuleState, Vec<Outcome>), NonEmpty<Rejection>>;
@@ -465,6 +464,25 @@ trait Rule {
 
 **失败类型结构。** `NonEmpty<Rejection>` 保留依赖结构；`Validated` 式累积仅用于相互独立的校验项。[证据：fp-04 命题 8]
 
+**`RuleState` 是记录的 fold，不另存** [设计]。`step` 读的 `RuleState` 是一个值，每次求值时从执行事实与规则文件求出；`step` 的输出是记录（Decision、`Outcome`、`Rejection`、`Close`、`Prepared`），不是对某张状态表的更新。每个成员的源头：
+
+| 成员 | 源头（fold 的输入） |
+|---|---|
+| 冷却时钟 | 该 `(WriteLaneKey, instrument)` 上下单写的 `SendBarrier` 记录（见“冷却”），间隔取规则文件 |
+| 待决集合版本 | 该单据的 `TicketAction` 与 Decision 记录：`(ticket, current_version)` 有无 Decision |
+| lane 阻塞头 | 该 lane 执行事实流上各尝试的记录与 `bypass_lane` 控制记录（§6.4、§6.5） |
+| 过期 | 单据当前版本所带的 `deadline` 与核心 UTC 时钟（§2.6） |
+
+- **等待与重入。** 链的一步可以不产生记录而停下：单据保持 `AwaitingDecision`，停在该步。停下的点有三类：审批步（待 Decision）、lane 步（阻塞头集合非空）、能力未确立（输入约束步读到 `CapabilityNotEstablished`，或放行门的能力项未确立，§6.2）。停下不是一条记录，也没有等待标志；链由 STS 规则链在下列事件的事务提交之后对相关单据重新求值：
+  - 停在 lane 步：该 lane 上 `SendBarrier`、`VenueAccepted`、`VenueRejected`、`NotSent`、`Undetermined`、`ResolutionEvidence`、`Expired`、`Abandoned` 与 `bypass_lane` 控制记录的 append；
+  - 停在审批步：该单据的 Decision；
+  - 能力未确立：该来源的声明版本、`CapabilityObserved`，会话进入或离开 `Established`；
+  - 任一停下的点：该单据 `deadline` 的计时器到期（过期步对停在任一点的 `AwaitingDecision` 单据生效，见“过期步”），`reload_config(rules)`。
+- **原子性。** 一步产生的全部记录同一事务 append；放行时 `Prepared` 与 `Close(Prepared)` 同事务（§6.2）。没有“记录 + 状态表”的双写。
+- **恢复。** 重启后对每张 `AwaitingDecision` 单据按记录重新求值（§7.2 第 4 步）：停在哪一步、等什么，都由记录与当时的会话、能力、时钟重新得出。
+- 理由：这些成员都是 UTA 自己的记录的函数；另存一份就是在源头之外的副本，它的写者（STS）看不到改变它的全部输入（阻塞头由 IO 壳的记录改变），会陈旧而误放或误挡（§0.1 近处副本）。没有实测的性能需要，不加缓存；需要时按近处副本的纪律另加，写清派生、失效与刷新（会推翻它的观测见 §10.4 #29）。
+- 不选：**持久化 `RuleState` 表并与决策同事务更新**：两个源头（表与记录的 fold）并存，IO 壳 append 的记录不经 STS 就改变阻塞头，表随之陈旧，还要一个没有归属的唤醒者。
+
 ### 顺序固定链：授权 → 输入约束 → 审批 → lane → 过期
 
 规则组合分两类：
@@ -483,19 +501,20 @@ trait Rule {
 | 步 | 读什么 / 做什么 | 依据 |
 |---|---|---|
 | 授权 | 以单据 `responsible` 为主体查 `(principal, WriteLaneKey, OperationKind)` scope | §6.8；C11 |
-| 输入约束 | 读单据 fold 的 `parameter_validity`（§6.2 参数合规）；守卫字段校验：instrument 属目标账户、子账户已枚举、instrument 在策略的允许集合内（instrument 两项只对带 instrument 的操作种类，`Cancel` 不适用） | C9/C10；守卫字段处理器（§2.1） |
+| 输入约束 | 读单据 fold 的 `parameter_validity`（§6.2 参数合规）；守卫字段校验：子账户已枚举、instrument 在策略的允许集合内（允许集合只对带 instrument 的操作种类，`Cancel` 不适用） | C9/C10；守卫字段处理器（§2.1） |
 | 审批 | 策略要求人工则送审，等待带版本的 Decision；不要求人工则以 `rule_version` 为依据直接通过 | C3；H6；C11 |
 | lane | 读该 `WriteLaneKey` 的阻塞头集合；集合非空则停在本步；集合为空时判冷却，冷却期内否决，否则放行 | H4；C12 |
-| 过期 | `deadline` 过期规则，以 `Input::超时` 触发 | H6 |
+| 过期 | `deadline` 过期规则，由 `deadline` 到时触发 | H6 |
 
 **授权步。** 查询的是：哪些 principal 的记录足以让写进入 prepare。写处理器的装载 principal 授权范围，决定能否不经人工直接放行。
 
-**输入约束步** [设计]。三项彼此独立，以 `Validated` 累积，一次否决列出全部违反：
+**输入约束步** [设计]。以下各项彼此独立，以 `Validated` 累积，一次否决列出全部违反：
 
-- `parameter_validity` 不是 `Valid`：`Invalid` 带逐项违反，`NotSupported`、`SchemaMismatch` 与 `TargetNotAccepted` 各自单列，四者原因可区分（§6.2）。它无条件生效，策略不能关闭。
-- instrument 属目标账户（C9）、目标子账户已枚举（C10）。
+- `parameter_validity` 为 `Invalid`（带逐项违反）、`NotSupported`、`SchemaMismatch` 或 `TargetNotAccepted`，各自单列，四者原因可区分（§6.2）。它无条件生效，策略不能关闭。为 `CapabilityNotEstablished` 时本步不否决也不放行：单据停在本步等待（见“`RuleState` 是记录的 fold”），与其余各项无关；能力确立后重新求值全部各项。
+- 目标子账户已枚举（C10）。
 - **允许集合**：策略为该 `(principal, WriteLaneKey, OperationKind)` 给出 instrument 允许集合时，意图的 instrument 不在集合内即否决；不给出即不限制；给出空集即全部否决。
-- **各项的适用范围** [设计]：一项校验只对带它所读字段的操作种类求值（守卫字段表，§6.2 交易协议）。意图的 instrument 是 `Place` 与 `Replace` 新单部分的守卫字段，`Close` 取 `PositionRef` 的 instrument；`Cancel` 没有 instrument，C9 与允许集合对它不适用，它的目标订单属于目标作用域已由构造保证（§6.2 目标身份）。C10 按作用域而定，对全部操作种类照常适用。策略给 `Cancel` 配 instrument 允许集合，规则文件不合法（§7.6），不在运行期忽略。理由：`Cancel` 没有 instrument，规则无从比较；否决全部、放行全部或在运行期忽略，是三种都说得通、结果不同的做法，而写这条规则的人以为它在起作用。给文件判不合法与“给 `Close` 配冷却”同理。
+- **不在本步：instrument 是否属目标账户。** 这是 venue 的事实，UTA 没有它的源头，也没有可询问的契约操作；核心在写调用之前只否决由自己的记录与声明值判得出的不合规（C9）。instrument 能否在该账户交易，由上游对这次写的回答给出（`VenueRejected`）；策略要求提前挡住已知不可写的 instrument 时，列出可交易性检查（目录观察，§6.2 检查目录）。
+- **各项的适用范围** [设计]：一项校验只对带它所读字段的操作种类求值（守卫字段表，§6.2 交易协议）。意图的 instrument 是 `Place` 与 `Replace` 新单部分的守卫字段，`Close` 取 `PositionRef` 的 instrument；`Cancel` 没有 instrument，允许集合对它不适用，它的目标订单属于目标作用域已由构造保证（§6.2 目标身份）。C10 按作用域而定，对全部操作种类照常适用。策略给 `Cancel` 配 instrument 允许集合，规则文件不合法（§7.6），不在运行期忽略。理由：`Cancel` 没有 instrument，规则无从比较；否决全部、放行全部或在运行期忽略，是三种都说得通、结果不同的做法，而写这条规则的人以为它在起作用。给文件判不合法与“给 `Close` 配冷却”同理。
 - 否决 = `Rejection`（带违反项与 `rule_version`）+ `Close(DecisionRejected)`。
 
 **审批步。**
@@ -509,29 +528,29 @@ trait Rule {
 **lane 步。** 阻塞头集合的定义与语义见 §6.4。
 
 - 集合非空时本笔停在此步，单据保持 `AwaitingDecision`，不产生 `Prepared`。
-- 不等待阻塞头的只有两种（§6.4）：以阻塞头中某条腿记下的订单键为 `target` 的撤单意图；有覆盖当前全部阻塞头的绕过控制记录的单据版本。
+- 不等待阻塞头的只有两种（§6.4）：以阻塞头中某次尝试记下的订单键为 `target` 的撤单意图；有覆盖当前全部阻塞头的绕过控制记录的单据版本。
 
-**冷却** [设计]。冷却是 lane 规则的 `RuleState`，由执行事实驱动：
+**冷却** [设计]。冷却是 lane 规则的判断，其时钟是执行事实的 fold：
 
-- **键与时钟**：`(WriteLaneKey, instrument)` 上最近一条“下单腿”的 `SendBarrier` 记录时间（UTC，§2.6）；instrument 经 `SendBarrier` 的 `AttemptRef` 回连其 `Prepared` 所载的意图取得。下单腿 = `Place` 的腿、两腿 `Replace` 的新单腿或原子改单的腿；撤单腿与平仓的腿不设、也不受冷却。
+- **键与时钟**：`(WriteLaneKey, instrument)` 上最近一次“下单写”的 `SendBarrier` 记录时间（UTC，§2.6）；instrument 经 `SendBarrier` 的 `AttemptRef` 回连其 `Prepared` 所载的意图取得。下单写 = `Place` 与 `Replace` 的尝试；撤单与平仓的尝试不设、也不受冷却。
 - **间隔与键同轴**：间隔由策略按 `(WriteLaneKey, OperationKind)` 给出（只对 `Place`、`Replace` 可给），跨 principal 共享，不按 principal 分。理由：时钟本就跨 principal；若间隔按 principal 给，间隔短的 principal 不断刷新共享时钟，间隔长的 principal 永远等不到，结果是“最先用完的那个限制”而不是任何一行声明的限制。
-- **更新点**：`SendBarrier` 持久化之时（可能已发出，§6.5）。`Prepared` 未发即 `Expired` 的不计；因而没有真正发往上游的腿也可能计时（`SendBarrier` 之后、调用之前崩溃），这是有意接受的保守代价。
-- **判定点**：单据在 lane 步放行的那一刻，只判一次。该 `(WriteLaneKey, OperationKind)` 有间隔 `d` 时，当前时刻 < 该键时钟 + `d` 即否决：`Rejection::Cooldown{until}` + `Close(DecisionRejected)`；等于或晚于即通过。正常路径下放行时同 lane 前一条 Attempt 已终结，它的 `SendBarrier` 已在记录里；同一键上若有尚未终结、已 `Prepared` 而尚无 `SendBarrier` 的下单腿（只在绕过时出现），本次判定不放行（否决）；它不设时钟，那条腿越过屏障或 `Expired` 后这一阻碍随之消失。间隔为 0 等同不设冷却。`bypass_lane` 只越过阻塞头等待，不越过冷却；`Replace` 的新单腿不再经过 STS，它的 `SendBarrier` 只设时钟。
+- **更新点**：`SendBarrier` 持久化之时（可能已发出，§6.5）。`Prepared` 未发即 `Expired` 的不计；因而没有真正发往上游的写也可能计时（`SendBarrier` 之后、调用之前崩溃，或集成返回 `NotSent`），这是有意接受的保守代价。
+- **判定点**：单据在 lane 步放行的那一刻，只判一次。该 `(WriteLaneKey, OperationKind)` 有间隔 `d` 时，当前时刻 < 该键时钟 + `d` 即否决：`Rejection::Cooldown{until}` + `Close(DecisionRejected)`；等于或晚于即通过。正常路径下放行时同 lane 前一次尝试已结束等待，它的 `SendBarrier` 已在记录里；同一键上若有已 `Prepared` 而尚无 `SendBarrier` 的下单写（只在绕过时出现），本次判定不放行（否决）；它不设时钟，那次尝试越过屏障或 `Expired` 后这一阻碍随之消失。间隔为 0 等同不设冷却。`bypass_lane` 只越过阻塞头等待，不越过冷却。
 - **恢复**：时钟是对 `SendBarrier` 记录的 fold，重启后由记录重建，没有另存的状态。
 - 理由：在检查通过时计时，放行后未发出也占冷却，且审批等待期间计时已开始（旧实现的缺陷，O11）；以业务回执计时，被拒或结果未知的发送不计冷却，丢掉了“可能已发出”的依据。放在 lane 步而不是输入约束步，因为单据可能在审批与 lane 上等很久，判定必须贴近放行。撤单与平仓是减少风险的动作，不应被冷却挡住。
 - 不选：冷却作为一项检查（`AlignmentCheck`）：检查只读观察值，执行事实不进钩子的 `eval`（§6.2）；冷却让单据等待而不是否决：待决单据会在 lane 上堆积，与 C12 的“规则否决”不符。
 
-**过期步。** `AwaitingDecision` 期间到期 = `Close(Expired)` 否决记录，不补偿。这包括停在审批步或 lane 步时。
+**过期步。** `AwaitingDecision` 期间到期 = `Close(Expired)` 否决记录，不补偿。这包括停在审批步、lane 步，以及因能力未确立停在输入约束步或放行门前时：`deadline` 计时器到期即对该单据求值过期步，不先重跑它前面停下的那一步。
 
 ### 放行门
 
 进入 `Prepared` 前，链读取单据 fold 的三项状态：
 
 1. `basis_validity == Fresh`（§5.2）；
-2. 必要项 `alignment` 为 `Aligned`（§6.2）；能力项恒在必要项内，不由策略声明，它同时核对意图所带的参数 schema 身份仍是声明的那个；
+2. 必要项 `alignment` 为 `Aligned`（§6.2）；能力项恒在必要项内，不由策略声明，它按会话有效声明核对可执行性（含意图所带的参数 schema 身份仍是声明的那个）；
 3. `AwaitingDecision(current_version)` 与决定绑定的版本一致。
 
-任一不满足 → `PredicateFailure`（fail-closed，C12），不发出。
+能力项未确立（该来源此刻没有已建立的会话，或会话有效声明对该操作为 `Unknown`）时，门不求值：单据停在门前等待，能力确立后重新过门，`deadline` 到期由过期步关闭。其余任一不满足 → `PredicateFailure`（fail-closed，C12），不发出。
 
 - 它与链上其他步的否决同形：`Rejection` 记录带 `rule_version`，单据 `Close(DecisionRejected)`（W18），负责人按当前世界另起单据。
 - 等待期间已呈 `Diverged` 的单据，可由审批人在放行前 `SendBack`（§6.2）。
@@ -583,39 +602,34 @@ lane 是对 venue 写入通道的有序队列，= unknown 阻塞半径。
 
 **队首阻塞是通讯协议的一部分，不是 UTA 选择的锁。** 提交属于消费动作，仅在消费者自身有权消费时才存在加锁概念；UTA 无权决定是否消费，消费方始终是 venue。
 
-**等待机理。** lane 上有未终结 Attempt（最长的情形是队首 `Undetermined`）时，后续意图必须等待。
+**等待机理。** lane 上有等待中的尝试（最长的情形是队首 `Undetermined`）时，后续意图必须等待。
 
 - 原因：**后续写入的语义依赖队首结果**，即同账户 buying power、待撤订单是否存在、venue 侧顺序。这是与 venue 的通讯协议语义，而非数据库层面的并发互斥。
-- **lane 阻塞头等待发生在 `Prepared` 之前**：等待者是 `AwaitingDecision` 的单据，不是已放行的记录。因此正常路径下同 lane 至多一条未终结 Attempt；`Prepared` 一旦 append 即交给 IO 壳，过发出前门即发；门的会话或能力条件不成立时，腿在门前等待，仍是阻塞头（§6.5）。
+- **lane 阻塞头等待发生在 `Prepared` 之前**：等待者是 `AwaitingDecision` 的单据，不是已放行的记录。因此正常路径下同 lane 至多一次等待中的尝试；`Prepared` 一旦 append 即交给 IO 壳，过发出前门即发；门的会话或能力条件不成立时，尝试在门前等待，仍是阻塞头（§6.5）。
 - 等待期间单据的 `basis_validity`/`alignment` 照常重算（偏离是状态，§6.2）。放行时链先过过期步，再过依据有效性门。
 - 等待超过 `deadline` 由过期步 `Close(Expired)` 终结。
 
-**阻塞头集合。** 阻塞头是该 `WriteLaneKey` 上**未终结 Attempt 的集合**，存在 `RuleState` 中。未终结 = 存在 `Prepared` 无 `SendBarrier`、`SendBarrier` 无后继、`Undetermined` 未 `Resolved`，或复合链未完（§6.5）。
+**阻塞头集合。** 阻塞头是该 `WriteLaneKey` 上**等待中的尝试的集合**：UTA 仍在等它的结论、还没有结束等待的尝试（§6.5 等待与结果）。等待中 = `Prepared` 无 `SendBarrier` 且未 `Expired`、`SendBarrier` 无后继，或 `Undetermined` 既无 `Found`/`Absent` 也无 `Abandoned`。集合是该 lane 执行事实流上这些记录（与 `bypass_lane` 控制记录）的 fold，不另存（§6.3“`RuleState` 是记录的 fold”）。
 
 - 正常路径下集合至多一条。
 - 两个例外使集合扩大：撤阻塞头的撤单意图、显式绕过（见下）。
-- 集合内每条由各自的对账驱动独立收敛（§6.6）。任何一条的终结只把它移出集合；**集合为空**才解除普通写的等待，不存在“部分解除”。
+- 集合内每条独立结束等待：由各自的对账驱动得到结论（§6.6），或由 principal 放弃（`Abandoned`，§6.6）。任何一条结束只把它移出集合；**集合为空**才解除普通写的等待，不存在“部分解除”。
 - 集合非空时仍可继续加入获准的例外（再一笔撤阻塞头、再一次绕过）。
 
 ### 无第二类越顶队列
 
 队首取证期间 lane 上只发生决议动作。读侧的决议动作（按键查询、listing、成交 / 持仓对账）属于 IO 壳的对账协议，不是队列项。
 
-**唯一不违反协议而越过阻塞头的写**：**以阻塞头中某条腿记下的订单键为 `target` 的撤单意图** [设计]（目标身份来源之二，§6.2）。
+**唯一不违反协议而越过阻塞头的写**：**以阻塞头中某次尝试记下的订单键为 `target` 的撤单意图** [设计]（目标身份来源之二，§6.2）。
 
-- 键按腿登记（§8.1），所以资格按腿判定：`target` 必须精确等于阻塞头集合中某条链上、已有 `SendBarrier` 的腿在其 `SendBarrier` 里记为订单键（`OrderKey`，§2.2）的键。键角色取自该腿发出时的声明、随 `SendBarrier` 落盘，之后的声明不改写它。撤单腿（独立 `Cancel` 的腿、两腿 `Replace` 的撤单腿）的键只标识一次撤单请求，不合格；下单腿、平仓腿与原子改单腿只有声明了订单键时才合格；尚无 `SendBarrier` 的腿没有登记的键，也不合格。
-- 该键能否被上游用来撤单，仍由可执行性判定（目标种类 `IdemKey` 在 `(scope, Cancel)` 的 `target_kinds` 里，§6.2），不因它越过等待而放宽：只能按 venue 订单身份撤单的来源上，这笔撤单送审即以 `TargetNotAccepted` 否决，不进阻塞头集合，也不会自己成为第二条 `Undetermined`；那里的阻塞头只由取证渠道、`Attributed` 或人工决议收敛。
+- 键按尝试铸造与登记（§6.5、§8.1），所以资格按尝试判定：`target` 必须精确等于阻塞头集合中某次已有 `SendBarrier` 的尝试在其 `SendBarrier` 里记为订单键（`OrderKey`，§2.2）的键。键角色取自该尝试发出时的声明、随 `SendBarrier` 落盘，之后的声明不改写它。撤单尝试的键只标识一次撤单请求，不合格；下单、平仓与改单的尝试只有声明了订单键时才合格；尚无 `SendBarrier` 的尝试没有登记的键，也不合格。
+- 该键能否被上游用来撤单，仍由可执行性判定（目标种类 `IdemKey` 在 `(scope, Cancel)` 的 `target_kinds` 里，§6.2），不因它越过等待而放宽：只能按 venue 订单身份撤单的来源上，这笔撤单送审即以 `TargetNotAccepted` 否决，不进阻塞头集合；那里的阻塞头只由取证渠道、`Attributed` 得到结论，或由 principal 放弃。
 - 它经单据与 STS 全链；lane 步对它不施加阻塞头等待。
-- 理由：等待的依据是“后续写的语义依赖队首结果”，而这笔撤单不依赖队首结果，它存在的目的就是让队首结果可判定。
-- 放行后它成为该 lane 阻塞头集合的第二个成员，与阻塞头各自独立收敛。
+- 理由：等待的依据是“后续写的语义依赖队首结果”，而这笔撤单不依赖队首结果，它存在的目的就是把 venue 侧推到一个读得出的状态。
+- 放行后它成为该 lane 阻塞头集合的第二个成员，与阻塞头各自独立结束等待。
 - 它不是对协议的违反，不需要 `bypass_lane`。
 
-**它自身的回执不直接决议阻塞头。** 把“撤单被拒”解释成“原单不存在”或“已成交”是 heuristic，禁止（§6.6）。阻塞头仍只由取证渠道收敛；撤单只是把 venue 侧推到一个读得出的终态：
-
-- 撤单腿终结于 `VenueAccepted`/`Found` 后，阻塞头的取证重开一轮（`ReconciliationReopened{CancelLegTerminal}`，§6.6）。
-- 撤单腿终结于 `VenueRejected`/`Absent`/`Expired`，不重开；阻塞头照常按本轮进度收敛。
-- 重开后，by-key 读到目标（已撤或任何状态）即 `Found`；by-key 明确否定即 `Absent`。
-- listing 未见仍是 `Inconclusive`（F10）：撤单不提升任何渠道的证明力。
+**它自身的结果不决议阻塞头。** 撤单的回执与 `Found` 只说明撤单请求到达了上游；把“撤单被受理”解释成“原单已撤”，或把“撤单被拒”解释成“原单不存在”或“已成交”，都是 heuristic，禁止（§6.6）。阻塞头的结果只由它自己的取证渠道与 `Attributed` 给出，撤单不提升任何渠道的证明力（listing 未见仍是 `Inconclusive`，F10），也不自动重开阻塞头的取证：撤单有了结论之后要不要再问一次阻塞头，由 principal 经 `retry_reconciliation` 决定（§6.6）。
 
 ### 显式绕过
 
@@ -626,7 +640,7 @@ lane 是对 venue 写入通道的有序队列，= unknown 阻塞半径。
 - **范围**：`Applied` 记录带 principal、单据、该单据的 `WriteLaneKey`（由单据取得，请求不另给）、该单据生效时的 `current_version`，以及生效时刻该 lane 阻塞头集合的位置集。它只对这一版本、只对这些阻塞头有效：`SendBack` 后 `Revise` 出的新版本不继承它；它生效之后才加入集合的阻塞头不在其内，单据仍为它们等待。它随该 lane 的执行事实流投递（§8.5），lane 的订阅者看得到每次绕过。
 - **生效条件**：单据处于 `AwaitingDecision`；否则控制记录 `Rejected`。
 - **作用**：lane 步在放行时读这条执行事实，只跳过它所列阻塞头的等待。它不越过授权、输入约束、审批、冷却、过期与放行门：未获批准的单据照常停在审批步。
-- 放行后该 lane 同时存在多条未终结 Attempt，按阻塞头集合的规则收敛。
+- 放行后该 lane 同时存在多次等待中的尝试，按阻塞头集合的规则各自结束等待。
 - 绕过只影响本 lane。
 - 理由：绕过授权的是“不等这些阻塞头”，不是对意图版本的审批；把它记成 Decision，要么占掉批准所需的那一条，要么让一版有两条 Decision。
 
@@ -634,7 +648,7 @@ lane 的有序与队首阻塞来自通讯协议，不是 UTA 抢占通道的锁�
 
 ### 不变量
 
-- 同 lane 的**阻塞头集合**在正常路径下至多一条未终结 Attempt；任一 `Undetermined` 记录在 `Resolved` 前，同 lane 无新普通写。例外只有两个，且二者都扩大阻塞头集合：以阻塞头中某条腿记下的订单键为 `target` 的撤单意图；显式绕过（`bypass_lane` 的控制记录在案，只对所记版本与所记阻塞头有效）。由 STS lane 步在 `Prepared` 之前等待 + IO 壳按序推进保证。
+- 同 lane 的**阻塞头集合**在正常路径下至多一次等待中的尝试；任一 `Undetermined` 在结果确立或被 principal 放弃之前，同 lane 无新普通写。例外只有两个，且二者都扩大阻塞头集合：以阻塞头中某次尝试记下的订单键为 `target` 的撤单意图；显式绕过（`bypass_lane` 的控制记录在案，只对所记版本与所记阻塞头有效）。由 STS lane 步在 `Prepared` 之前等待 + IO 壳按序推进保证。
 - 显式绕过必须有带 principal 的 `bypass_lane` 控制记录。由绕过语义保证。
 
 ### 为什么
@@ -643,9 +657,9 @@ lane 的有序与队首阻塞来自通讯协议，不是 UTA 抢占通道的锁�
 
 lane 的键取自握手 `WriteScope`，因为核心不知道也不该知道上游账户结构（§2.2）。[域 H4/H1；证据：fp-03 条目 7]
 
-## 6.5 IO 壳：两阶段、腿与链、转移表
+## 6.5 IO 壳：两阶段、尝试、转移表
 
-> 图：D6.1 腿的状态机、D6.3 一次交互的记录矩阵、D6.4 `Replace` 两腿计划（`design/diagrams/06-io-shell-attempt.md`）；D7.1 恢复时的发出前门（`07-crash-recovery.md`）。
+> 图：D6.1 尝试的状态机、D6.3 一次交互的记录矩阵（`design/diagrams/06-io-shell-attempt.md`）；D7.1 恢复时的发出前门（`07-crash-recovery.md`）。
 
 ### 两阶段协议与它的位置
 
@@ -674,7 +688,7 @@ in-doubt 作为一等持久状态有直接先例：MongoDB `UnknownTransactionCo
 **不锁 ≠ 不要两阶段。** 两阶段协议的价值不在锁，而在**已经定义了中间态的副作用语义**。
 
 - prepare 之后、resolution 之前，效果被定义为“可能已发生”：既非成功亦非未发生，不能重发，也不能当作没做过，只能由 resolution 用证据收敛。
-- 这正是 F5 所需的定义。故 `Prepared → SendBarrier → (VenueAccepted | VenueRejected | Undetermined) → ResolutionEvidence* → Resolved` 保持为两阶段协议，而非退化为“发一次、超时算失败”的单阶段调用。[证据：fp-06 命题 1]
+- 这正是 F5 所需的定义。故 `Prepared → SendBarrier → (VenueAccepted | VenueRejected | NotSent | Undetermined) → ResolutionEvidence*` 保持为两阶段协议，而非退化为“发一次、超时算失败”的单阶段调用。[证据：fp-06 命题 1]
 
 **在 2PC 中的位置。** UTA 是协调者；venue 是**总是单方面决定的参与者**：不 prepare、不等协调者裁决，收到请求即自行 commit 或 reject，协调者事后只能发现结果。[证据：fp-06 命题 5 与案例——Stripe/Binance/Temporal 均无 participant prepare]
 
@@ -689,9 +703,9 @@ IO 壳不是“调用 venue 的那个函数”，而是效应侧的解释器：`
 | Haskell | UTA |
 |---|---|
 | `IO a` 值（纯，可构造、可组合、可检查） | `Prepared` 记录：已持久化的“将对 venue 做什么”的描述；构造过程（草稿 → 决策 → append）不接触 venue |
-| `>>=` 组合：后一步依赖前一步的结果 | lane 全序：同 lane 后一个 Attempt 的语义依赖前一个的终态，故 lane 步在前一个未终结时不放行下一个（§6.4）；复合链的第二腿读第一腿的终态（§6.2） |
-| runtime 运行 `main` | IO 壳解释 `Prepared` 链：核心中唯一发出写调用的环节；调用在上游的落实由集成完成（§8.1） |
-| 效果发生后只剩结果值与外部状态变更 | 效果发生后只剩 append 的记录（`VenueAccepted`/`VenueRejected`/`Undetermined`/`ResolutionEvidence`；未发出即到期则 `Expired`）与 venue 侧变更 |
+| `>>=` 组合：后一步依赖前一步的结果 | lane 全序：同 lane 后一次尝试的语义依赖前一次的结果，故 lane 步在前一次仍在等待时不放行下一次（§6.4） |
+| runtime 运行 `main` | IO 壳解释 `Prepared`：核心中唯一发出写调用的环节；调用在上游的落实由集成完成（§8.1） |
+| 效果发生后只剩结果值与外部状态变更 | 效果发生后只剩 append 的记录（`VenueAccepted`/`VenueRejected`/`NotSent`/`Undetermined`/`ResolutionEvidence`；未发出即到期则 `Expired`）与 venue 侧变更 |
 | `unsafePerformIO` 是禁忌 | 规则、程序、消费方直接调用 venue 写接口，或集成在 IO 壳的调用之外自行发起写，是禁忌 |
 | 纯代码可随意重算，`IO` 不能 | 派生侧与决策可以重放重算，`Prepared` 的实际执行不能重放 |
 
@@ -705,19 +719,19 @@ IO 壳不是“调用 venue 的那个函数”，而是效应侧的解释器：`
 
 执行事实侧只有 append：
 
-- `SendBarrier`、`VenueAccepted`、`VenueRejected(reason)`、`Undetermined(reason)`、`Expired(deadline)`、`TargetTerminal`（两腿改单的目标终态与新单数量，见“转移表”）；
-- `ResolutionEvidence`、`ReconciliationReopened`；
+- `SendBarrier`、`VenueAccepted`、`VenueRejected(reason)`、`NotSent(reason)`、`Undetermined(reason)`、`Expired(deadline)`；
+- `ResolutionEvidence`、`ReconciliationReopened`、`Abandoned{principal, note, rule_version}`；
 - `CapabilityObserved`；
 - `Gap{origin: Channel}`。
 
 关联身份：
 
-- 腿级记录与取证渠道的 `Gap{origin: Channel}` 都带 `AttemptRef`（见下“代数”）。
-- `CapabilityObserved` 是能力证据，带 `(WriteLaneKey, OperationKind)` 或逻辑流 `(source, stream)` 的读 / 回填能力，以及它所更新的声明版本（被接受的推送或回应所携的 `SessionEpoch`），不属于任何 Attempt（§7.5）。
+- 尝试的记录与取证渠道的 `Gap{origin: Channel}` 都带 `AttemptRef`（见下“代数”）。
+- `CapabilityObserved` 是能力证据，带 `(WriteLaneKey, OperationKind)` 或逻辑流 `(source, stream)` 的读 / 回填能力，以及它所更新的声明版本（被接受的推送或回应所在的会话 epoch，由核心盖印），不属于任何尝试（§7.5）。
 
 `Undetermined` 的 `reason` 封闭为两种，二者进入同一对账驱动，只是审计出处不同：
 
-- `NoResponse`：`submit` 无业务回执（§8.2）；
+- `NoResponse`：写调用在可能已交出之后没有业务回执（§8.2）；
 - `CrashWindow`：重启时 `SendBarrier` 无后继（§6.7）。
 
 IO 壳**不修改**任何记录，不持有权威状态；重启后其全部状态由 `fold_state` 重建。
@@ -731,270 +745,273 @@ venue 对我方写的响应是执行事实：C13 原始负载完整保留，执�
 因此一次 venue 交互在**同一 SQLite 事务**内落两侧记录：
 
 - **执行事实侧**一条，**持有 `Evidence`**（永存）。
-- **观察 `Journal`** 上该回应的观察记录，可压缩：订单状态一条（回应含订单状态时），加回应所含每笔可识别执行各一条成交记录（§8.1）。各条的 `attribution` 只按该条自己的关联证据填写，不因同在一个回应里继承；`provenance` 相同，由 IO 壳填（§8.3）。它们供复合链读终态、供单据钩子与读模型消费、供订阅者与推送观察同形地看到。
+- **观察 `Journal`** 上该回应的观察记录，可压缩：订单状态一条（回应含订单状态时），加回应所含每笔可识别执行各一条成交记录（§8.1）。各条的 `attribution` 只按该条自己的关联证据填写，不因同在一个回应里继承；`provenance` 相同，由 IO 壳填（§8.3）。它们供单据钩子与读模型消费、供订阅者与推送观察同形地看到。
 
 具体：
 
 | 交互 | 执行事实侧 | 观察侧 |
 |---|---|---|
-| `submit` 返回 `Ack` | `VenueAccepted{venue_order_id, receipt: Evidence, observation: LogPosition}`；`observation` 指订单状态记录 | `provenance: Receipt{attempt}` 的观察记录 |
-| 取证命中 | `ResolutionEvidence{attempt, channel, round, outcome: Found{observation: LogPosition, evidence: Evidence}}`；`observation` 指命中的那条记录（`list_fills` 命中多笔归因到该腿的成交时，它们同在该作用域成交流上，取其中 `Seq` 最小者） | `provenance: Reconciliation{attempt, channel}` 的观察记录；`list_fills` 命中不造订单状态记录 |
+| 写调用返回 `Ack` | `VenueAccepted{venue_order_id, receipt: Evidence, observation: LogPosition}`；`observation` 指订单状态记录 | `provenance: Receipt{attempt}` 的观察记录 |
+| 写调用返回 `Reject` | `VenueRejected`，`reason` 保留 `Unmapped(raw)`（§2.6） | 无（venue 侧不存在订单） |
+| 写调用返回 `NotSent` | `NotSent{reason, evidence: Evidence}`；`raw` 是集成据以判定未交出的本地原文，可为空 | 无（没有交给上游） |
+| 取证命中 | `ResolutionEvidence{attempt, channel, round, outcome: Found{observation: LogPosition, evidence: Evidence}}`；`observation` 指命中的那条记录（`list_fills` 命中多笔归因到该尝试的成交时，它们同在该作用域成交流上，取其中 `Seq` 最小者） | `provenance: Reconciliation{attempt, channel}` 的观察记录；`list_fills` 命中不造订单状态记录 |
 | 取证 `Absent` / `Inconclusive` | `ResolutionEvidence` | 无（没有订单状态可记） |
 | `Unavailable` | 只落 `Gap{origin: Channel}`，不是取证结果（§6.6） | 无 |
-| `submit` 返回 `Reject` | `VenueRejected`，`reason` 保留 `Unmapped(raw)`（§2.6） | 无（venue 侧不存在订单） |
 
-**`channel ∈ {ByKey, Listing, Fills, Replay, Attributed, Manual}`：**
+撤单尝试的回执里目标订单的状态是目标订单的记录：它的 `attribution` 按它自己的关联证据填写，不因出现在撤单回执里而成为 `FromAttempt(撤单尝试)`（§6.6 撤单尝试的取证）。
+
+**`channel ∈ {ByKey, Listing, Fills, Replay, Attributed}`：**
 
 - 前四种是 IO 壳依序取证的渠道（§6.6）。
-- `Attributed`：集成推送的归因观察命中处于 `Undetermined` 的腿，由效应侧归因处理器 append（§8.1）。
-- `Manual`：带 principal 的人工决议，经 `resolve` 进入（§8.5），记录 `{principal, outcome, note}`。
+- `Attributed`：集成推送的、归因到处于 `Undetermined` 的尝试的观察，由效应侧归因处理器 append（§6.6、§8.1）。
 
 **`outcome ∈ {Found{observation, evidence}, Absent, Inconclusive}`。**
 
-**每条 `Found` 都带 `evidence`**，C13 对六种渠道一视同仁：
+**每条 `Found` 都带 `evidence`**，C13 对五种渠道一视同仁：主动取证取集成返回的该次响应；`Attributed` 取该推送记录的载荷与原始负载（这类流必须保留原文，§8.1）。
 
-- 主动取证取集成返回的该次响应；
-- `Attributed` 取该推送记录的载荷与原始负载（这类流必须保留原文，§8.1）；
-- `Manual` 取被引用观察记录在 `resolve` 时的载荷，以及该记录保留的原始负载；被引用记录所在流不保留原文时（§8.1），`raw` 为空，`Evidence` 只有契约载荷。被引用的观察记录可压缩，执行侧的 `evidence` 不可。
-
-**`round`** 是该次取证**发起时**所属的轮次：最近一条 `ReconciliationReopened` 的位置，首轮为空。`Attributed`/`Manual` 取 append 时的当前轮。
+**`round`** 是该次取证**发起时**所属的轮次：最近一条 `ReconciliationReopened` 的位置，首轮为空。`Attributed` 取 append 时的当前轮。
 
 观察侧那些记录落到保留边界下后，执行侧的 `Evidence` 仍在。审计读执行事实，不依赖可压缩的观察记录。
 
-### 代数：Attempt、腿、`AttemptRef`
+### 代数：尝试与 `AttemptRef`
 
-**Attempt** = 一条 `Prepared` 记录及其后继阶段链，身份 = `attempt_position`（该 `Prepared` 的 `LogPosition`）。
+**尝试（Attempt）** = 一条 `Prepared` 记录及其后继记录 = **对上游的一次写** [设计]。身份 `AttemptRef = attempt_position`（该 `Prepared` 的 `LogPosition`）。一种操作种类只对应一次上游写（§6.2 协议表），所以一次尝试没有更细的内部结构。
 
-链由**腿**组成，腿身份 `AttemptRef = (attempt_position, leg)` [设计]：
+所有尝试的记录（`SendBarrier`、`VenueAccepted`、`VenueRejected`、`NotSent`、`Undetermined`、`Expired`、`ResolutionEvidence`、`ReconciliationReopened`、`Abandoned`）与观察侧的 `FromAttempt`/`provenance` 都以 `AttemptRef` 关联。
 
-- 单腿操作只有 `leg = 1`。
-- 两腿计划下（§6.2），`Replace` 是同一链上两条连续的腿：`leg = 1` 撤单、`leg = 2` 新单；原子计划下只有 `leg = 1`。
+**发出所依据的声明落进记录** [设计]。`SendBarrier` 记下这次尝试所用的写操作（`submit` / `cancel`）、所带的调用方键及其角色（订单键 / 请求键，§2.2），都取自它过发出前门时的会话有效声明（§7.5）。此后取证渠道与撤阻塞头的资格都按记录判定，不按之后变化的声明：键角色决定撤阻塞头的资格（§6.4），不能被后来的声明改写。
 
-所有腿级记录（`SendBarrier`、`VenueAccepted`、`VenueRejected`、`Undetermined`、`Expired`、`TargetTerminal`、`ResolutionEvidence`、`ReconciliationReopened`）与观察侧的 `FromAttempt`/`provenance` 都以 `AttemptRef` 关联。`idempotency_key ↔ AttemptRef` 登记（§8.1）。两条腿的回执、归因、取证进度、恢复判定互不混用：撤单腿的回执观察不能终结新单腿的 `Undetermined`。
+**调用方键由核心铸造** [设计]。发出前门选定的写证明（§2.2）键角色不是 `None` 时，IO 壳以固定的单射编码从 `AttemptRef` 生成调用方键 `K(AttemptRef)`，记进 `SendBarrier`。
 
-**腿计划落进记录** [设计]。每条腿的 `SendBarrier` 记下这条腿所用的写操作（`submit` / `cancel`）、所带的调用方键及其角色（订单键 / 请求键，§2.2），都取自该腿过发出前门时的声明。链的腿计划由第一条腿的 `SendBarrier` 定：`Replace` 的首腿是 `cancel` 即两腿计划，是 `submit` 即原子计划；其余操作种类只有一种计划。首腿越过屏障之前计划尚未选定，发出前门按当时的声明选。此后“是否还有下一腿”、恢复与 `Resolved` 都按记录的计划 fold，不按之后变化的声明。理由：屏障之后链的形状已对上游生效，按新声明重读会把做了一半的两腿链当成原子链，对已撤的目标再发改单；键角色决定撤阻塞头的资格（§6.4），也不能被后来的声明改写。
+- 编码随 IDL 发布（§8.2），是 `attempt_position` 的定长文本编码：不取哈希、不截断，所以不同尝试的键不同。
+- 集成只在上游在该作用域逐字接受这一编码的每个值（字符集、长度）时声明订单键或请求键，否则声明 `None`（§8.3）。键装不进上游约束时不压缩、不改写，而是没有键。
+- 键登记（§8.1）是 `SendBarrier` 所记键到 `AttemptRef` 的唯一索引。编码单射只保证 UTA 自己的尝试互不冲突，**不证明**上游一条带同样字节的记录属于这次尝试：同一作用域里别的写者可以发同样的字节，上游也可以在它自己的周期后复用键。核心因此从不凭键字节归因，也从不断定一条记录是 `External`；按键归因由集成在它声明的键作用域与唯一期内填 `FromAttempt`，其外是 `Unattributed`（§8.3）。同一作用域没有别的写者使用这一编码，是运维义务，UTA 观察不到它被违反（§10.4 #26）。
+- 意图不带键：`EffectRequest` 没有键字段（§6.1），键只在发出时由核心产生。
 
-每条腿是线性阶段链：
+尝试是线性阶段链：
 
 ```
-[发出前门] → (SendBarrier → (VenueAccepted | VenueRejected | Undetermined → ResolutionEvidence*)) | Expired(deadline)
+[发出前门] → (SendBarrier → (VenueAccepted | VenueRejected | NotSent | Undetermined → ResolutionEvidence* [→ Abandoned])) | Expired(deadline)
 ```
 
-- 链的 `Resolved` 由各腿状态与“是否还有下一腿”fold 出。
-- IO 壳是链的驱动器。每一步转移由 `venue 回应类型 × 该集成的会话状态 × 该 (WriteLaneKey, OperationKind) 的能力证据与链记录的腿计划 × 超时参数 × deadline` 决定。
+- IO 壳是尝试的驱动器。每一步转移由 `集成的回应类型 × 该集成的会话状态 × 该 (WriteLaneKey, OperationKind) 的会话有效能力与 SendBarrier 所记的写操作和键角色 × deadline` 决定。
 - 链是闭合 sum，转移表穷尽（见下），没有“其他”分支。
 
-**`Resolved` 是 fold 状态，不是记录。**
+### 等待与结果：两根轴 [设计]
 
-- 腿达终态即该腿终结：`VenueAccepted`、`VenueRejected`、`Expired` 直接终结。
-- `Undetermined` 在出现 `Found`/`Absent` 的 `ResolutionEvidence` 后终结；任一渠道、任一轮次，含 `Attributed` 与 `Manual`。
-- 腿终结后**重算整条链**：链 `Resolved` = 当前腿终结且（按记录的腿计划与转移表）不再有下一腿；两腿计划下 `TargetTerminal.quantity ≤ 0` 也使链 `Resolved`。
-- 两腿计划的首腿（撤单腿）终结于 `VenueAccepted`/`Found`，则链进入 `AwaitingTargetTerminal`，仍未完。无论该终结来自哪个渠道，含 `Manual`。单腿 `Cancel` 意图的撤单腿终结即链 `Resolved`。
-- 一条腿的取证渠道集取自当前能力证据（§7.5）：当前声明的腿计划与链记录的计划相同、且同位置那条腿的键角色与该腿 `SendBarrier` 所记相同时，是那条腿声明的渠道；否则为空，腿停等（§6.6）。渠道顺序固定（§6.6）。渠道集按当前能力求，所以某腿停等之后，能力变更使集合出现本轮尚未取证的渠道，它就是下一渠道。
+一次尝试有两个不同源头的问题，分开记、分开 fold：
+
+| 轴 | 问题 | 源头 | 值 |
+|---|---|---|---|
+| **等待**（continuation） | UTA 还要不要为这次尝试等下去、问下去 | UTA 自己的记录 | `Active` \| `Finished` \| `Expired` \| `Abandoned` |
+| **结果**（outcome） | 这次写在上游发生没有 | 上游（经集成的回执、取证与推送取回的副本）；`NotSent` 与 `Expired` 是 UTA 自己确知的“未交出” | `Accepted` \| `Rejected` \| `NotSent` \| `Unknown` → `Found` \| `Absent` |
+
+**等待** 是执行事实的 fold，不另存：
+
+- `Active`：`Prepared` 无 `SendBarrier` 且无 `Expired`；或 `SendBarrier` 无后继；或 `Undetermined` 之后既无 `Found`/`Absent` 的 `ResolutionEvidence`，也无 `Abandoned`。
+- `Finished`：结果已确立，即 `VenueAccepted`、`VenueRejected`、`NotSent`，或 `Undetermined` 之后第一条 `Found`/`Absent`（任一渠道、任一轮次，含 `Attributed`）。
+- `Expired`：发出前门判定 `deadline` 已过，尚未交出即终止。它的结果就是“未交出”，由 UTA 确知。
+- `Abandoned`：principal 在结果仍未知时放弃跟踪（§6.6）。
+
+`Expired` 与 `Abandoned` 是 UTA 拥有的两种出口；`Abandoned` 是唯一一种在可能已交出之后由 UTA 结束等待的出口。**`Abandoned` 是吸收态**：此后到达的 `Found`/`Absent` 只补上结果，不改变等待，不重新阻塞 lane，也不恢复保留钉。
+
+**结果** 是上游事实的副本，从不作为门：
+
+- `Undetermined` 的尝试，在等待是 `Active` 或 `Abandoned` 时都可以由第一条 `Found`/`Absent` 补上结果；此后的 `ResolutionEvidence` 照常 append 作审计，结果不再改变。
+- `Found` 只回答“这次写到达了上游”；观察记录里 venue 已受理 / 已拒 / 已成交的状态，由读模型与钩子 fold。
+- 放弃之后结果仍未知，对外显示“已放弃跟踪，结果未知”，不显示为已发生或未发生（§8.5）。
+
+等待离开 `Active` 的那一刻，这次尝试移出 lane 阻塞头集合（§6.4），它对观察记录的保留钉随之释放（§2.4）。
+
+**取证渠道与轮次。**
+
+- 一次尝试的取证渠道集取自当前会话有效能力（§7.5）：当前声明的写证明与 `SendBarrier` 所记的写操作、键角色都相同时，是它声明的渠道；否则为空，尝试停等（§6.6）。渠道顺序固定（§6.6）。渠道集按当前能力求，所以某次尝试停等之后，能力变更使集合出现本轮尚未取证的渠道，它就是下一渠道。
 - 本轮已取证渠道 = `round` 等于当前轮（最近一条 `ReconciliationReopened` 的位置）的 `ResolutionEvidence`。因此“渠道穷尽”与“下一渠道”都由 fold 重建（§9.2 #7）。
+- IO 壳自动取证只为等待是 `Active` 的 `Undetermined`；等待是 `Abandoned` 的尝试只在 principal 的 `retry_reconciliation` 开出的那一轮里取证，渠道穷尽即停（§6.6）。
 
-**`SendBarrier` 是发送屏障。** durable append（fsync）之后才允许调用该腿的写操作（`submit` / `cancel`）。它把崩溃窗口二分：
+**`SendBarrier` 是发送屏障。** durable append（fsync）之后才允许调用写操作（`submit` / `cancel`）。它把崩溃窗口二分：
 
 - `Prepared` 无 `SendBarrier` = **确未发出**；
 - `SendBarrier` 无后继 = **可能已发出**。
 
 先例：PostgreSQL `EndPrepare` 先 `XLogFlush` 再 `MarkAsPrepared`。[证据：fp-06 修正 5]
 
-**发出前门** [设计]。IO 壳在 append `SendBarrier` 的那一刻对该腿求值三个条件，全部成立才 durable append `SendBarrier`，并在同一会话上调用该腿的写操作：
+**发出前门** [设计]。IO 壳在 append `SendBarrier` 的那一刻对该尝试求值三个条件，全部成立才 durable append `SendBarrier`，并在同一会话上调用写操作：
 
 1. 意图的 `deadline` 未过：核心 UTC 时钟早于 `deadline`（§2.6），记录的事件时间与收到时间不参与；
-2. 该 `WriteLaneKey` 所属集成的会话已建立（会话状态，§7.2），该腿的写调用将在这个会话 epoch 上发出；
-3. 意图对该 `(WriteLaneKey, OperationKind)` 的当前能力证据（§7.5）**可执行**（§6.2 可执行性：`Supported`、声明接受意图所带的参数 schema、`target` 的种类在接受之列）；首腿已越过屏障的链，当前声明的腿计划还须与记录的计划相同。复合链的两条腿都按意图自身的 `(WriteLaneKey, OperationKind)` 求值。
+2. 该 `WriteLaneKey` 所属集成的会话已建立（会话有效声明为 `Established`，§7.2、§7.5），写调用将在这个会话上发出；
+3. 意图对该 `(WriteLaneKey, OperationKind)` 的会话有效能力（§7.5）**可执行**（§6.2 可执行性：`Supported`、声明接受意图所带的参数 schema、`target` 的种类在接受之列）。
 
 结果只有三种：
 
 - **发送**：三条都成立。
-- **过期**：`deadline` 已过 → `Expired(deadline)`，腿终结。
-- **等待**：其余条件不成立。腿保持 `Prepared` 无 `SendBarrier`，不 append 任何记录；它仍是确未发出，仍在 lane 阻塞头集合里（§6.4）。会话建立、能力证据变化、`deadline` 到时重新求值。等待永不变成 `Undetermined`；`deadline` 只终结尚无 `SendBarrier` 的腿。
+- **过期**：`deadline` 已过 → `Expired(deadline)`，等待结束。
+- **等待**：其余条件不成立。尝试保持 `Prepared` 无 `SendBarrier`，不 append 任何记录；它仍是确未发出，仍在 lane 阻塞头集合里（§6.4）。会话建立、能力证据变化、`deadline` 到时重新求值。等待永不变成 `Undetermined`；`deadline` 只终止尚无 `SendBarrier` 的尝试。
 
-`SendBarrier` fsync 之后会话才断开时，`submit` 得 `NoResponse` → `Undetermined`（§8.2），与其他 `NoResponse` 同样收敛；已有 `SendBarrier` 的腿永不退回等待。
+`SendBarrier` fsync 之后会话才断开时，写调用的结果取决于集成能否证明未交出：能证明得 `NotSent`，否则得 `NoResponse` → `Undetermined`（§8.2）；已有 `SendBarrier` 的尝试永不退回等待。
 
 理由：
 
-- **会话条件**：没有会话时 `submit` 只能失败于传输，得 `NoResponse`，一笔核心明知未发出的写就成了 `Undetermined`，阻塞 lane 直到取证收敛；在没有按键回读渠道的 venue 上只能人工决议（§1.6.1）。会话状态是核心自己运行的状态机（§7.2），不是健康观察，所以本门不读读模型。
-- **能力条件**：放行后单据已 `Closed`（§6.2），此后再没有别处按当前能力复查这条腿。重握手或 `CapabilityObserved` 收紧、移除该操作或它接受的参数 schema 时，不能凭放行时的旧能力发出。
-- **等待而不终结**：短暂断线或能力暂失不否决已放行的意图。放行时的批准在 `deadline` 内保持有效，这是有意的：时效由 `deadline` 界定（H6）。
+- **会话条件**：没有会话时写调用只能失败于传输，一笔核心明知未发出的写就成了结果未知，阻塞 lane 直到取证收敛；在没有按键回读渠道的 venue 上只能等被动证据或由 principal 放弃（§1.6.1）。会话状态是核心自己运行的状态机（§7.2），不是健康观察，所以本门不读读模型。
+- **能力条件**：放行后单据已 `Closed`（§6.2），此后再没有别处按当前能力复查这次尝试。重握手或 `CapabilityObserved` 收紧、移除该操作或它接受的参数 schema 时，不能凭放行时的旧能力发出。
+- **等待而不终止**：短暂断线或能力暂失不否决已放行的意图。放行时的批准在 `deadline` 内保持有效，这是有意的：时效由 `deadline` 界定（H6）。
 
 不选：
 
-- **在放行门把无会话集成的能力当作 `Unknown`**：一次瞬断就让到达放行门的单据 `PredicateFailure` 并关闭（§6.3）；会话抖动也会混进能力证据。
+- **在发出前门把无会话集成的能力当作 `Unsupported`**：离线时的声明副本只是最近声明，不是此刻的能力（§7.5）；一次瞬断就会让已放行的意图被当作不可执行。
 - **被拒或需干预的集成由核心追加一版全 `Unknown` 能力证据**：那是核心替集成伪造声明；能力证据只记握手声明与能力观察（§7.5）。发送已由本门挡住，集成此刻的状态由健康面给出（§8.5）。
 - **以健康观察作必要检查项的输入**：集成死了就不再推送健康，最新的健康观察恰在它失效时过时；规则也不引用读模型（§6.3）。
 - **`Degraded` 阻断发送**：`Degraded` 是按流的 readiness 子态（§8.4），属观察侧；其中与写有关的能力收紧已经经 `CapabilityObserved` 进入能力证据与本门。
 
+### `NotSent`：可证明的未交出 [设计]
+
+`NotSent(reason)` 是写调用的封闭返回之一，只在集成能证明这次写**没有交给任何可能把它送出的部件**时返回（§8.3）。SDK 发送缓冲、重连后补发的队列都算已交出；证明不了就是 `NoResponse`。
+
+- `reason` 封闭：`SchemaMismatch`（过屏障之后集成发现意图的参数 schema 身份已不是它此刻接受的，§8.2）与 `LocalRefusal(raw)`（集成在交出前自行拒绝，原文保留）。
+- `NotSent` 结束等待（`Finished`），结果是“未交出”；不是 `Undetermined`，不进对账驱动，lane 随即解除。
+- 冷却照常：冷却时钟由 `SendBarrier` 设起（§6.3），不因未交出而撤销。
+- 健康计数按失败计（§8.4）：它说明集成没能完成这次写，不说明上游回答了。
+
+理由：过屏障之后的 schema 漂移与本地拒绝都是集成确知“没交出去”的情形；记成 `NoResponse` 等于把一个确定的否定变成未知，让 lane 为一件没发生的事等取证。不选：**所有过屏障后的失败一律 `NoResponse`**：理由同上；**`NotSent` 允许按“大概没发出”返回**：交出之后的不确定正是 F5，只能是 `NoResponse`。
+
 ### 转移表（穷尽）
 
-以下按腿状态 × 事件列出全部转移；未列出的组合在 fold 中不可达（sum 穷尽，C13 风格：无“其他”分支）。
+以下按尝试状态 × 事件列出全部转移；未列出的组合在 fold 中不可达（sum 穷尽，C13 风格：无“其他”分支）。
 
-**单腿**（一条腿的计划，含原子改单；两腿计划的每条腿也按此表走）：
-
-| 腿状态 | 事件 | 结果 |
+| 尝试状态 | 事件 | 结果 |
 |---|---|---|
-| `Prepared` | 过发出前门 | durable append `SendBarrier`，随后按该腿的写操作调用 `submit` 或 `cancel`（二者返回同一回执形态，§8.2；下表“`submit` 返回”对二者同样适用） |
-| `Prepared` | 发出前门：`deadline` 已过 | `Expired(deadline)`（终） |
+| `Prepared` | 过发出前门 | durable append `SendBarrier`，随后按所记写操作调用 `submit` 或 `cancel`（二者返回同一回执形态，§8.2） |
+| `Prepared` | 发出前门：`deadline` 已过 | `Expired(deadline)`（等待结束，未交出） |
 | `Prepared` | 发出前门：会话或能力条件不成立 | 保持 `Prepared`，不 append 记录；条件变化或 `deadline` 到时重新求值 |
-| `SendBarrier` | `submit` 返回 `Ack` | `VenueAccepted`（终） |
-| `SendBarrier` | `submit` 返回 `Reject` | `VenueRejected`（终） |
-| `SendBarrier` | `submit` 返回 `NoResponse` | `Undetermined` |
-| `Undetermined` | `ResolutionEvidence{Found}` | 腿终结 |
-| `Undetermined` | `ResolutionEvidence{Absent}` | 腿终结（本次提交未发生） |
-| `Undetermined` | `ResolutionEvidence{Inconclusive}` | 下一渠道；渠道穷尽 → 停，等 `Manual` 或 `ReconciliationReopened` |
-| `Undetermined` | `Attributed`（任一时刻到达） | 与 `Found` 同效 |
-
-`Found` 时 Attempt 只回答“到达了”；观察记录里 venue 已受理 / 已拒 / 已成交的状态，由读模型与钩子 fold。
-
-**复合链**（两腿计划的 `Replace`）在单腿之上多一个链级 fold 状态 **`AwaitingTargetTerminal`** [设计]：
-
-| 撤单腿（`leg = 1`）终结于 | 链 |
-|---|---|
-| `VenueAccepted` 或 `Found` | 进入 `AwaitingTargetTerminal` |
-| `VenueRejected`、`Absent` 或 `Expired` | `Resolved`，新腿永不发 |
-
-撤单腿以拒绝 / 不存在 / 过期终结时新腿永不发，原因：
-
-- IO 壳不解释拒绝原因：“已成交”与“不存在”在线缆上不可靠区分，永不 heuristic。
-- 目标可能仍在时发新腿等于加仓（H1）。
-- 负责人按观察记录另起单据。
-
-**`AwaitingTargetTerminal` 的事件与出边：**
-
-| # | 事件 | 结果 |
-|---|---|---|
-| (i) | 目标终态判定成立（见下） | 同一事务 append `TargetTerminal{(p, 2), observation, evidence, quantity}`：`observation` 以位置引用判定选中的那条订单状态记录，`evidence` 是它的契约载荷与原始负载，`quantity` 是按意图数量口径定出的新单大小（§6.2：剩余量口径为意图的 `quantity` − 该记录的 `cumulative_filled_quantity`；绝对量口径即意图所带的 `quantity` 或 `notional`）。`quantity > 0` → 新腿（`leg = 2`）过发出前门，之后同单腿，调用带这个大小；`≤ 0`（剩余量口径且目标已成交到意图数量）→ 链 `Resolved`，不发新腿 |
-| (ii) | 目标订单的记录到达（推送、回执、取证、一次性读、回填），判定仍不成立；或读被上游拒绝（`Refused`，已记读结论记录） | 保持等待，按 pacing 再读 |
-| (iii) | 读返回 `Unavailable` | 该观察流上 `Gap{origin: Channel}`，再读 |
-| (iv) | 意图 `deadline` 到期 | append `Expired(deadline)`（`leg = 2`），链 `Resolved`；新腿永不发、不补偿（H6） |
-
-**目标终态判定** [设计]。(i) 是否成立只由各次求值时已提交的记录决定，与记录经哪个渠道到达、带什么 `attribution`、由谁发起都无关：
-
-1. **目标订单**。身份的范围是 `(来源, 意图的 WriteScope, venue_order_id)`（§8.1）。`VenueRef` 目标就是这个 `venue_order_id`。`IdemKey` 目标是把该键记为订单键的那条本地腿 r0（§6.2 订单身份来源之二）投放的订单：构造时要求该作用域内恰有一条这样的腿（§6.2“构造不出的不是意图”），它的 `SendBarrier` 位置作为 `target` 的来源进了意图的 `basis`（§6.2 目标身份），r0 就按这个位置认，此后该键再被别的腿记下也不改变 r0。r0 订单的 `venue_order_id` 只取自以下能证明属于 r0 的记录：r0 的 `VenueAccepted`；归因到 r0 的订单状态记录（`FromAttempt(r0)`，或只带该键、经登记只解析到 r0 的，不论经哪个渠道到达，§8.1；登记不再只解析到 r0 时，只带键的记录不算）；本链按该键发出的读（`OneShot{origins ∋ Attempt((p, 2))}`）的结果项。只是键的字节相同、不能证明属于 r0 的记录不算。这些记录给出不止一个 `venue_order_id` 时目标不唯一，一个也没有时目标未知，两种情况判定都不成立。
-2. **所看的记录**：该来源属于意图作用域的全部订单状态记录中身份为目标订单者，与 `orders` 读模型同一范围（§8.1、§8.5），不按哪个声明版本挑流。
-3. **选取**：按 §8.1“订单身份与最近观察”在目标订单所在的流上取最近观察。记录来自推送、回执、取证、一次性读还是回填，归因是 `FromAttempt`、`External` 还是 `Unattributed`，都不影响它是否入选。目标订单的记录出现在两条以上订单状态流上（跨流冲突，§8.1）时，判定不成立。选中的记录已落到保留边界之下（不能再以位置引用、取出证据）时，判定也不成立。
-4. **成立**：选中的记录是契约词表中的终态（`unknown`、`Unmapped(raw)` 不是，C13）；意图按剩余量口径定量时，它还须带 `cumulative_filled_quantity`，缺了判定不成立，不以零、较早记录的值或成交之和代替；绝对量口径不读这个字段。终态记录若没被选中（例如带 venue 序号、而低于该身份在同一 epoch 已见的最大序号），判定不成立。
-5. **何时求值**：只在两种事务里求值，每次都在该事务的全部记录落定之后、提交之前：
-   - 使链进入 `AwaitingTargetTerminal` 的事务，即撤单腿的 `VenueAccepted`，或任一渠道的 `Found`（含 `Attributed` 与 `Manual`）。这次求值对截至该事务的全部记录进行，所以进入之前已到达的目标终态同样成立（回看）；撤单腿回执或取证观察里的目标终态是这种情况。
-   - 链处于 `AwaitingTargetTerminal` 且尚无 `TargetTerminal` 时，每个 append 了目标订单记录的事务。
-
-   求值者是 IO 壳。不由它发起的事务（推送、回填、他方的读、`Attributed`、`Manual`）里，它以效应侧处理器的身份运行（订单状态记录的 `venue_order_id` 字段处理器，§8.1 注册表；撤单腿 `Found` 的 append），所以 `TargetTerminal` 总与触发它的记录同一事务。每次求值都先看 `deadline`，与发出前门第 1 条同一判定（核心 UTC 时钟，§2.6；记录的事件时间与收到时间不参与）：已过就是 (iv)，不再判定，也不 append `TargetTerminal`。判定第一次成立时，在同一事务 append `TargetTerminal`（`deadline` 优先于目标终态，本节不变量）。此后到达的记录不改变它：`TargetTerminal` 不撤回，数量不重算。因此结果取决于已提交事务的先后：同样的记录分两个事务提交与在一个事务里提交，可能一个成立一个不成立，两个实现对同一串已提交事务得出同一结果。压缩本身不是求值时机。
-
-- 理由：`TargetTerminal` 放行第二次写，不可撤回，所以它的输入必须是确定的已提交记录与一条确定的选取规则，且与“有没有人恰好在它到达之后读一次”无关。订单的状态本来就按 §8.1 的最近观察取，范围与 `orders` 相同，这条规则只依赖记录，`TargetTerminal` 与 `orders` 对同一记录集给出的状态不会分叉。它不看归因，因为目标可以是外部订单（订单身份来源之三），外部订单的推送没有 `FromAttempt`。回看是必要的：目标的终态推送可能在撤单腿还 `Undetermined` 时就已到达，之后不会再来一次。累计成交量只在剩余量口径下是新单大小的输入，绝对量口径不因上游不报它而等到 `deadline`。`deadline` 优先：`TargetTerminal` 只为新腿定数量，到期后新腿永不发出，再记它也没有用；而且记下之后，恢复时链会按“已有 `TargetTerminal`”被分到另一类终态。
-- 不选：
-  - **推送按归因匹配、读按身份匹配**：以外部订单为目标的推送永远匹配不上，同一终态经推送与经读得出不同结论；
-  - **任何终态记录都成立**：带序号而较旧的终态会在原单仍活时放出新腿（H1），这正是 §8.1 不把终态当吸收态的原因；
-  - **只由到达事件触发、不回看**：进入等待之前已到达的终态永远不被使用，结果取决于能不能再读一次；
-  - **只认本链发起的读，或只认带序号的记录与本链锚定的记录**：同一身份在同一记录集上有两种选取规则，外部目标在没有可读候选流时永远等到 `deadline`；一次性读由谁发起，与它回答的新旧无关；
-  - **`IdemKey` 目标按键字节匹配**：键在上游可以在订单终态后复用（§1.6.1），会把另一笔订单的状态当成目标的；
-  - **按进入等待时的声明版本固定一组流**：声明版本在来源的声明流上，链的记录在 lane 的执行事实流上，两者之间没有可比的序（§2.3），“进入之前最近的版本”在恢复时无从确定；而按声明挑流会让判定与 `orders` 对同一订单给出不同的冲突结论；
-  - **`IdemKey` 目标对该键全部历史上的订单键腿求**：上游在终态后复用键时，后来的一笔会把目标变成不唯一，或在它出现之前先认了错的那笔；
-  - **先记目标终态、再判 `deadline`**：到期的链可能被记成已完成的改单，恢复与对外的分类随之分叉。
-- 代价：新单大小以 `TargetTerminal` 引用的那条观察为准。上游之后若更正这笔订单（累计成交量改变，或终态之后订单又能成交），已记的 `TargetTerminal` 不撤销，UTA 也不担保上游最终的累计量与它相同。会推翻这一取舍的观测见 §10.4 #23。
-- **按目标身份的读一律是 `read`** [设计]（§8.2），两种 `target` 相同：对每条候选流，按公共订单状态请求 schema 的订单身份字段写入目标身份（`VenueRef` 写 venue 订单身份，`IdemKey` 写调用方键），请求带当前 `request_schema` 身份。候选是意图作用域在当前声明里所挂（`WriteScope.streams`）、种类为订单状态、当前能力证据里 `read` 为 `Supported`、且这份请求能通过其 `request_schema` 校验的流，不限一条；每轮按声明顺序各读一次，某条空答、非终态、`Refused` 或 `Unavailable` 不妨碍读其余候选。读回的记录照常 append，判定是否成立只按上文“目标终态判定”，读本身没有另一条命中规则；判定不成立时按 pacing 再读。没有候选流时，目标终态只能来自进入时的回看与此后到达的回执、取证、推送和回填。均为读、可重试、有 pacing；出口仍只有目标终态与 `deadline`。
-  - 记录就是 `read` 的记录：结果项与读结论记录带 `provenance: OneShot{origins ∋ Attempt((p, 2))}`（数量由这次读决定的那条腿；它尚未发出，这只是出处）；`Unavailable` 的 `Gap{origin: Channel}` 记在该观察流上（§4.2）。这次读本身不 append `ResolutionEvidence`，空答与未见不当作 `Absent`；返回的观察记录照常经效应侧归因处理器（§6.6 `Attributed`）。
-  - 理由：`query_by_key` 是取证渠道，问的是“该腿自己的键对应的那次写发生没有”，它的 `Absent` 与 `ResolutionEvidence` 都属被取证的腿；拿它查另一张订单的终态，要么把结果记到一条可能早已终结的腿上，要么同一个操作出现第二套记录模型，而“目标不存在”对等待终态没有意义。`read` 已有完整的记录与失败模型。
-  - 不选：**`IdemKey` 目标用 `query_by_key`，结果记为目标来源腿的 `ResolutionEvidence`**：那条腿可能已终结，同一次交互被记成它的取证；**`query_by_key` 只落观察记录**：一个操作两套记录模型，`Absent` 无从解释。代价：来源能按调用方键回读，却没有请求 schema 能表达调用方键的订单状态流时，`IdemKey` 目标只能靠进入时的回看与此后到达的回执、取证、推送和回填，到 `deadline` 为止（fail-closed）。
-- (ii) 中 `unknown`/`Unmapped(raw)` 不冒充终态（C13）；listing / 一次性读未见目标不证明不存在（F10）。
-- (iv) 的到期在等待期间由发出前门的同一时钟检查；每次求值目标终态判定之前也先看它。
-- 集成无已建立会话时，IO 壳不发按目标身份的读、也不记 (iii) 的 gap（同 §6.6 无会话不取证）；链照常等待，`deadline` 照常生效；进入时的回看与此后到达的记录照常判定。
-
-因此该状态**有界**：出口是目标终态或 `deadline`，没有人工路径，也不会永久停留。负责人可在 `Expired` 后按目标的最新观察另起单据。`AwaitingTargetTerminal` 期间链未完，仍是 lane 阻塞头集合的成员（§6.4）。
+| `SendBarrier` | 写调用返回 `Ack` | `VenueAccepted`（等待结束） |
+| `SendBarrier` | 写调用返回 `Reject` | `VenueRejected`（等待结束） |
+| `SendBarrier` | 写调用返回 `NotSent` | `NotSent`（等待结束，未交出） |
+| `SendBarrier` | 写调用返回 `NoResponse` | `Undetermined` |
+| `Undetermined`，等待 `Active` | `ResolutionEvidence{Found}` / `{Absent}` | 结果确立，等待结束 |
+| `Undetermined`，等待 `Active` | `ResolutionEvidence{Inconclusive}` | 下一渠道；渠道穷尽 → 停等（§6.6） |
+| `Undetermined`，等待 `Active` | `Attributed`（任一时刻到达） | 与 `Found` 同效 |
+| `Undetermined`，等待 `Active` | `abandon` 在在途取证完成后结果仍未知 | `Abandoned`（等待结束，结果仍未知） |
+| `Undetermined`，等待 `Abandoned` | `Found`/`Absent`（`Attributed`，或 principal 发起的 `retry_reconciliation`） | 补上结果；等待仍是 `Abandoned` |
 
 ### 与集成操作集的关系
 
 核心对集成的操作集（IDL，小且闭合：`handshake`/`submit`/`query_by_key`/`list_open`/`list_fills`/`cancel`/`replay_by_key`/`backfill`/`read`/`route`）是核心↔集成契约，完整操作集与返回值见 §8.2。所有调用都经集成会话（§7.3）的调用通道。
 
-- IO 壳只用其中的写操作（`submit`/`cancel`）、取证操作与 `AwaitingTargetTerminal` 的目标身份读（`read`），且只在该集成会话已建立时调用（发出前门；无会话时的取证见 §6.6）。
-- `backfill`、`route` 由订阅侧发起；其余 `read` 由读处理器、钩子取证与消费方发起（§3.4）。
-- `NoResponse` 与 `Unavailable` 是一等返回值而非异常。
+- IO 壳只用其中的写操作（`submit`/`cancel`）与取证操作，且只在该集成会话已建立时调用（发出前门；无会话时的取证见 §6.6）。
+- 每个写调用由集成在它自己的时限内给出封闭结果；可能已交出之后超出时限，结果就是 `NoResponse`（§8.3）。核心不另设写调用的超时。
+- `backfill`、`route` 由订阅侧发起；`read` 由读处理器、钩子取证与消费方发起（§3.4）。
+- `NotSent`、`NoResponse` 与 `Unavailable` 是一等返回值而非异常。
 
 ### 不变量
 
 - IO 壳是核心中唯一向集成发出写调用的地方，不修改记录、不持权威。由关系表（§3.3）与 `fold_state` 重建保证。
-- `Prepared` 无 `SendBarrier` = 确未发出；`SendBarrier` 无后继 = 可能已发出；IO 壳不对已有 `SendBarrier` 的腿再调用写操作。由发送屏障 durable append（fsync）保证。
-- 每条腿发出前过发出前门：`deadline` 已过即 `Expired(deadline)` 终结、永不发出；集成无已建立会话或当前能力不可执行时只等待，不 append `SendBarrier`。由发出前门保证。
-- 链的形状由首腿 `SendBarrier` 记录的腿计划决定，不随之后的声明变化；每条腿的取证渠道只在声明与该记录一致时取自声明。由腿计划落进记录保证。
-- 两腿改单的 `TargetTerminal` 至多一条，只在目标终态判定成立、且 `deadline` 未过的那个事务里 append，与使判定成立的记录同一事务；它的有无与数量只取决于截至各次求值时已提交的记录与该事务的记录，与记录经哪个渠道到达无关。`deadline` 优先：到期之后不再 append `TargetTerminal`。由目标终态判定（转移表）与单写者事务（§7.4）保证。
-- 链的每个 `Prepared` **至多**达一个终态，且在证据充分（`Found`/`Absent`/回执/`deadline`）时必达。由闭合 sum 与转移表保证。
-- `Undetermined` 的收敛不承诺时限（C2），只承诺停等可被推进：新证据（任一时刻到达的 `Attributed`、`ReconciliationReopened` 重开后的取证），或带 principal 的 `Manual`。
-- `VenueAccepted` 只认业务回执，其余落 `Undetermined`。由写操作（`submit`/`cancel`）的返回契约保证。
+- `Prepared` 无 `SendBarrier` = 确未发出；`SendBarrier` 无后继 = 可能已发出；IO 壳不对已有 `SendBarrier` 的尝试再调用写操作。由发送屏障 durable append（fsync）保证。
+- 每次尝试发出前过发出前门：`deadline` 已过即 `Expired(deadline)`、永不发出；集成无已建立会话或会话有效能力不可执行时只等待，不 append `SendBarrier`。由发出前门保证。
+- 取证渠道与撤阻塞头资格只按 `SendBarrier` 所记的写操作与键角色判定，不随之后的声明变化。由声明落进记录保证。
+- 调用方键是 `AttemptRef` 的单射编码，由核心铸造；核心从不凭键字节归因，也从不断定 `External`。由键铸造与归因分工（§8.3）保证。
+- 每次尝试的等待**至多**结束一次，且在证据充分（回执、`NotSent`、`Found`/`Absent`、`deadline`）或 principal 放弃时必结束；`Abandoned` 之后等待不再改变。由闭合 sum 与转移表保证。
+- 结果只由上游证据（回执、`Found`/`Absent`）或集成确知的未交出（`NotSent`）与发出前门的到期（`Expired`）给出，至多确立一次；放弃不给出结果。由两根轴的分工保证。
+- `Undetermined` 的收敛不承诺时限（C2），只承诺停等可被推进：新证据（任一时刻到达的 `Attributed`、`ReconciliationReopened` 重开后的取证），或 principal 的 `abandon`。
+- `VenueAccepted` 只认业务回执；`NotSent` 只认集成可证明的未交出；其余落 `Undetermined`。由写操作（`submit`/`cancel`）的返回契约保证。
 
-## 6.6 对账驱动与决议
+## 6.6 对账驱动与放弃跟踪
 
-> 图：D6.2 取证循环（`design/diagrams/06-io-shell-attempt.md`）。
+> 图：D6.2 取证循环、D6.4 等待与结果两根轴（`design/diagrams/06-io-shell-attempt.md`）。
 
 ### 渠道顺序
 
-进入 `Undetermined` 后，IO 壳按该腿的取证渠道集（§6.5：取自当前能力证据中与记录一致的那条腿声明）**自动**依次取证：
+进入 `Undetermined` 后，只要等待是 `Active`，IO 壳按该尝试的取证渠道集（§6.5：取自当前会话有效能力中与 `SendBarrier` 所记一致的写证明）**自动**依次取证：
 
 ```
-by-key → listing + venue 身份 → fills/positions → 保留期内 replay-by-key
+by-key → listing + venue 身份 → fills/positions → replay-by-key
 ```
 
-`by-key` 与 `replay-by-key` 都以该腿 `SendBarrier` 所记的调用方键发问，不以意图的 `target`、也不以同链另一腿的键；该腿未带键时，这两条渠道不会出现在它的声明里（§6.2 腿计划）。
+`by-key` 与 `replay-by-key` 都以该尝试 `SendBarrier` 所记的调用方键发问，不以意图的 `target`；该尝试未带键时，这两条渠道不会出现在它的声明里（§6.2 协议表、§8.3）。两者都带 `barrier_at`（该 `SendBarrier` 的核心时刻）、作用域与键角色：这个键此刻是否仍在上游的保留期与唯一期内，由集成按 `barrier_at` 判断，窗口之外返回 `Unavailable`（§8.3），不返回 `Absent`。核心不持有上游的保留期或唯一期，也不自己比较。
 
-**撤单腿的取证** [设计]。撤单腿问的是“这次撤单请求到达 venue 没有”，不是目标订单此刻处于什么状态。它的回执（`Ack` → `VenueAccepted`）是同一次调用的回应，直接终结它，不经归因（§6.5）；回执里目标订单的状态照常是目标订单的记录。归因到撤单腿的记录只有一种：上游以该腿的请求键把某条记录关联到这次撤单请求，集成或 IO 壳据此填了 `FromAttempt(撤单腿)`。目标订单自己的记录（订单状态、成交、listing 里的条目、带目标订单键的记录）归目标订单的腿或 `External`，不因为它说的是目标就归因到撤单腿，也就不是撤单腿的 `Found`。各渠道因此是：
+**撤单尝试的取证** [设计]。撤单尝试问的是“这次撤单请求到达上游没有”，不是目标订单此刻处于什么状态。它的回执（`Ack` → `VenueAccepted`）是同一次调用的回应，直接给出结果，不经归因（§6.5）；回执里目标订单的状态照常是目标订单的记录。归因到撤单尝试的记录只有一种：上游以该尝试的请求键把某条记录关联到这次撤单请求，集成在它声明的键作用域与唯一期内据此填了 `FromAttempt(撤单尝试)`（§8.3）。目标订单自己的记录（订单状态、成交、listing 里的条目、带目标订单键的记录）归目标订单所属的尝试，或按集成的判定为 `External`/`Unattributed`，不因为它说的是目标就归因到撤单尝试，也就不是撤单尝试的 `Found`。各渠道因此是：
 
-- by-key、replay-by-key：以撤单腿自己的请求键发问，回答的是这次撤单请求（§8.3 集成义务），`Found`/`Absent`/`Inconclusive` 照常；只在该腿带请求键时声明。
-- listing、fills/positions：listing 列的是未结订单，成交对账列的是订单的执行，返回的记录都不是撤单请求，永远不会归因到撤单腿。撤单腿不声明这两条渠道（§6.2 腿计划、§8.1 握手校验）。
-- `Attributed` 与 `Manual` 照常。不带键的撤单腿因此没有自动取证渠道，只由 `Attributed`（集成能以别的上游关联证据把记录归到这次撤单请求时）或 `Manual` 收敛。
+- by-key、replay-by-key：以撤单尝试自己的请求键发问，回答的是这次撤单请求（§8.3 集成义务），`Found`/`Absent`/`Inconclusive` 照常；只在该尝试带请求键时声明。
+- listing、fills/positions：listing 列的是未结订单，成交对账列的是订单的执行，返回的记录都不是撤单请求，永远不会归因到撤单尝试。撤单写证明不声明这两条渠道（§6.2、§8.1 握手校验）。
+- `Attributed` 照常。不带键的撤单尝试因此没有自动取证渠道，只由 `Attributed`（集成能以别的上游关联证据把记录归到这次撤单请求时）收敛，或由 principal 放弃跟踪。
 
-理由：listing 上仍有目标，不证明撤单没到（可能滞后，F10）；不再有目标，也不证明撤单到了（目标可能已成交或被别人撤掉）。把目标的记录当作撤单腿的 `Found`，一笔结果未知的撤单就被当成已送达，两腿改单随之进入 `AwaitingTargetTerminal`，撤阻塞头随之重开取证，这是 heuristic。不选：**撤单腿可以声明 listing 与成交对账，命中目标即 `Found`**：理由同上；**可以声明，但规定它们永不命中**：一条注定只得 `Inconclusive` 的声明渠道只增加调用与 pacing 负载，而声明应如实（§8.3）。
+撤单尝试有了结果，也**不证明目标已结束**：`VenueAccepted` 或 `Found` 只说明撤单请求到达了上游，目标可能已在此前成交、仍在撤单中，或上游随后拒绝了撤单。目标是否已结束只看目标订单自己的记录（§8.1 订单身份与最近观察）。把撤单与后续下单组合成改单的调用方，按目标的记录决定是否提交第二张单据（§6.2 `Replace`）。
+
+理由：listing 上仍有目标，不证明撤单没到（可能滞后，F10）；不再有目标，也不证明撤单到了（目标可能已成交或被别人撤掉）。把目标的记录当作撤单尝试的 `Found`，一笔结果未知的撤单就被当成已送达，这是 heuristic。不选：**撤单写证明可以声明 listing 与成交对账，命中目标即 `Found`**：理由同上；**可以声明，但规定它们永不命中**：一条注定只得 `Inconclusive` 的声明渠道只增加调用与 pacing 负载，而声明应如实（§8.3）。
 
 ### 取证结果与记录的对应（固定矩阵）
 
-| 取证结果 | 记录 | 腿 |
+| 取证结果 | 记录 | 尝试 |
 |---|---|---|
-| 命中归因到该腿的订单 / 成交 / 原响应（撤单腿见上） | 同事务：观察记录 + `ResolutionEvidence{Found}` | 终结 |
-| 渠道给出明确否定 | `ResolutionEvidence{Absent}` | 终结 |
+| 命中归因到该尝试的订单 / 成交 / 原响应（撤单尝试见上） | 同事务：观察记录 + `ResolutionEvidence{Found}` | 结果确立 |
+| 渠道给出明确否定 | `ResolutionEvidence{Absent}` | 结果确立 |
 | 未命中 | `ResolutionEvidence{Inconclusive}` | 转下一渠道 |
 | `Unavailable` | 只落 `Gap{origin: Channel}` | 不变；同渠道按 pacing 再发 |
 
-- 明确否定只有 by-key 的 `Absent`；listing/fills 没有这一语义（F10）。
+- 明确否定只有 by-key 的 `Absent`，且只在集成判断该键仍在上游唯一期内时给出；listing/fills 没有这一语义（F10）。**空列表永远不是 `Absent`**：listing 或 fills 的空答只是 `Inconclusive`。listing 是否需要隔一段时间再确认一次、间隔多长，都由集成按上游的保证判断，保证之外返回 `Unavailable`（§8.3）。
 - `Unavailable` **不算取证**、不换渠道。一个不可用的渠道不是证据；跳过它会把“没查到”伪装成“查过了”。
-- **集成无已建立会话时不取证**：IO 壳不对它发任何取证读，也不因此记 `Gap{origin: Channel}`；没有发出的读不是渠道不可用。会话重新建立后，本轮进行中的驱动从本轮进度续跑（下一渠道由 fold 重建，§6.5）；已渠道穷尽而停等的腿按下文 `SessionRestored` 重开一轮。[设计] 理由：无会话时的“调用”只会是核心自造的失败，把它记成 `Gap{Channel}` 等于伪造渠道证据的出处。
+- **集成无已建立会话时不取证**：IO 壳不对它发任何取证读，也不因此记 `Gap{origin: Channel}`；没有发出的读不是渠道不可用。会话重新建立后，本轮进行中的驱动从本轮进度续跑（下一渠道由 fold 重建，§6.5）；已渠道穷尽而停等、等待仍是 `Active` 的尝试按下文 `SessionRestored` 重开一轮。[设计] 理由：无会话时的“调用”只会是核心自造的失败，把它记成 `Gap{Channel}` 等于伪造渠道证据的出处。
 
 ### 停等
 
-渠道穷尽仍 `Inconclusive`，append 后**停下**。停等可由两种事件推进：
+渠道穷尽仍 `Inconclusive`，append 后**停下**。停等可由三种事件推进：
 
-- 带 principal 的人工 `ResolutionEvidence`，经 `resolve`（§8.5）；
-- 一条 `ReconciliationReopened{attempt, cause}` [设计] 重开一轮。
+- 一条 `ReconciliationReopened{attempt, cause}` [设计] 重开一轮；
+- 被动渠道 `Attributed` 在任一时刻到达（见下）；
+- principal 经 `abandon` 放弃跟踪（见下）：它结束等待，不给出结果。
 
-另有被动渠道 `Attributed` 可在任一时刻到达（见下）。
-
-IO 壳**永不 heuristic**。取证是读副作用，可以重试；`submit` 是写副作用，永不重试（§3.4）。
+IO 壳**永不 heuristic**。取证是读副作用，可以重试；写调用是写副作用，永不重试（§3.4）。
 
 ### 重开与轮次
 
 - 新一轮的已取证渠道集从空开始。
 - `ResolutionEvidence.round` 在**发起读**时取当前轮，并随记录落盘。
-- 旧轮在途读的迟到响应带旧 `round`，不计入新轮：响应归属其发起轮次，不按到达顺序冒充。它只在腿仍未终结时 append。
-- `Found`/`Absent` 已终结的腿不受重开影响：重开只重置读进度，不撤销终态。
+- 旧轮在途读的迟到响应带旧 `round`，不计入新轮：响应归属其发起轮次，不按到达顺序冒充。
+- 结果已确立的尝试不受重开影响：重开只重置读进度，不撤销结果。
 
-`cause ∈ {CancelLegTerminal(AttemptRef), SessionRestored, Manual(principal)}`：
+`cause ∈ {SessionRestored, Manual(principal)}`：
 
-| cause | 谁 append | 何时 |
-|---|---|---|
-| `CancelLegTerminal(AttemptRef)` | IO 壳自动 | 以该阻塞头为 `target` 的撤单腿终结于 `VenueAccepted`/`Found` 时（§6.4） |
-| `SessionRestored` | IO 壳自动 | 该 venue 的集成会话实际建立（新 `session_seq`，§7.2）时，对其所有停等的 `Undetermined` |
-| `Manual(principal)` | 运维 principal | 经 `retry_reconciliation`（§8.5） |
+| cause | 谁 append | 何时 | 对象 |
+|---|---|---|---|
+| `SessionRestored` | IO 壳自动 | 该 venue 的集成会话实际建立（新会话，§7.2）时 | 该集成所有停等、等待仍是 `Active` 的 `Undetermined` |
+| `Manual(principal)` | 运维 principal | 经 `retry_reconciliation`（§8.5） | 一次结果仍未知的 `Undetermined`，等待是 `Active` 或 `Abandoned` |
 
-- `CancelLegTerminal` 表示 venue 已处理撤单请求，是新的取证机会，**不是**目标已到终态的证据。
-- `SessionRestored` 的理由：渠道穷尽常因 venue 当时不可达。
-- 三种触发在 append 前都重查目标腿仍处于 `Undetermined` 未终结，否则不写。
+- `SessionRestored` 的理由：渠道穷尽常因 venue 当时不可达。它不作用于 `Abandoned` 的尝试：放弃之后不再有自动的询问。
+- `Manual` 重开的一轮对 `Abandoned` 的尝试也依序取证一遍、渠道穷尽即停；它只能补上结果，不改变等待。
+- 两种触发在 append 前都重查目标尝试仍处于 `Undetermined` 且结果未知，否则不写。
+
+### 放弃跟踪 `abandon` [设计]
+
+`abandon(attempt, note)` 是带 principal 的控制动作（§8.5）。它回答的是 UTA 自己的问题：**还要不要为这次尝试等下去**；它不回答“这次写发生没有”。
+
+- **资格**：该尝试处于 `Undetermined`、等待是 `Active`、结果未知。否则返回 `Rejected(NotUndetermined)`，不写记录。
+- **次序**（放弃是这次尝试等待的结束锚点，在途的取证调用是它的内层，§0.1）：
+  1. IO 壳不再为该尝试发起新的取证调用；
+  2. 已在途的取证调用照常完成，各自按上表 append 自己的结果；
+  3. 然后 IO 壳在一个事务里重查：结果仍未知则 append `Abandoned{attempt, principal, note, rule_version}` 并返回 `Abandoned(position)`；在途调用已给出结果则不写，返回 `Rejected(NotUndetermined)`。
+- **不设持久的“放弃中”标志**：第 1 步只是 IO 壳进程内的停发，不是记录。第 3 步之前崩溃，日志里没有 `Abandoned`，恢复后该尝试照常 `Active`；调用方没有收到返回，重发 `abandon` 即可。
+- **效果**：等待变为 `Abandoned`，这是吸收态。该尝试移出 lane 阻塞头集合（§6.4），它的保留钉释放（§2.4）；IO 壳不再自动取证，`SessionRestored` 不再重开它。
+- **结果仍可补上**：被动的 `Attributed` 与 principal 的 `retry_reconciliation` 照常可以给出 `Found`/`Absent`；它们只补结果，不恢复等待，不重新阻塞 lane。
+- **对外**：结果未补上时显示“已放弃跟踪，结果未知”，从不显示为已发生或未发生；补上之后显示补上的结果，并保留曾放弃跟踪的记录（§8.5）。
+- **代价**：放弃之后 lane 放行后续写，而这次写可能已经发生，后续写所依据的 buying power 与持仓可能不含它（H1）。这是 principal 带名承担的取舍，记录在 `Abandoned` 上。
+
+理由：尝试的结果是上游事实，UTA 只持有它的副本；能否继续是 UTA 自己的决定。principal 能拍板的只有后者。放弃因此只写 UTA 拥有的那一半，结果仍等上游证据。
+
+不选：
+
+- **principal 直接写 `Found`/`Absent`（人工决议）**：那是由 UTA 一侧写出一份上游事实，没有上游证据作源头；之后到达的真实证据与它矛盾时，无从裁决。
+- **先持久化“放弃中”，再等在途调用**：多出一条需要与在途调用结果对账的记录；按生命周期，外层的结束锚点在内层全部结束之后才写，不需要中间态。
+- **取消在途的取证调用**：它们的回答是证据，丢弃等于放弃一个可能的结果。
+- **放弃后仍按会话恢复自动重开**：放弃就是不再为它自动询问；要再问一次由 principal 经 `retry_reconciliation` 显式发起。
 
 ### 被动渠道 `Attributed`
 
 顺序之外还有一条被动渠道。
 
-- 集成推送的带 `attribution: FromAttempt(r)` 的观察记录到达时（或只带 `idempotency_key`、经登记解析到 r，§8.1），若腿 r 处于 `Undetermined` 且未终结，效应侧归因处理器在同一事务 append `ResolutionEvidence{r, Attributed, Found{observation: 该记录, evidence: 该记录的载荷与原始负载}}`。
-- append `Undetermined(r)` 的事务内，同样检查已到达的、归因到 **r** 的观察。腿身份精确匹配：同链另一腿的观察不算。
-- r 仍在 `SendBarrier` 等回执时不产生该记录：链保持线性，回执由 `submit` 返回值落 `VenueAccepted`/`VenueRejected`。
-- 迟到回执（W2 步 4）由此并入同一腿，与取证 `Found` 同效。
+- 带 `attribution: FromAttempt(r)` 的观察记录到达时，若 r 处于 `Undetermined` 且结果未知（等待是 `Active` 或 `Abandoned`），效应侧归因处理器在同一事务 append `ResolutionEvidence{r, Attributed, Found{observation: 该记录, evidence: 该记录的载荷与原始负载}}`。
+- `FromAttempt(r)` 由集成填写（§5.3、§8.3），核心不从键字节推出它：只带调用方键的记录是否属于 r，由集成在它声明的键作用域与唯一期内判断，其外集成填 `Unattributed`。核心也从不把一条记录判为 `External`。
+- append `Undetermined(r)` 的事务内，同样检查已到达的、归因到 **r** 的观察。
+- r 仍在 `SendBarrier` 等回执时不产生该记录：链保持线性，回执由写调用返回值落 `VenueAccepted`/`VenueRejected`/`NotSent`。
+- 迟到回执（W2 步 4）由此并入同一尝试，与取证 `Found` 同效。
 
 [证据：fp-06 修正 7；域 C1/C2/C12]
 
@@ -1006,14 +1023,16 @@ IO 壳**永不 heuristic**。取证是读副作用，可以重试；`submit` 是
 
 ### `replay_by_key`
 
-形式上似写，但保留期内同幂等键重放在语义上是查询：Stripe 同 key 拿回原响应。保留期声明错误即重复下单（Longbridge 10 分钟缓存、IBKR 无键）。
+形式上似写，但保留期内同幂等键重放在语义上是查询：Stripe 同 key 拿回原响应。保留期判断错误即重复下单（Longbridge 10 分钟缓存、IBKR 无键）。
 
-因此它**默认关闭，按 venue 显式开启，且只在能力证据声明的保留期内调用**，渠道顺序里排最后。
+因此它**默认关闭，按 venue 显式开启**，渠道顺序里排最后。IO 壳每次调用都带 `barrier_at`；这个键是否仍在上游保留期内由集成判断，保留期之外返回 `Unavailable`、不重放（§8.3）。上游的保留期是上游的性质，核心不持有它的副本。
 
 ### 不变量
 
-- 取证（读副作用）可重试，`submit`（写副作用）永不重试。由两类副作用的区分保证（§3.4）。
-- `inconclusive` 停人工，IO 壳永不 heuristic。由对账驱动保证。
+- 取证（读副作用）可重试，写调用（写副作用）永不重试。由两类副作用的区分保证（§3.4）。
+- `Inconclusive` 停等，IO 壳永不 heuristic；停等只由新证据推进，或由 principal 放弃跟踪结束。由对账驱动保证。
+- 放弃跟踪从不给出结果；`Abandoned` 只在在途取证全部完成、结果仍未知时 append，之后等待不再改变，也不再自动取证。由 `abandon` 的次序保证。
+- 按键的取证在上游保留期或唯一期之外返回 `Unavailable`，空列表不是 `Absent`。由集成义务（§8.3）保证。
 
 ## 6.7 崩溃恢复与集成崩溃两故障面
 
@@ -1021,16 +1040,14 @@ IO 壳**永不 heuristic**。取证是读副作用，可以重试；`submit` 是
 
 ### 恢复
 
-恢复时 IO 壳从日志重建各 lane 的链状态。判定顺序固定 [设计]：
+恢复时 IO 壳从日志 fold 各 lane 上每次尝试的等待与结果（§6.5 两根轴）。判定顺序固定 [设计]：
 
-1. **先 fold 链是否已 `Resolved`**：任一腿以 `Expired`/`VenueRejected` 终结，或末腿以 `VenueAccepted`/`Found`/`Absent` 终结且按记录的腿计划无下一腿，或已有 `TargetTerminal` 且数量 ≤ 0。已 `Resolved` 者无动作；`Expired` 不会被再过一次发出前门。
-2. **未 `Resolved` 者先看链级状态**：复合链处于 `AwaitingTargetTerminal` 且尚无 `TargetTerminal` 者，继续按目标身份读，不对已有记录重新判定：目标终态判定在进入等待的事务与此后每个 append 目标订单记录的事务里都已求值，成立时已与该记录同事务 append 了 `TargetTerminal`（§6.5）；`deadline` 已过则 `Expired(deadline)`（`leg = 2`）。已有数量 > 0 的 `TargetTerminal` 者，新腿按下一步处理，数量取该记录，不重算。
-3. **其余看当前腿：**
-   - 无 `SendBarrier` 者仍是可安全发送的腿，过发出前门（§6.5）：发送、等待（该集成尚无已建立会话或当前能力不可执行）或 `Expired`；
-   - `SendBarrier` 无后继者，append `Undetermined(CrashWindow)`，进入对账驱动；
-   - `Undetermined` 未终结者，按 `round == 当前轮` 的 `ResolutionEvidence` 重建本轮进度（发起轮次归属，不按 append 先后），在该集成会话建立后续跑下一渠道或停等。
+1. **等待已结束者无动作**：`Finished`（`VenueAccepted`、`VenueRejected`、`NotSent`，或已有 `Found`/`Absent`）、`Expired` 或 `Abandoned`。`Expired` 不会被再过一次发出前门；`Abandoned` 的尝试只有在最近一次重开是它之后的 `Manual`、且该轮渠道尚未穷尽时，才在会话建立后续跑该轮。
+2. **无 `SendBarrier` 者**仍是确未发出的尝试，过发出前门（§6.5）：发送、等待（该集成尚无已建立会话或会话有效能力不可执行）或 `Expired`。
+3. **`SendBarrier` 无后继者**，append `Undetermined(CrashWindow)`，进入对账驱动。
+4. **`Undetermined` 且等待 `Active` 者**，按 `round == 当前轮` 的 `ResolutionEvidence` 重建本轮进度（发起轮次归属，不按 append 先后），在该集成会话建立后续跑下一渠道或停等。
 
-IO 壳不对任何已有 `SendBarrier` 的腿再调用写操作。
+崩溃前正在进行的 `abandon` 若尚未 append `Abandoned`，日志里没有它的痕迹，尝试按第 4 条照常 `Active`（§6.6）。IO 壳不对任何已有 `SendBarrier` 的尝试再调用写操作。
 
 ### 集成崩溃两故障面
 
@@ -1109,7 +1126,7 @@ UTA 对 venue 域事实无锁；DB 隔离词汇不描述 UTA 自身。由 F1 + �
 
 | # | 不变量 | 所有者 |
 |---|---|---|
-| 1 | 同 lane 阻塞头集合正常路径下至多一条未终结 Attempt；`Undetermined` 在 `Resolved` 前同 lane 无新普通写；两个例外扩大集合，集合为空才解除等待 | §6.4 |
+| 1 | 同 lane 阻塞头集合正常路径下至多一次等待中的尝试；`Undetermined` 在结果确立或被 principal 放弃之前同 lane 无新普通写；两个例外扩大集合，集合为空才解除等待 | §6.4 |
 | 2 | 执行事实侧只 append，永不改写为“从未发生” | §3.1 |
 | 3 | 压缩后所有已登记引用的 `LogPosition` ≥ 其所在观察流的保留边界；未登记者得 `BeyondRetention` | §2.4 |
 | 4 | 一张单据至多一个负责人 | §6.2 |
@@ -1121,3 +1138,5 @@ UTA 对 venue 域事实无锁；DB 隔离词汇不描述 UTA 自身。由 F1 + �
 | 10 | 引用了没有集成提供字段的树 fail-closed | §2.5 |
 | 11 | 锚点缺失 = 畸形记录；处理器字段缺失 = 不触发 | §2.1 |
 | 12 | venue 状态映射保留 `Unmapped(raw)`，不伪造穷尽映射 | §2.2、§2.6 |
+| 13 | 一次尝试的等待至多结束一次，`Abandoned` 是吸收态；结果只来自上游证据、集成确知的未交出或发出前的到期，放弃从不给出结果 | §6.5、§6.6 |
+| 14 | 调用方键由核心以 `AttemptRef` 的单射编码铸造；核心从不凭键字节归因，也从不断定 `External` | §6.5 |

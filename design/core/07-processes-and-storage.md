@@ -427,7 +427,7 @@ flowchart TB
 - **表结构与索引**：每张 trace 表以 `(stream_id, log_position)` 为主键，`pos` 单调。`fold_state`、`AS OF` 以及 cursor 之后的记录查询，均退化为引擎原生索引支持的范围扫描。
 - **append 由 Rust 接口保证**：第一边界的第二层“执行事实侧只 append”（§3.1）由 **Rust 侧存储接口**保证：对应表的模块 API 仅暴露 `append`，不依赖 SQL 权限约束。派生侧 `compact_below_retention` 实现为保留边界之下的 `DELETE`，仅适用于 `RetractableDelta` 表。
 - **事务原子性**：
-  - “决策 append（规则 `Outcome`/Decision 记录）+ 规则状态更新”封装在同一个 SQLite 事务内；单文件事务消解了跨存储系统的原子性问题。
+  - 决策 append（规则 `Outcome`/Decision 记录）是一次 SQLite 事务；规则判断所用的状态（`RuleState`）每次由记录 fold 出、不另存，没有需要与决策同事务更新的状态表（§6.3）。
   - 单据 `Close(Prepared)` 与 `Prepared` 记录的 append 也在同一事务内（§6.2）。
   - 对外投递是订阅者按 cursor 读 `Journal`（§4.2），不设待投递表。记录提交后投递失败只是 cursor 不推进，记录不丢（§9.2 #6）。
 - **单写者**：核心进程独占该数据库文件（H10 的 OS 文件锁与 SQLite 锁同向生效）。集成进程与程序宿主**不接触**数据库，仅通过内部协议与核心交换记录，满足 C7 凭据链与 H2 程序不可信要求。
@@ -446,7 +446,7 @@ flowchart TB
 |---|---|
 | 观察 `Journal` | 观察 |
 | 执行事实 `Journal` | 效应 |
-| 规则状态（`RuleState`） | 效应 |
+| 规则状态（`RuleState`） | 效应（执行事实的 fold，不另存，§6.3） |
 | 单据记录（`TicketAction`） | 效应 |
 | 订阅表 / cursor | 观察 |
 | 能力证据（握手的声明版本、`CapabilityObserved`） | 记录在效应侧（执行 J）；最近声明与会话有效声明由集成会话求出并以契约值给出（§7.3） |
@@ -474,13 +474,14 @@ flowchart TB
 
 - **写**：见唯一写入口表（§7.3）。补充：STS 规则链的 Decision/`Outcome`/`Rejection` 记录带 `checked_as_of`；IO 壳的 `VenueAccepted` 与取证 `ResolutionEvidence{Found}` 含 `Evidence`（契约载荷与原始负载，§6.5）；控制记录为 `Applied | Rejected`。
 - **读**：读模型、单据 `basis`、lane 规则（阻塞头集合、`bypass_lane` 控制记录）、IO 壳（重启重建链）、对账驱动、出站处理器（重启重派判定）。投递调度经存储按位置搬运执行事实订阅所选的记录，不解析（§8.5）。
-- **传播**：纯 append；位置即顺序。lane 链状态、链的腿计划（首腿 `SendBarrier`）与 `Resolved` 是它的 fold，不另存；集成的持久 `Halted` 同样是它的 fold（`IntegrationHalted` 与解除它的 `Applied`，§7.2 第 3 步）。
+- **传播**：纯 append；位置即顺序。lane 上每次尝试的等待与结果、阻塞头集合是它的 fold，不另存（§6.4、§6.5）。
 - **会话与程序的持久状态也是它的 fold，不另存**：集成的持久 `Halted`（`IntegrationHalted` 与以位置解除它的 `Applied`，§7.2 第 3 步）；程序的活动集合（`load_program` / `unload_program` 的 `Applied`）与失败抑制（`ProgramHalted` 与以位置解除它的 `load_program` `Applied`，§8.6）；登记的采纳（采纳记录与 `restart_integration` 的 `Applied` 所带的内容 hash，§7.2 第 3 步）。
 
 ### 规则状态（`RuleState`）
 
-- **写 / 读**：STS 规则链（写者是 `step` 的输出）。
-- **传播**：与决策 append 同一事务。
+- **写**：无，它不是持久化状态。
+- **读**：STS 规则链每次求值时由执行事实 fold 出：单据动作与 Decision、lane 上各尝试的记录、`bypass_lane` 控制记录、`deadline` 与核心 UTC 时钟（§6.3）。
+- **传播**：没有副本；重启后与平时同样按记录求值。
 
 ### 单据记录（`TicketAction`）
 

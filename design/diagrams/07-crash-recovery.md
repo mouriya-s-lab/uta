@@ -2,34 +2,33 @@
 
 对照：§6.7 崩溃恢复、§7.2 启动第 1–5 步、§8.6 崩溃恢复、§9.2 崩溃矩阵 #1–#21、W2 脑裂变体、W3、W9。索引见 `README.md`。
 
-## D7.1 重启时每条 Attempt 链的恢复判定
+## D7.1 重启时每次尝试的恢复判定
 
-对照：§6.7“恢复”（判定顺序固定：先 fold `Resolved`，再看当前腿）、§6.5 发出前门与转移表；§7.2 第 2/4 步；§9.2 #1–#5、#7、#8。
+对照：§6.7“恢复”（判定顺序固定：先 fold 等待是否已结束，再看有无 `SendBarrier`）、§6.5 发出前门与转移表、§6.6 放弃跟踪；§7.2 第 2/4 步；§9.2 #1–#5、#7、#8。
 
 ```mermaid
 flowchart TB
-  START["第 2 步：对执行 J 每条 Prepared 做链 fold（不接触集成）"]
-  START --> Q0{"链已 Resolved？<br/>任一腿 Expired / VenueRejected；或末腿 VenueAccepted / Found / Absent 且按首腿 SendBarrier 记录的腿计划无下一腿；或已有 TargetTerminal 且数量 ≤ 0"}
-  Q0 -->|"是"| DONE["无动作（已 Expired 的链不再过发出前门）"]
-  Q0 -->|"否"| Q3{"两腿计划的链处于 AwaitingTargetTerminal 且尚无 TargetTerminal？<br/>撤单腿已终结于 VenueAccepted / Found，且 leg 2 无记录"}
-  Q3 -->|"是"| ATT["第 4 步：不对已有记录重新判定（判定已在进入等待与每个 append 目标订单记录的事务里求值）；继续按目标身份 read（D6.4）；到达的记录使目标终态判定成立 → 同事务 TargetTerminal（算量）→ 数量 > 0 则 leg 2 过发出前门；deadline 到 → Expired(leg 2)，不再判定"]
-  Q3 -->|"否"| LEG["取当前腿 r（单腿计划：leg 1；两腿计划：撤单腿未终结则 r = 撤单腿，否则 r = 新单腿，其数量取已有的 TargetTerminal，不重算）"]
-  LEG --> Q1{"r 有 SendBarrier？"}
-  Q1 -->|"无"| SAFE["本腿确未发出（不变量 §6.9-8）"]
-  SAFE --> G{"第 4 步：发出前门<br/>deadline 未过？该集成会话已建立？意图对当前能力可执行（首腿之后声明的腿计划与记录一致）？"}
-  G -->|"三者皆是"| SEND["durable append SendBarrier(r) → 该腿的写调用（submit / cancel）"]
-  G -->|"deadline 未过，但会话未建立或能力不可执行"| WAIT["不 append 记录，腿保持 Prepared；会话建立 / 能力变化 / deadline 到时重新求值"]
+  START["第 2 步：对执行 J 每条 Prepared 做尝试的 fold（不接触集成）"]
+  START --> Q0{"等待已结束？<br/>VenueAccepted / VenueRejected / NotSent / 已有 Found 或 Absent / Expired / Abandoned"}
+  Q0 -->|"是"| Q4{"Abandoned，且最近一次重开是它之后的 Manual、该轮渠道未穷尽？"}
+  Q4 -->|"否"| DONE["无动作（已 Expired 的尝试不再过发出前门；Abandoned 不自动重开）"]
+  Q4 -->|"是"| MANR["第 4 步（会话建立后）：续跑该轮，渠道穷尽即停；只补结果，等待仍 Abandoned"]
+  Q0 -->|"否"| Q1{"有 SendBarrier？"}
+  Q1 -->|"无"| SAFE["确未发出（不变量 §6.9-8）"]
+  SAFE --> G{"第 4 步：发出前门<br/>deadline 未过？该集成会话已建立？意图对会话有效能力可执行？"}
+  G -->|"三者皆是"| SEND["durable append SendBarrier(p) → 写调用（submit / cancel）"]
+  G -->|"deadline 未过，但会话未建立或能力不可执行"| WAIT["不 append 记录，保持 Prepared；会话建立 / 能力变化 / deadline 到时重新求值"]
   WAIT --> G
-  G -->|"deadline 已过"| EXP["append Expired(r, deadline)：终，不误升 Undetermined，不补偿（#2）"]
-  Q1 -->|"有"| Q2{"SendBarrier(r) 有后继？"}
-  Q2 -->|"无"| UD["第 2 步即 append Undetermined(r, CrashWindow)（#3/#4/#5）<br/>同事务回查已到达、归因到 r 的观察"]
-  UD --> DRV["第 4 步（该集成会话已建立后）：启动对账驱动（D6.2）；本轮进度 = round == 当前轮 的 ResolutionEvidence（#7）<br/>停等者因会话建立自动 append ReconciliationReopened{SessionRestored}"]
-  Q2 -->|"Undetermined 未终结"| DRV
+  G -->|"deadline 已过"| EXP["append Expired(p, deadline)：等待结束，未交出；不误升 Undetermined，不补偿（#2）"]
+  Q1 -->|"有"| Q2{"SendBarrier(p) 有后继？"}
+  Q2 -->|"无"| UD["第 2 步即 append Undetermined(p, CrashWindow)（#3/#4/#5）<br/>同事务回查已到达、归因到 p 的观察"]
+  UD --> DRV["第 4 步（该集成会话已建立后）：启动对账驱动（D6.2）；本轮进度 = round == 当前轮 的 ResolutionEvidence（#7）<br/>停等且等待 Active 者因会话建立自动 append ReconciliationReopened{SessionRestored}"]
+  Q2 -->|"Undetermined，等待 Active"| DRV
 ```
 
-读法：判定只用记录；两个二分点之前先问"链是否已完"，把已终结的链（含只有 `Expired` 的链）挡在驱动之外；其余归入"重发 / 过期 / 对账 / 等目标终态"四个桶。"重发"桶在集成会话建立前停在发出前门等待，不产生记录；只有 `deadline` 能把它变成 `Expired`。
+读法：判定只用记录；先问"等待是否已结束"，把已结束的尝试（含只有 `Expired` 的、已 `Abandoned` 的）挡在自动驱动之外；其余归入"重发 / 过期 / 对账"三个桶。"重发"桶在集成会话建立前停在发出前门等待，不产生记录；只有 `deadline` 能把它变成 `Expired`。崩溃前进行中的 `abandon` 若未 append `Abandoned`，日志里没有痕迹，尝试照常落进对账桶（#8）。
 
-核出："已 `Expired` 且从未有 `SendBarrier`"的链在原恢复规则下会被再过一次发出前门——已并入 §6.7（先 fold `Resolved`）。
+核出：无。
 
 ## D7.2 崩溃窗口在 W1 时序上的位置
 
@@ -47,7 +46,7 @@ sequenceDiagram
   C->>DB: COMMIT EffectRequest + 派生 + Checkpoint + cursor
   Note over C,DB: ✕21 EffectRequest 已提交、EffectResponse 未提交：重启重派（写：重新开单；读：重新执行一次）
   C->>DB: COMMIT Draft + SubmitForDecision + EffectResponse{Drafted}
-  C->>DB: STS 各步 Outcome（带 checked_as_of）+ RuleState
+  C->>DB: STS 各步 Outcome（带 checked_as_of）；规则状态由记录 fold，不另写
   Note over C,DB: ✕1 Prepared + Close(Prepared) 同事务中途：皆无，单据仍 AwaitingDecision
   C->>DB: COMMIT Prepared + Close(Prepared)
   Note over C,DB: ✕2 Prepared 有、SendBarrier 无：确未发出 → 过发出前门后发送（会话未建立则等待），或 deadline 已过 → Expired
@@ -55,8 +54,8 @@ sequenceDiagram
   Note over C,I: ✕3 SendBarrier 有、写调用未发：可能已发出 → Undetermined(CrashWindow)
   C->>I: submit
   Note over C,I: ✕4 写调用已发、回执未到：同 ✕3；✕14 集成在此崩溃：会话结束，集成会话恰完成该调用一次 → NoResponse → Undetermined
-  I-->>C: Ack
-  Note over C,DB: ✕5 回执已到、未 append：同 ✕3，by-key 取证重得同一状态（Evidence 落执行 J）
+  I-->>C: Ack（或 NotSent）
+  Note over C,DB: ✕5 回执或 NotSent 已到、未 append：同 ✕3，by-key 取证重得同一状态（Evidence 落执行 J）；未交出的在唯一期内得 Absent
   C->>DB: COMMIT VenueAccepted（含 Evidence）+ 该回应的观察记录 + 计数健康观察
   Note over C,A: ✕6 记录已提交、cursor 未推进：从已确认 cursor 重投，按 LogPosition 去重
   C->>A: 投递
@@ -78,21 +77,21 @@ sequenceDiagram
   participant NEW as 新核心（instance_id = n+1）
   participant IB as 集成进程 B（epoch (n+1, 1)）
   participant J as 执行 J / 观察 J
-  OLD->>J: SendBarrier(p,1)
-  OLD->>IA: submit(attempt (p,1))
+  OLD->>J: SendBarrier(p)
+  OLD->>IA: submit(attempt p)
   Note over OLD: 旧核心死亡（锁随进程释放）
   IA->>V: 上游下单仍可能送达
   NEW->>J: 取 fence；instance_id = n+1（旧会话 epoch 全部作废）
   NEW->>IA: 按进程表回收：请求退出 → 超时强制终止
-  NEW->>J: SendBarrier(p,1) 无后继 → Undetermined((p,1), CrashWindow)
+  NEW->>J: SendBarrier(p) 无后继 → Undetermined(p, CrashWindow)
   NEW->>IB: 拉起并 handshake(epoch (n+1, 1))
   V-->>IA: 迟到回执（若 A 尚存）
-  IA--xNEW: 旧 epoch 回执在边界丢弃
-  par 两条并入路径（各自 append 前检查 (p,1) 仍 Undetermined 未终结；先到者终结腿，后到者不再 append）
-    NEW->>IB: query_by_key(key) → Found → ResolutionEvidence{(p,1), ByKey, Found}
+  IA--xNEW: A 的通道只通向已退出的旧核心，回执不进入新核心
+  par 两条并入路径（各自 append 前检查 p 仍 Undetermined；先到者确立结果，后到者不改结果）
+    NEW->>IB: query_by_key(K(p), key_role, scope, barrier_at) → Found → ResolutionEvidence{p, ByKey, Found}
   and
-    V-->>IB: 订单状态推送（attribution FromAttempt((p,1)) 或 idempotency_key）
-    IB->>J: 观察记录 → (p,1) 仍未终结 → 同事务 ResolutionEvidence{(p,1), Attributed, Found}
+    V-->>IB: 订单状态推送（集成在声明的键作用域与唯一期内填 attribution FromAttempt(p)）
+    IB->>J: 观察记录 → p 结果仍未知 → 同事务 ResolutionEvidence{p, Attributed, Found}
   end
   Note over NEW,J: 该意图恰一条 SendBarrier；fixture venue 调用 ≤ 1；不产生双写
 ```
@@ -131,7 +130,7 @@ flowchart TB
 | #5 | D7.2 ✕5、D6.3 | `Evidence` 在执行 J |
 | #6 | D7.2 ✕6、D3.4 | cursor 语义 |
 | #7 | D7.1 DRV、D6.2 | 下一渠道由 fold 重建 |
-| #8 | D7.1 Q0/Q3、D6.4、D1.5 | 先判链是否已完（含 `TargetTerminal` 数量 ≤ 0），再续 `AwaitingTargetTerminal` 或按已记的数量发新单腿 |
+| #8 | D7.1 Q0/Q4、D6.4 | `abandon` 没有中间记录：未 append `Abandoned` 则仍 `Active`，落进对账桶 |
 | #9 | D1.5 末行 | 半写不可见 |
 | #10 | D7.4 T5 | 派生重算，未提交贡献重建 |
 | #11 | D7.4 T6 | 半写快照丢弃，fold 重建 |

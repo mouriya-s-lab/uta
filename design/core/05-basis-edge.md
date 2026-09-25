@@ -53,8 +53,8 @@ enum BasisValidity { Fresh, Stale(Lag), Retracted(LogPositions), BeyondRetention
 
 ### 各取值的含义
 
-- `Fresh`：依据滞后不超过该操作声明的窗口、未被撤回、未落到保留边界下。
-- `Stale` / `Retracted`：只对派生侧（`RetractableDelta`）位置，分别是年龄超窗、旧贡献被撤回。
+- `Fresh`：每个依据位置与所在流当前已提交流末的距离不超过该操作声明的窗口、未被撤回、未落到保留边界下。
+- `Stale` / `Retracted`：只对派生侧（`RetractableDelta`）位置，分别是距离超窗、旧贡献被撤回。
 - `BeyondRetention`：只对观察侧位置。引用位置落到其所在流的保留边界之下，不再能精确重建（§2.4）；执行事实侧没有保留边界。
 - 执行事实侧的引用**不会因年龄变假**（只 append，§3.1）。
 
@@ -71,17 +71,19 @@ enum BasisValidity { Fresh, Stale(Lag), Retracted(LogPositions), BeyondRetention
 
 有效性窗口是 `操作种类 × WriteLaneKey 策略` 的参数，而非全局常量。
 
-**完备位置。** 完备进度是逻辑时间（§2.3），`basis` 是位置。核心每次推进某流的完备进度时，同时记下**完备位置** = 推进时该 `StreamId` 的流末 `LogPosition`。推进之后不再有 `occurred_at` 早于该逻辑时间的记录，所以此位置之前的记录集已闭合。`basis_valid` 只比较位置。
+**比较的只是 UTA 自己的位置。** 滞后层把依据位置与该 `StreamId` **当前已提交的流末**比较：两者都是核心日志上的位置，核心是它们的源头（§2.3）。它不读完备进度：上游历史是否已闭合是来源的性质，只有来源证据能证明，而且证明的是来源自己的坐标（序号覆盖、`covered_to`），不是这里要的“依据之后日志上又来了多少”（§2.3、§4.2）。撤回与保留边界同样是核心日志上的事实。
 
 **`Lag` 的度量。**
 
-- `Lag` 以同一 `StreamId` 上的 `Seq` 距离计。
+- `Lag` 以同一 `StreamId` 上的 `Seq` 距离计：依据位置之后，该流在同一 epoch 上已提交的记录数。
 - `basis` 位置的 epoch 早于该流当前 epoch 即 `Stale`：跨 epoch 无可比序（§2.3）。
 
-**默认窗口 `Lag = 0`。** 未声明窗口的操作，`basis` 中每条派生侧流的位置**不早于**该流最近一次完备位置，早于它即 `Stale`。即决定至少看到了所有“之前不再变”的记录。
+**默认窗口 `Lag = 0`。** 未声明窗口的操作，`basis` 中每条派生侧流的位置必须就是该流当前已提交的流末；此后该流又提交了任何记录即 `Stale`。即决定看到了核心此刻已有的全部记录。
 
-- 理由：完备进度是“之前不再变”的唯一保证（§2.3）。以它为默认，使未声明策略的操作 fail-closed 于最保守的一侧，而不是静默接受任意滞后。
-- 默认窗口不承诺可用率：完备位置在拟单与放行之间前进了就 `Stale`。需要容忍决策延迟的操作，由策略显式声明 `Lag`。
+- 理由：没有来源证据时，核心能确知的只有“依据之后日志上还有没有新记录”。以它为默认，使未声明策略的操作 fail-closed 于最保守的一侧，而不是静默接受任意滞后。
+- 代价：默认窗口不承诺可用率：拟单与放行之间该流只要又提交了一条记录就 `Stale`，行情类流上几乎总是如此。需要容忍决策延迟的操作，由策略显式声明 `Lag`。
+- 本门不承诺依据“看到了上游此刻的全部事实”：那需要来源证据证明的完备，本门不用它（§4.2）。
+- 不选：**按完备进度（或由收到时间推出的进度）比较**：完备与否是来源的性质，核心没有来源证据时给不出；由收到时间推出的进度是以本地时钟代替来源，推出的“闭合”没有源头。
 
 ### 与两阶段协议的关系
 
@@ -96,7 +98,7 @@ enum BasisValidity { Fresh, Stale(Lag), Retracted(LogPositions), BeyondRetention
 `Prepared` 是同一条记录，是单据 → IO 壳的**唯一交出点**。两者同属效应宇宙（§3.2）。
 
 - 单据侧只认它是“我已交出”：`Close(Prepared(position))` 的结果（§6.2）。
-- IO 壳只认它是“我该做的”：链起点 `Prepared → SendBarrier → …`（§6.5）。
+- IO 壳只认它是“我该做的”：一次尝试的起点 `Prepared → SendBarrier → …`（§6.5）。
 
 两边各认一半，中间隔着整条 STS 链。
 
@@ -107,9 +109,9 @@ enum BasisValidity { Fresh, Stale(Lag), Retracted(LogPositions), BeyondRetention
 - **记录归观察**：`attribution` 落在订单 / 成交观察记录上。
 - **响应归效应**：读它的处理器（lane 决议匹配、读模型归因）注册在效应侧。
 - **由谁填**：
-  - 集成填 `attribution`，因为它持有 venue 回执与 `idempotency_key` 的对应。
-  - IO 壳在回执与取证的观察记录上，只对由该条自己的关联证据确定属于该腿的记录填 `FromAttempt(AttemptRef)`；同一回应里的其余记录保留各自的归因，不因同在一个回应、指向同一目标订单或共享 `provenance` 而继承（记录模型，§6.5）。
-  - 集成填不出的记 `Unattributed`，由 IO 壳按键回读补。
+  - 集成填 `attribution`：`FromAttempt`、`External`、`Unattributed` 都是集成依上游关联证据作出的判定（§8.3）。只凭调用方键时，集成只在它声明的键作用域与唯一期内填 `FromAttempt`，其外填 `Unattributed`；键字节相同本身不证明属于哪次尝试（§6.5 调用方键由核心铸造）。
+  - IO 壳在回执与取证的观察记录上，只对由该条自己的关联证据确定属于这次尝试的记录填 `FromAttempt(AttemptRef)`；同一回应里的其余记录保留集成给出的归因，不因同在一个回应、指向同一目标订单或共享 `provenance` 而继承（记录模型，§6.5）。
+  - 核心不补归因：集成填不出的就是 `Unattributed`，核心不按键字节把它改成 `FromAttempt`，也从不断定 `External`。
 
 ### 不变量
 

@@ -251,7 +251,7 @@
 - 核心对集成的全部调用都经集成会话（§7.3）的调用通道；IO 壳是核心中唯一调用集成写接口的地方。
 - 对账取证是读副作用（可重试）；`submit`/`cancel` 是写副作用（永不重试）。
 - 每个操作的**动作轴**（对外部世界是读 / 写 / 非动作）与**核心内部结果**（append / 持久化）分开写，避免“读 / 写副作用”一词混两义。
-- `NoResponse` 与 `Unavailable` 是一等返回值而非异常。
+- `NotSent`、`NoResponse` 与 `Unavailable` 是一等返回值而非异常。
 
 ### `handshake() → Projection | Refused | Unavailable`
 
@@ -285,75 +285,81 @@
 - 理由：订阅的 owner 是核心、归属 principal（C5），集成换了声明不能删除它；挂起保留需求，流回来时下游不必重新订阅。只停路由、不停投递，是因为已 append 的记录与声明无关。
 - 不选：删除订阅或把它转为“被拒”（需求丢失，下游须自行发现后重订）；照旧“活”却不再有供给（与正常安静的流不可区分）。
 
-### `submit(attempt) → Ack | Reject | NoResponse`
+### `submit(attempt) → Ack | Reject | NotSent | NoResponse`
 
-- **语义**：投放一次写（一条腿）。参数 [设计]：
-  - 每条腿都带：该腿的 `AttemptRef`；意图的 `WriteLaneKey` 与 `OperationKind`；该腿声明带键时它 `SendBarrier` 所记的调用方键。
-  - 意图参数及其所依据的意图参数 schema 身份（§6.2 参数合规）。两腿改单的新单腿，参数里的数量是 `TargetTerminal` 记下的新单大小（§6.5）：剩余量口径下核心把参数的 `quantity` 换成这个值再交出，绝对量口径下参数原样，新单大小就是它所带的 `quantity` 或 `notional`。集成按交来的参数下单，不自行重算，也不会同时收到两个数量。
-  - 按操作种类带 `target`：`Place` 不带；`Close` 带 `PositionRef`，即它所含的持仓身份与 instrument，取值同持仓公共 schema 的这两个字段（§6.2、§8.1）；原子改单计划带意图的订单目标（`VenueRef` 或 `IdemKey`），集成在上游以一次写完成改单；两腿改单的新单腿不带 `target`，它是一张新订单，不是对目标的改单。
-  - 理由：`target` 是锚点，不在意图参数里（§6.2），集成从参数里取不到它，而按持仓身份平仓的上游没有 `PositionRef` 就无从寻址；`AttemptRef` 不说明作用域与操作种类，集成要落到哪个账户、做哪种写，只能由核心交出；参数 schema 身份说明这份参数按哪一版 schema 写成，集成据它解读扩展字段。不选：**只交意图参数，锚点由集成反查**：集成不持有意图与执行记录（§8.3）；**把整条意图记录交出（含 principal、`basis`）**：它们是核心的授权与依据，集成不读；**不带 schema 身份、由集成按它此刻的声明解读参数**：集成推送的 `CapabilityObserved` 可能在核心过了发出前门之后才到达核心，集成此刻声明的版本已不是发出前门核对的那一版，同一份参数会按另一版被解读；带上身份，集成看得出不一致，这时按 §8.3 不发写、返回 `NoResponse`（→ `Undetermined`），不返回 `Reject`；**新单腿同时带意图原数量与算出的数量**：一个字段两个候选值，取错就是按原数量加仓（H1）；**新单腿也带 `target`**：集成可能把它当成对目标的改单。
+- **语义**：投放一次写（一次尝试，对上游恰一次写）。参数 [设计]：
+  - 该尝试的 `AttemptRef`；意图的 `WriteLaneKey` 与 `OperationKind`；该尝试 `SendBarrier` 所记的调用方键（键角色不是 `None` 时），即核心以 `AttemptRef` 的固定单射编码铸造的键（§6.5）。编码随 IDL 发布：`attempt_position` 的定长文本编码，不取哈希、不截断。
+  - 意图参数及其所依据的意图参数 schema 身份（§6.2 参数合规）。参数原样交出，核心不改写其中任何值；数量口径等参数由上游在这一次写里按 schema 的字面含义执行。
+  - 按操作种类带 `target`：`Place` 不带；`Close` 带 `PositionRef`，即它所含的持仓身份与 instrument，取值同持仓公共 schema 的这两个字段（§6.2、§8.1）；`Replace` 带意图的订单目标（`VenueRef` 或 `IdemKey`），集成在上游以一次写完成改单。
+  - 理由：`target` 是锚点，不在意图参数里（§6.2），集成从参数里取不到它，而按持仓身份平仓的上游没有 `PositionRef` 就无从寻址；`AttemptRef` 不说明作用域与操作种类，集成要落到哪个账户、做哪种写，只能由核心交出；参数 schema 身份说明这份参数按哪一版 schema 写成，集成据它解读扩展字段。不选：**只交意图参数，锚点由集成反查**：集成不持有意图与执行记录（§8.3）；**把整条意图记录交出（含 principal、`basis`）**：它们是核心的授权与依据，集成不读；**不带 schema 身份、由集成按它此刻的声明解读参数**：集成推送的 `CapabilityObserved` 可能在核心过了发出前门之后才到达核心，集成此刻声明的版本已不是发出前门核对的那一版，同一份参数会按另一版被解读；带上身份，集成看得出不一致，这时不发写、返回 `NotSent(SchemaMismatch)`（§8.3），不返回 `Reject`，也不返回 `NoResponse`：它确知没有交出。
 - **动作轴**：**写**。
-- **返回**：`Ack(venue_id, receipt)`（业务回执，`receipt` 是订单状态的契约载荷及其原始负载）/ `Reject(reason)` / `NoResponse`。
+- **返回**：
+  - `Ack(venue_id, receipt)`：业务回执，`receipt` 是订单状态的契约载荷及其原始负载；
+  - `Reject(reason)`：上游拒绝；
+  - `NotSent(reason)`：集成能证明这次写没有交给任何可能把它送出的部件（§6.5 `NotSent`、§8.3），`reason ∈ {SchemaMismatch, LocalRefusal(raw)}`；
+  - `NoResponse`：可能已交出而没有业务回执。
 - **核心内部结果**（记录模型，§6.5）：
   - `Ack` → 同一事务 append `VenueAccepted{venue_order_id, receipt: Evidence, observation}`（执行 J，永存，§6.5）+ 回执观察记录（订单状态；回执含成交时每笔可识别执行另一条成交记录，§8.1；`provenance: Receipt{AttemptRef}`，`attribution` 按各条自己的关联证据填写）；
   - `Reject` → `VenueRejected`；
+  - `NotSent` → `NotSent{reason, evidence}`，等待结束，不进对账；
   - `NoResponse` → `Undetermined`。
-- **错误**：超时 / 集成崩溃 / 传输 ACK / HTTP 5xx / 会话在调用返回前结束（§7.2 第 3 步）全部 `NoResponse` → `Undetermined`。venue 单方面决定，无 commit ack。
+- **错误**：集成在它自己的时限内没得到回执、集成崩溃、传输 ACK、HTTP 5xx、会话在调用返回前结束（§7.2 第 3 步），只要可能已交出，全部 `NoResponse` → `Undetermined`。venue 单方面决定，无 commit ack。时限由集成定，核心不另设写调用的超时（§8.3）。
 - **重试**：**永不重试**；`SendBarrier` 保证至多首执一次。
 
-### `query_by_key(key) → Found | Absent | Unavailable`
+### `query_by_key(key, key_role, scope, barrier_at) → Found | Absent | Unavailable`
 
-- **语义**：按调用方键回读该键对应的那次写。它只是取证渠道：`key` 是被取证那条腿 `SendBarrier` 所记的键（§6.6）；按目标身份等目标终态用 `read`，不用它（§6.5）。**动作轴**：**读**。
+- **语义**：按调用方键回读该键对应的那次写。它只是取证渠道：`key` 是被取证那次尝试 `SendBarrier` 所记的键，`key_role` 是同处所记的键角色，`barrier_at` 是该 `SendBarrier` 的核心时刻（§6.6）。**动作轴**：**读**。
 - **返回**：`Found(state)` / `Absent` / `Unavailable`。
+  - 集成按 `barrier_at` 判断这个键此刻是否仍在上游对该作用域的键唯一期内（§8.3）；在期内才可能给出 `Absent`，期外返回 `Unavailable`，包括无法排除上游执行时刻晚于 `barrier_at` 所留的余量时。
 - **核心内部结果**：
   - `Found` → 同事务 观察记录 + `ResolutionEvidence{ByKey, Found{observation, evidence}}`；
   - `Absent` → `ResolutionEvidence{ByKey, Absent}`。这是唯一有明确否定语义的渠道。
-- **错误**：`Unavailable` → `Gap{origin: Channel}`，同渠道再发，不算取证；该腿的声明里没有此渠道（包括不带键的腿）则不调用。
+- **错误**：`Unavailable` → `Gap{origin: Channel}`，同渠道再发，不算取证；该尝试的声明里没有此渠道（包括不带键的尝试）则不调用。
 - **重试**：可重试。
 
 ### `list_open(scope) → Listing | Unavailable`
 
-- **语义**：列 open orders。只作撤单腿以外的腿的取证渠道（§6.6 撤单腿的取证）。**动作轴**：**读**。
+- **语义**：列 open orders。只作撤单以外的尝试的取证渠道（§6.6 撤单尝试的取证）。**动作轴**：**读**。
 - **返回**：`Listing(items)` / `Unavailable`。
 - **核心内部结果**：
-  - 命中归因到被取证腿的订单 → 同事务 观察记录 + `ResolutionEvidence{Listing, Found}`；
+  - 命中归因到被取证尝试的订单 → 同事务 观察记录 + `ResolutionEvidence{Listing, Found}`；
   - 未命中 → `ResolutionEvidence{Listing, Inconclusive}`。F10：listing 未见不证明未递；本渠道没有 `Absent`。
-- **错误**：`Unavailable`（超时 / 断连 / 配额拒绝）→ `Gap{origin: Channel}`，同渠道再发；该腿的声明里没有此渠道则不调用；空 `Listing` ≠ `Absent`。
+- **错误**：`Unavailable`（集成时限内无结果 / 断连 / 配额拒绝 / 超出上游对 listing 的保证，§8.3）→ `Gap{origin: Channel}`，同渠道再发；该尝试的声明里没有此渠道则不调用；空 `Listing` 永远不是 `Absent`。
 - **重试**：可重试、可换渠道。
 
 ### `list_fills(scope, since) → Fills | Unavailable`
 
-- **语义**：列成交。只作撤单腿以外的腿的取证渠道（§6.6 撤单腿的取证）。**动作轴**：**读**。
+- **语义**：列成交。只作撤单以外的尝试的取证渠道（§6.6 撤单尝试的取证）。**动作轴**：**读**。
 - **返回**：`Fills(items)` / `Unavailable`。`items` 是成交记录，各带 `execution_id`（§8.1）；上游分页在适配器内（§8.1 操作的粒度），任一页失败即整体 `Unavailable`。
 - **核心内部结果**：
-  - 命中归因到被取证腿的成交 → 同事务 观察记录 + `ResolutionEvidence{Fills, Found}`；
-  - 未命中 → `ResolutionEvidence{Fills, Inconclusive}`（本渠道没有 `Absent`）。
+  - 命中归因到被取证尝试的成交 → 同事务 观察记录 + `ResolutionEvidence{Fills, Found}`；
+  - 未命中 → `ResolutionEvidence{Fills, Inconclusive}`（本渠道没有 `Absent`，空 `Fills` 也不是）。
 - **错误**：
-  - `Unavailable`（超时 / 断连 / 配额拒绝）→ `Gap{origin: Channel}`，同渠道再发；
+  - `Unavailable`（集成时限内无结果 / 断连 / 配额拒绝）→ `Gap{origin: Channel}`，同渠道再发；
   - 缺 `since` 游标 → 范围按声明保守取，仍只作 advisory；
-  - 该腿的声明里没有此渠道则不调用；
+  - 该尝试的声明里没有此渠道则不调用；
   - 结果中某笔执行给不出身份时整体返回 `Unavailable`，不交出删掉它的缺项集合；上游那些不是执行的行（如 Binance `t = -1`）由记录映射丢弃，不是错误（§8.1）。
 - **重试**：可重试。
 
-### `cancel(attempt) → Ack | Reject | NoResponse`
+### `cancel(attempt) → Ack | Reject | NotSent | NoResponse`
 
-- **语义**：撤单（一条腿）：单腿 `Cancel` 意图，或两腿改单的首腿。参数是该腿的 `AttemptRef`、意图的 `WriteLaneKey` 与 `OperationKind`（`Cancel` 或 `Replace`）、意图的 `target`（`VenueRef` 或 `IdemKey`）、该腿声明为带请求键时的那个键；单腿 `Cancel` 另带意图参数及其意图参数 schema 身份，两腿改单的撤单腿不带（改单的参数属于新单，撤单腿只撤目标，§8.3）。**动作轴**：**写**。
-- **返回**：同 `submit` 的回执形态。
-- **核心内部结果**：同 `submit`（按腿，§6.5）。
+- **语义**：撤单（一次尝试）：`Cancel` 意图。参数是该尝试的 `AttemptRef`、意图的 `WriteLaneKey` 与 `OperationKind`、意图的 `target`（`VenueRef` 或 `IdemKey`）、该尝试声明为带请求键时核心铸造的那个键，以及意图参数及其意图参数 schema 身份。**动作轴**：**写**。
+- **返回**：同 `submit` 的回执形态。回执里目标订单的状态是目标订单的记录，按它自己的关联证据归因，不归到这次撤单（§6.6 撤单尝试的取证）；`Ack` 不证明目标已结束。
+- **核心内部结果**：同 `submit`（§6.5）。
 - **错误**：
-  - 无回执 → `Undetermined`；
+  - 可能已交出而无回执 → `Undetermined`；
   - `target` 的种类不在该 `(scope, OperationKind)` 声明接受之列 → 意图不可执行（§6.2 可执行性）：输入约束步本地否决 `TargetNotAccepted`，不放行；声明在放行后变化时，发出前门等待，不发出。
 - **重试**：永不重试。
 
-### `replay_by_key(key) → Original | Unavailable`
+### `replay_by_key(key, key_role, scope, barrier_at) → Original | Unavailable`
 
-- **语义**：保留期内以被取证那条腿的键重放、取原响应。**动作轴**：**读**（形式似写、语义是读）。
+- **语义**：以被取证那次尝试的键重放、取原响应。**动作轴**：**读**（形式似写、语义是读）。
 - **返回**：`Original(response)` / `Unavailable`。
 - **核心内部结果**：
   - `Original` → 同事务 观察记录 + `ResolutionEvidence{Replay, Found}`；
-  - 保留期内无此键 → `ResolutionEvidence{Replay, Inconclusive}`。
-- **错误**：保留期声明错误即重复下单。默认关闭、按 venue 显式开启、只在声明保留期内调用、渠道顺序排最后（§6.6）。
-- **重试**：保留期内幂等；期外不可用。
+  - 集成确认该键在上游保留期内而上游答无此键 → `ResolutionEvidence{Replay, Inconclusive}`。
+- **错误**：保留期判断错误即重复下单。所以集成按 `barrier_at` 判断该键是否仍在上游保留期内，期外或无法判断时返回 `Unavailable`、不向上游重放（§8.3）；核心不持有保留期。默认关闭、按 venue 显式开启、渠道顺序排最后（§6.6）。
+- **重试**：保留期内幂等；期外集成不发。
 
 ### `backfill(stream, window, subjects) → Covered | Unavailable | Refused`
 
@@ -489,17 +495,21 @@
 - 填锚点与已注册字段（含 `attribution`，见下），附上映射产出的契约载荷与 `payload_schema`，以及应保留的原始负载。
 - 只经核心拉起它时交给它的通道收发，不另开连接；从继承的凭据句柄读出凭据后关闭它，凭据只留在本进程内（§7.1）。集成不填 `SessionEpoch`：会话由通道决定（§7.2 第 3 步）。
 - 响应投放、对账查询、一次性读与回填（仅限核心调用），返回值只取 §8.2 的封闭集合，且每个值的含义严格成立：
-  - `Ack` 只在上游给出业务回执时返回；`Reject` 只在上游明确拒绝时返回；其余一律 `NoResponse`（§8.2）。
-  - 集成在 `submit` / `cancel` 内自行决定不发写（例如先读到上游没有交易权限、发现上游连接已断、载荷含它发不出的选项），同样返回 `NoResponse`，核心记 `Undetermined` [设计]。`SendBarrier` 此时已在，核心只凭证据区分“没发出”与“发出了没回音”。
-    - 理由：设一个“未发送”返回值，要集成证明这笔写从未交给任何能把它送出去的东西（SDK 缓冲、断线排队后补发都算送出）。这与 `Absent` 同类，原则上可证；但发出前门已把最常见的来源（没有会话）挡在 `SendBarrier` 之前（§6.5），能力与参数 schema 也在 `Prepared` 之前检查（§6.2）。剩下的本地拒绝有多少是推断 [推断]，不足以抵消新终态给转移表、恢复与对外翻译带来的分支。保持现状的代价只是 fail-closed：lane 等取证收敛或人工决议。会推翻它的观测见 §10.4 #16。
+  - `Ack` 只在上游给出业务回执时返回；`Reject` 只在上游明确拒绝时返回；`NotSent` 只在能证明这次写没有交给任何可能把它送出的部件时返回（SDK 发送缓冲、断线后补发的队列都算已交出）；其余一律 `NoResponse`（§8.2）。
+  - 集成在 `submit` / `cancel` 内、交出之前自行决定不发写（例如发现意图的参数 schema 身份已不是它此刻接受的、载荷含它发不出的选项、先读到上游没有交易权限），返回 `NotSent`：schema 身份不符是 `SchemaMismatch`，其余是带原文的 `LocalRefusal`。一旦可能已交出，就只能是 `NoResponse`，不能因为“大概没发出去”返回 `NotSent` [设计]。
+  - 每个写调用在集成自己的时限内给出上述封闭结果之一：时限由集成按上游定，核心不另设写调用的超时；时限到时可能已交出，结果就是 `NoResponse`。
   - `handshake` 的 `Refused` 只在上游对身份或配置给出明确拒绝时返回；上游不可达、超时或回答不明确一律 `Unavailable`（§8.2）。单笔操作被拒（某一单的权限、某一次读的开通）不是握手的 `Refused`，不使集成 `Halted`。
   - 会话中上游拒绝了集成的身份（凭据被吊销、会话令牌不能续期）时，集成立即结束当前会话：关闭它那一端的通道并退出。核心随即结束该会话，进程 OS 确认退出之后拉起新进程握手，由那次握手返回 `Refused`（§7.2 第 3 步）。不另设推送：会话结束是核心本来就观察得到的事件。
-  - `Absent` 只在上游对该键给出明确否定、且这个否定足以证明该键对应的写未发生时返回。上游的“查不到”不足以证明时（例如键已超出上游保证唯一或可查的期限，§1.6.1），返回 `Unavailable`，不返回 `Absent`。
+  - `Absent` 只在上游对该键给出明确否定、且这个否定足以证明该键对应的写未发生时返回。集成按调用所带的 `barrier_at` 判断这个键是否仍在上游对该作用域的键唯一期内，并为上游执行时刻可能晚于 `barrier_at` 留出余量；不在期内或判断不了（例如键已超出上游保证唯一或可查的期限，§1.6.1），返回 `Unavailable`，不返回 `Absent`。
+  - `replay_by_key` 只在按 `barrier_at` 判断该键仍在上游保留期内时向上游重放；期外或判断不了返回 `Unavailable`。listing 的未见需要隔一段时间再确认的上游，间隔由集成判断，保证之外返回 `Unavailable`。空列表永远不当作否定（§6.6）。
   - `read`/`backfill` 的 `Refused` 只在上游对本次请求给出明确拒绝（未开通、主体不受支持、参数被拒）时返回；超时、断连、限流一律 `Unavailable`。`Refused` 不改变该流的声明能力。
   - `backfill` 的 `covered_to` 只表示从请求窗口起点起、本次实际取得的连续前缀，且只在上游历史已穷尽时短于窗口；任一次上游调用失败即整体 `Unavailable`（§8.1），不交出缺项结果。
   - 一次 `submit` / `cancel` 在上游至多产生一次写调用：集成内部不重发写，上游 SDK 自带的写重试必须关闭。写的重试由核心决定，而核心永不重试写（§8.2）。
-  - 声明的腿计划如实：声明原子改单计划的，那一次 `submit` 在上游以一次写完成改单，并按意图参数 schema 所接受口径的原义执行；声明两腿计划的，`cancel` 只撤目标、`submit` 只下新单，数量取核心给出的值。
-  - 声明的键角色如实：某腿的键声明为订单键，上游就能以这个键找到该腿投放（或改后仍在）的订单，并据此撤单或改单；只能以它识别这次请求的，声明为请求键。按这个键回答 `query_by_key` 与 `replay_by_key` 的，只回答该键对应的那次写。
+  - 声明的写操作如实：一种操作种类对上游恰一次写。声明 `Replace` 为 `Supported` 的，那一次 `submit` 在上游以一次写完成改单，并按意图参数 schema 所接受口径的原义执行；上游只能先撤后下的，`Replace` 声明为 `Unsupported`（§6.2）。
+  - 声明的键角色如实 [设计]：
+    - 只在上游在该作用域逐字接受核心的键编码（§8.2 `submit`）的每个值时声明订单键或请求键；字符集或长度装不下就声明 `None`，不哈希、不截断、不改写核心给的键。
+    - 某尝试的键声明为订单键，上游就能以这个键找到该尝试投放（或改后仍在）的订单，并据此撤单或改单；只能以它识别这次请求的，声明为请求键。按这个键回答 `query_by_key` 与 `replay_by_key` 的，只回答该键对应的那次写。
+    - 键角色不是 `None` 的声明同时说明键的作用域与上游保证唯一的期限。集成只在这个作用域与期限内，依上游以该键给出的关联把记录填为 `FromAttempt`；其外只凭键的记录填 `Unattributed`。同一作用域没有别的写者使用核心的键编码是运维义务，集成与核心都观察不到它被违反（§10.4 #26）。
 - **不以拷贝回答读**：`query_by_key`、`list_open`、`list_fills`、`replay_by_key`、`backfill`、`read` 的回答必须来自本次对上游的询问，不来自集成自己保存的状态；问不到上游即 `Unavailable`。集成为消费推送流而维持的状态（如由增量重建的盘口）只用于产出推送记录，不用于回答读。理由：读的回答被核心当作证据（`Absent` 终结一条腿，§6.6），而集成保存的状态是上游原值在过去某刻的拷贝（§0.1）。
 - 按 `route`（§8.2）供给推送：会话建立后，一条流在收到本会话第一次 `route` 之前不推送；此后只推送最近一次 `route` 给出、且未被上游拒绝的主体（`All` 即整条流）；`Routed` 只在上游确实开始供给这些主体后返回，`refused` 只列上游明确拒绝的主体；新加入主体的记录在送出 `Routed` 之后才推送。握手以游标续接原 epoch 时，等待 `route` 期间不丢上游记录（靠上游按游标续传或集成暂存），`route` 生效后先接续这些记录；做不到（游标失效、暂存溢出）就不能续接，按断代上报 `Gap{origin: Source}`。已路由主体的供给中断时同样上报，不静默停推。
 - 按 §8.4 的时机声明 `live_from`：声明 `joinable_venue_seq` 的流在上游确认实时订阅时声明，值为下一个期望的序号；其余流的 `live_from` 是首条实时记录的事件时间，在推送该记录之前或同一推送里声明。
@@ -628,7 +638,7 @@
 - 启动第 5 步开放下游会话之前（§7.2），会话可建立，但除 `handshake` 外的操作（含 `health`）一律返回 `Starting`，不给部分状态：第 2 步重建完成之前连健康的 fold 都还没有，之后到第 5 步之间给出的也只是半恢复的状态。开放之后个别集成 `Connecting` 或 `Halted` 不使任何操作返回 `Starting`。
 - **会话的生命周期** [设计]：开始于 `handshake` 返回 `Session`，结束于传输关闭（对端关闭，或核心受控停止第 1 步由会话入口关闭，§7.2）；只在内存里，是核心实例的内层。它不拥有任何持久对象：订阅归属 principal、止于 `unsubscribe`；单据归属其负责人；它发起的一次性读由一次性读元素完成（§7.3）。所以会话结束不结束这些对象，也不写记录。`Session.instance_id` 让解释层看出重连后面对的是不是同一个核心实例（`Pending`，见下文一次性读）。
 
-**授权。** 写类操作按 `(principal, WriteLaneKey, OperationKind)` 授权（C11）；控制动作与 `abandon` 按 `(principal, 动作种类)` 授权。三者同一规则族（授权步，§6.3）。
+**授权。** 写类操作按 `(principal, WriteLaneKey, OperationKind)` 授权（C11）；控制动作与结果未知组（`abandon`、`retry_reconciliation`）按 `(principal, 动作种类)` 授权。三者同一规则族（授权步，§6.3）。
 
 **订阅归属 principal。** 同一 principal 的新会话自动重新挂接其持久订阅，投递从已确认 cursor 续（§4.2）；不需要重新 `subscribe`。
 
@@ -718,7 +728,8 @@
 - `draft` / `revise` 不因参数不合规被拒：参数合规是单据 fold 的状态，读模型 `tickets` 返回它，送审时由输入约束步否决并留下意图与否决记录（§6.2 参数合规、§6.3）。
 - `decide` 由人或下游的自动决定者调用，二者同受一版一条 Decision 的约束；交易协议检查目录之外的 guard 只能以这种身份出现（§6.2）。
 - 错误：
-  - `draft` 的意图构造不出锚点（缺 `WriteLaneKey`、操作种类不在交易协议的封闭集合内、缺 `basis`；撤单 / 改单缺 `target`；平仓所指的持仓观察记录取不出该作用域的 `PositionRef`）→ `Rejected(Malformed)`，不开单、不 append；
+  - `draft` 的意图构造不出锚点（缺 `WriteLaneKey`、操作种类不在交易协议的封闭集合内、缺 `basis`；撤单 / 改单缺 `target`，或 `IdemKey` 不是该作用域内某次尝试的 `SendBarrier` 记为订单键的键；平仓所指的持仓观察记录取不出该作用域的 `PositionRef`）→ `Rejected(Malformed)`，不开单、不 append；
+  - `revise` 的 diff 使下一版意图构造不出锚点（同上各条）→ `Rejected(Malformed)`，不 append，单据与 `current_version` 不变（§6.2）；
   - `expected_version ≠ current_version` → `Conflict`，不执行；
   - `decide` 时该 `(ticket, current_version)` 已有 Decision → `Conflict(AlreadyDecided)`。单据可能仍停在 lane 步而版本未变（§6.3）；
   - 越权 → `Unauthorized`；
@@ -747,20 +758,20 @@
   - 越过该流已登记引用最早位置 → `Rejected(ReferencedBelow{min})`（§2.4）；
   - 越过该流配置留存窗口下界 → `Rejected(InsideWindow{bound})`（§2.4）。
 
-**决议组**：`resolve(attempt: AttemptRef, outcome: Found{observation: LogPosition} | Absent, note)`；`retry_reconciliation(attempt: AttemptRef)`。
+**结果未知组**：`abandon(attempt: AttemptRef, note) → Abandoned(position) | Rejected(NotUndetermined) | Unauthorized`；`retry_reconciliation(attempt: AttemptRef)`。
 
-- 动作轴：写（append `ResolutionEvidence::Manual` / `ReconciliationReopened{Manual}`）。
-- `resolve` 的核心内部结果：
-  - append `ResolutionEvidence{attempt, Manual, round, outcome}`，带 principal 与 `note`。
-  - `Found` 的 `evidence` 取被引用观察记录当时的载荷与该记录保留的原始负载（`Evidence`，§6.5）。被引用记录通常先经 `read` 造出；该观察记录可压缩，`evidence` 永存。
-  - 该腿终结后重算整条链：链 `Resolved` 才从 lane 阻塞头集合移出，集合为空才解除（§6.4、§6.5）。撤单腿的 `Manual Found` 使链进入 `AwaitingTargetTerminal`，仍占阻塞头。
-- `retry_reconciliation` 的核心内部结果：重开一轮自动取证（新 `round`，旧轮在途响应不计入，§6.6）。
+- 动作轴：写。`abandon` append `Abandoned`，`retry_reconciliation` append `ReconciliationReopened{Manual}`；二者都带 principal。
+- `abandon` 的核心内部结果（§6.6 放弃跟踪）：
+  - IO 壳停发该尝试的新取证调用，等在途的取证调用各自完成并 append 自己的结果；之后在一个事务里重查，结果仍未知才 append `Abandoned{attempt, principal, note, rule_version}` 并返回 `Abandoned(position)`；在途调用已给出结果则不写，返回 `Rejected(NotUndetermined)`。不写任何中间记录。
+  - 等待变为 `Abandoned`（吸收态）：该尝试移出 lane 阻塞头集合，集合为空才解除普通写的等待（§6.4）；不再自动取证，会话恢复也不重开它。
+  - 它不给出结果：`lanes` 与执行事实上的结果仍是未知，直到 `Attributed` 或 `retry_reconciliation` 开出的一轮给出 `Found`/`Absent`（§6.5 等待与结果）。
+- `retry_reconciliation` 的核心内部结果：重开一轮取证（新 `round`，旧轮在途响应不计入，§6.6）。对等待仍是 `Active` 的尝试，这一轮与自动取证相同；对 `Abandoned` 的尝试，这一轮依序取证一遍、渠道穷尽即停，只能补上结果，不改变等待。
 - 错误：
-  - 越权 → `Unauthorized`；
-  - 腿不处于 `Undetermined` 或已终结 → `Rejected(NotUndetermined)`；
-  - `Found` 引用的观察记录不存在或不属该 `WriteScope` → `Rejected(reason)`；
-  - `AwaitingTargetTerminal` 的链不接受 `resolve`：它有界，出口是目标终态或 `deadline`（§6.5）。
-- 不要求渠道已穷尽：人工可在任一时刻决议；自动取证仍在进行时的决议同样记为 `Manual`。
+  - 越权 → `Unauthorized`，并记安全事件（授权步，§6.3）；
+  - `abandon`：尝试不处于 `Undetermined`、等待已不是 `Active`，或结果已确立 → `Rejected(NotUndetermined)`；
+  - `retry_reconciliation`：尝试不处于 `Undetermined` 或结果已确立 → `Rejected(NotUndetermined)`。
+- 不要求渠道已穷尽：principal 可在任一时刻放弃跟踪；在途取证总是先完成。
+- 没有人工写结果的操作：尝试的结果是上游事实的副本，只由上游证据给出（§6.6 不选）。
 
 **健康**：`health() → Vec<IntegrationHealth>`，采纳集合（§7.2 第 3 步）中每个集成一份：会话状态、逐流 readiness、回填进度、按调用目标的连续失败数与最近成功时间（§8.4）。它等于 `read_model(health)` 的当前态：每个字段按 §8.4 从健康流 fold 出，按键保留使它在保留边界推进与核心重启之后不变（§2.4）；会话状态为 `Halted` 时带 `IntegrationHalted` 记下的原因（§7.2 第 3 步）。被移除的登记不在其中：它的健康观察仍在健康流里，可订阅、可按历史 `as_of` 读，核心不为它补写记录。动作轴：读。核心内部结果：无。启动期同其他操作返回 `Starting`（见“会话与 principal”）。
 
@@ -790,7 +801,7 @@
 
 ### 授权与审批策略的表示
 
-- principal → scope 与控制动作、`abandon` 授权，写在统一路径的策略 / 审批规则文件（§7.6）。
+- principal → scope 与控制动作、结果未知组的授权，写在统一路径的策略 / 审批规则文件（§7.6）。
 - 规则文件只写交易协议定义的词汇与取值：人工审批条件与名义阈值、instrument 允许集合、按 `(WriteLaneKey, OperationKind)` 的冷却间隔（§6.3），检查目录各项的必要 / advisory、参数与“先查后判”（§6.2）。判据由交易协议写定，同一规则文件在任何实现里给出同一个放行 / 否决。
 - 规则版本 = 内容 hash，经 `reload_config` 生效。
 - 规则不冻结进单据；待决单据在放行时按当时规则重过五步（§6.3）。收紧规则可使待决单据在放行时 `Rejection`，记录带 `rule_version`。
