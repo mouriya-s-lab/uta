@@ -267,7 +267,7 @@ LogPosition = (StreamId, Seq)           // 一条记录的顺序身份
 - `LogPosition` 只在同一 `StreamId` 内有序（§2.3），所以保留边界是每条观察流一个位置。合起来与 `basis`、cursor 同形（`Set<LogPosition>`）。
 - 执行事实侧原始记录不压缩、不删除，没有保留边界；登记只对观察位置起作用。
 
-**健康流按键保留** [设计]。健康观察（§8.4）是状态值：每条带它那个键上的完整当前值，fold 一个键只取该键不高于 `as_of` 的最新一条。键是：一个集成的会话状态（`Established` 带其 `SessionEpoch`）；一条流的 readiness（带它到达时所在会话的 `SessionEpoch`，只在该会话仍是当前已建立会话时有效，§8.4）；一个逻辑流的回填进度（值带所属流 epoch，没有回填任务的 epoch 为 `None`，§8.4）；一个逻辑流的覆盖检查点（值带流 epoch 与 `folded_below`，只说 `folded_below` 之下的记录，序号覆盖的 fold 按 `folded_below` 读它，§8.4）；一个调用目标的计数（带计数后的 `consecutive_failures` 与 `last_success_at`）。同键的后一条取代前一条，这就是健康流的 `RetractableDelta`（§4.1），它的压缩因此按键进行：
+**健康流按键保留** [设计]。健康观察（§8.4）是状态值：每条带它那个键上的完整当前值，fold 一个键只取该键不高于 `as_of` 的最新一条。键是：一个集成的会话状态（`Established` 带其 `SessionEpoch`）；一条流的 readiness（带它到达时所在会话的 `SessionEpoch` 与该流当时的流 epoch，只在该会话仍是最近一条会话记录且为 `Established`、该流 epoch 仍是当前流 epoch 时有效，当前流 epoch 取自同一健康流上该逻辑流最近一条回填进度，§8.4）；一个逻辑流的回填进度（值带所属流 epoch，没有回填任务的 epoch 为 `None`，§8.4）；一个逻辑流的覆盖检查点（值带流 epoch 与 `folded_below`，只说 `folded_below` 之下的记录，序号覆盖的 fold 按 `folded_below` 读它，§8.4）；一个调用目标的计数（带计数后的 `consecutive_failures` 与 `last_success_at`）。同键的后一条取代前一条，这就是健康流的 `RetractableDelta`（§4.1），它的压缩因此按键进行：
 
 - 边界之下只删每个键被同键后续记录取代的记录；每个键在边界之下的最新一条作为**基线**留下，位置不变。对任一 `as_of ≥ 边界`，按键 fold 与压缩前相等；`as_of` 低于边界仍得 `BeyondRetention`（§5.2）。
 - 从边界订阅健康流的消费者先收到这些基线（原位置，低于边界），再收到边界起的记录；这是压缩的结果，不是 cursor 退回（§8.5）。

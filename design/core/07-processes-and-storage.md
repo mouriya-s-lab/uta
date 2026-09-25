@@ -172,7 +172,7 @@ flowchart TB
 
 - 一条通道上的握手是串行的：上一次返回之前不发下一次；旧会话的通道已关闭，它的握手结果读不到。所以没有“别的握手结果”要识别或丢弃。
 - 未生效的控制动作（越权、文件不合法、id 不在登记里，§8.5）不转移。
-- 状态每改变一次（`Connecting → Connecting` 不算），集成会话 append 一条会话健康观察（新状态、原因、起始时间；`Established` 带它的 `SessionEpoch`，§8.4）。集成进入初始状态时也 append 一条：本步的各集成（`Connecting`，或恢复的 `Halted`），以及 `restart_integration` 采纳的本实例尚未运行的 id（与其 `Applied` 同一事务）。这样的 `Connecting` 一条就是本实例该集成运行的开始锚点。readiness 不另写：它只在最近一条会话健康观察为 `Established` 时按该 epoch 取值，否则由 fold 派生为 `Disconnected`（§8.4），所以旧实例的 `Live` 不会延续。
+- 状态每改变一次（`Connecting → Connecting` 不算），集成会话 append 一条会话健康观察（新状态、原因、起始时间；`Established` 带它的 `SessionEpoch`，§8.4）。集成进入初始状态时也 append 一条：本步的各集成（`Connecting`，或恢复的 `Halted`），以及 `restart_integration` 采纳的本实例尚未运行的 id（与其 `Applied` 同一事务）。这样的 `Connecting` 一条就是本实例该集成运行的开始锚点。readiness 不另写：它只在最近一条会话健康观察为 `Established` 时，取同时带着该会话的 `SessionEpoch` 与该流当前流 epoch 的值（没有这样的值为 `Starting`），否则由 fold 派生为 `Disconnected`（§8.4），所以旧实例、旧会话与旧流 epoch 的 `Live` 都不会延续。
 - **进入 `Halted`** [设计]：集成会话在同一事务 append 执行事实 `IntegrationHalted{integration, cause, session_epoch}`（P14）与该 `Halted` 的健康观察。`IntegrationHalted` 断言的是核心自己的决定：该集成失去被接受的资格，本实例与此后各实例都不再自动握手，直到运维动作解除；它开始的是 `Halted` 抑制，不是本次集成运行的结束，也不断言进程已经退出。提交之后才清理：结束该会话（此时只有已返回的握手，没有别的在途调用）、关闭通道、请求进程退出，超时后强制终止，OS 确认退出之后清除进程表的行。这次清除是本次集成运行的结束锚点：运行的内层（会话、进程、凭据副本）都已结束。清理的确认者是 OS；核心在确认之前崩溃的，由继任实例第 1 步回收。集成登记、该集成已有的流记录与订阅不变。
   - 理由：先终止再记录，则二者之间崩溃会让重启自动重试（持久的 `Halted` 还没写下）；把“进程已终止”写进 `Halted` 的含义，又让持久记录先于它所断言的事实。所以 `Halted` 只记核心的决定，进程的结束由 OS 另行确认。
 - 解除 `Halted` 的控制记录 `Applied`（`restart_integration`，或 `Halted{Refused}` 上的 `rotate_credential`）带被解除的那条 `IntegrationHalted` 的位置，与转入 `Connecting` 的健康观察同一事务：这是新一次集成运行的开始锚点。这一事务只在该集成上一次运行结束（上一个进程 OS 确认退出、进程表的行已清除）之后提交；提交之后集成会话才拉起进程、握手。所以同一集成的两次运行不重叠。

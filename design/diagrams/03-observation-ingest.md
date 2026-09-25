@@ -53,8 +53,8 @@ stateDiagram-v2
   state "Disconnected（派生值，不是记录）" as DC
   state "Live{live_from}（非 Degraded）" as LN
   [*] --> DC : 该集成的会话为 Connecting 或 Halted
-  DC --> Starting : 会话 Established（新 SessionEpoch）；该流在本会话里尚无 readiness
-  Starting --> Live : 集成声明 live_from（核心盖上本会话的 SessionEpoch 后 append）：声明 joinable_venue_seq 的流于上游确认实时订阅即声明（下一个期望序号，不等首条记录）；其余流为首条实时记录的事件时间，与该记录同时或先于它声明
+  DC --> Starting : 会话 Established（新 SessionEpoch）；该流在本会话、当前流 epoch 里尚无 readiness
+  Starting --> Live : 集成声明 live_from（核心盖上本会话的 SessionEpoch 与该流当前流 epoch 后 append）：声明 joinable_venue_seq 的流于上游确认实时订阅即声明（下一个期望序号，不等首条记录）；其余流为首条实时记录的事件时间，与该记录同时或先于它声明
   state Live {
     [*] --> LN
     LN --> Degraded : 集成上报：上游降级 / 上游限流 / 能力收紧（子态，接受条件不变；与核心配额挂起订阅互相独立）
@@ -62,7 +62,7 @@ stateDiagram-v2
   }
   Starting --> DC : 会话离开 Established（最近的会话记录不再是 Established）
   Live --> DC : 会话离开 Established（旧会话的 Live 随会话记录更替失效）
-  Live --> Starting : 会话内集成上报 Gap{Source} 开新流 epoch（旧 epoch 的 Live 随该逻辑流的 None{新 epoch} 失效）；核心为新 epoch 重发 route，集成收到后才推送，再为新 epoch 声明 Live{live_from}
+  Live --> Starting : 会话内集成上报 Gap{Source} 开新流 epoch（旧 epoch 的 Live 随该逻辑流的 None{新 epoch} 失效；上报之前集成已以 Unavailable 完成该流在途的 read / backfill / route）；核心为新 epoch 重发 route，集成收到后才推送，再为新 epoch 声明 Live{live_from}
   note right of DC
     由会话状态派生：没有记录、没有自己的时刻
     只随附当前会话状态及其 since（会话记录的时刻，不是断线时刻）
@@ -101,7 +101,7 @@ stateDiagram-v2
   end note
 ```
 
-读法：readiness 是集成在一个会话里、对该流一个流 epoch 的实时供给的陈述：集成推送，核心盖上到达会话的 `SessionEpoch` 与该流当时的流 epoch 后 append；fold 只取同时带着最近一条会话记录的 `SessionEpoch` 与该流当前流 epoch 的值，且只在那条会话记录是 `Established` 时，否则为派生的 `Disconnected`。会话内上报的 `Gap{Source}` 开新流 epoch，readiness 回到 `Starting`，与握手开的新 epoch 同样处理。回填进度由核心凭读结论记录判定、持久订阅 append，只说当前流 epoch 的 `[起点, live_from)` 补齐到哪。二者都是健康观察（不需确认），经 `health` 读模型对解释层可见，再由它翻成下游的连接状态；它们不改变记录接受条件——核心只从当前会话的通道读入。
+读法：readiness 是集成在一个会话里、对该流一个流 epoch 的实时供给的陈述：集成推送，核心盖上到达会话的 `SessionEpoch` 与该流当时的流 epoch 后 append；fold 只取同时带着最近一条会话记录的 `SessionEpoch` 与该流当前流 epoch 的值，且只在那条会话记录是 `Established` 时；已建立而当前流 epoch 里没有这样的值为 `Starting`，会话不在 `Established` 时为派生的 `Disconnected`。会话内上报的 `Gap{Source}` 开新流 epoch，readiness 回到 `Starting`，与握手开的新 epoch 同样处理：同一会话里 e0 为 `Live`、之后 `Gap{Source}` 与 `None{e1}` 已 append 而 e1 尚无 readiness，该流是 `Starting`，不是 e0 的 `Live`。流上的 `read`、`backfill`、`route` 调用是发出时那个流 epoch 的内层：集成在上报 `Gap{Source}` 之前以 `Unavailable` 完成它们，迟到的结果由核心完成为 `Unavailable`、不作新 epoch 的记录（§8.2、§8.4）。回填进度由核心凭读结论记录判定、持久订阅 append，只说当前流 epoch 的 `[起点, live_from)` 补齐到哪。二者都是健康观察（不需确认），经 `health` 读模型对解释层可见，再由它翻成下游的连接状态；它们不改变记录接受条件——核心只从当前会话的通道读入。
 
 核出：readiness 原把 `Backfilling` 放在 `Live` 之前，而回填窗口的终点 `live_from` 要到 `Live` 才有，`through` 又是核心凭读结论记录才证明得了的——已拆为集成推送的 readiness 与核心判定的回填进度（§8.4）。
 
@@ -123,6 +123,7 @@ flowchart LR
   C1 -.->|"另需条件 2"| C2["从 live_from 到 n 有效供给为 All：<br/>这段推送都计入了序号覆盖，即都在 e 上同会话、确认供给 All 且 refused 为空的路由结论记录之后<br/>（流在配额池里时核心不要求 All，不成立）"]
   BF2 -->|"上游历史穷尽（covered_to 未达）或 Refused"| INC["append Gap{Source, backfill_incomplete}<br/>序号覆盖的起点停在 live_from，不越过未覆盖区间（不伪造连续）"]
   CORE -->|"Unavailable（任一页失败即整体失败）"| CH["Gap{Channel, backfill}<br/>可再发"]
+  CORE -->|"结果到达时该流已开新 epoch（发出 epoch = 任务所在 epoch 已结束）"| STALE["核心完成为 Unavailable：Gap{Channel} 记在当前 epoch<br/>不 append 结果与读结论记录；旧任务不再推进（§8.2 backfill）"]
 ```
 
 读法：回填记录与实时记录同形、同 epoch，只多一个 `backfilled` 标记；回填窗口都在 `live_from` 之前。有可衔接序号的流上二者按序号不重叠也不留洞，不需要逐条去重。只有事件时间的流上，实时订阅确认前上游已发出的记录可能两边都不在，迟到的实时记录也可能与回填的同一对象并存，所以只称“到达”，也没有完备进度。续点是读结论记录里的覆盖边界，不需要任何一方保存游标。
@@ -158,11 +159,13 @@ sequenceDiagram
   end
   opt 某流的需求（各供给项主体之并 ∪ 核心自己的需求；只投递项与挂起项不计）变了，且该集成会话已建立
     SUB->>I: route(stream, 主体全集 | All | 空集)
-    alt Routed{refused}
+    alt Routed{refused}，且该流的当前流 epoch 仍是发出时的 epoch
       I-->>SUB: Routed{refused}
-      SUB->>J: 同事务 append 路由结论记录（增减、refused 及原因）；refused 主体在所属各项内列为“来源拒绝”
+      SUB->>J: 同事务 append 路由结论记录（这次生效的主体全集：All 或主体集，refused 及原因；不记增减，相对同一流 epoch 内上一条的增减由相邻两条算出）；refused 主体在所属各项内列为“来源拒绝”
     else Unavailable
       I-->>SUB: Unavailable（不 append；按 pacing 重发其时最新的全集；同一流至多一次 route 在途）
+    else Routed 到达时该流已开新 epoch（集成本应在上报 Gap{Source} 之前以 Unavailable 完成它）
+      I-->>SUB: Routed{refused}（核心按 Unavailable 完成：不 append 路由结论记录，不记 Gap{Channel}；重发即新 epoch 本来要做的那次 route）
     end
   end
   loop 记录到达
@@ -192,7 +195,7 @@ sequenceDiagram
   end
   opt 会话内集成上报 Gap{Source}，该流开新流 epoch
     SUB->>I: route(stream, 当前全集)：新流 epoch 在收到 route 之前不推送
-    I-->>SUB: 路由结论记录（落在新 epoch 里；确认 All 且 refused 为空之后的推送才计入序号覆盖）
+    I-->>SUB: Routed{refused} → SUB 在新 epoch 里 append 路由结论记录（全集、refused 及原因；推送只在同会话、全集为 All 且 refused 为空的一条之后才计入序号覆盖）
   end
   Note over SUB,I: 集成每次会话建立后与每个会话内新开的流 epoch 上，SUB 对每条需求非空的流重发 route；每个流 epoch 有自己的路由结论记录，在该 epoch 第一次 route 之前集成不推送该流
 ```

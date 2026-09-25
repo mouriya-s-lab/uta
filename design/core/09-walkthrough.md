@@ -161,7 +161,7 @@
 1. 订阅 200 instrument tick（订阅表，§4.2、§7.3）；集成断线 30 s 重连，venue 无游标（F11/C6）。
    - 握手时集成不能以游标证明续接 → 集成会话结束前一 epoch、创建新 epoch。新 epoch 首条是 `Gap{origin: Source}`（观察 J，§4.2、§8.2 `handshake`），含前一 `StreamId` 与最后 `Seq`、原因 `disconnect`；同一事务写该逻辑流的 `None{epoch}`（§8.4）。
    - 恢复者：核心（`LogPosition` 与流 epoch 是它创建的，§2.3）；断代本身由来源的证据（不能续接）决定，核心不推断续接。
-   - 重连握手后，核心对该流重发一次需求全集（这 200 个主体，§8.2 `route`）；集成在收到它之前不推送该流，`Routed` 的路由结论记录落在新 epoch 上，标出这些主体从这里起有覆盖。
+   - 重连握手后，核心对该流重发一次需求全集（这 200 个主体，§8.2 `route`）；集成在收到它之前不推送该流，`Routed` 的路由结论记录落在新 epoch 上，带这次生效的全集，标出这些主体在新 epoch 里的记录从这里起开始。序号覆盖另按整条流计，只在这条流被确认为 `All` 且 `refused` 为空之后才计入推送（§8.4）。同一会话里之后若集成再上报 `Gap{origin: Source}` 开新流 epoch，核心为它再重发一次 `route`，新 epoch 有自己的路由结论记录。
    - 断线期间与重连后握手之前，`health` 里该流的 readiness 是由会话状态派生的 `Disconnected`，核心不为它 append 任何记录（§8.4）。
    - 对外可见：订阅者先收到 gap 再收新 epoch 记录；无静默跳过。
 2. **有游标变体**：集成重连报可信续传游标 → 续用原 epoch，`Seq` 接续，不新建 gap（§8.2 `handshake`、§8.4）。
@@ -533,7 +533,7 @@
 | 13 | 集成崩溃（观察流侧） | 观察流断代 | 核心+集成：记 `Gap{origin: Source}`，按回填补齐或标 gap | 该流 gap 显式；核心与其他流不受影响 | §4.2；§6.7（两故障面）；§8.4 | §10.5 #9 |
 | 14 | 集成崩溃（写调用中） | 已 `SendBarrier`、`submit`/`cancel` 中途 | IO 壳：`NoResponse` = `Undetermined` → 对账；不区分“集成挂”与“venue 没回”；会话结束时在途调用恰好完成一次（§7.2 第 3 步） | 尝试 `Undetermined`，靠证据非猜 | §6.7；§8.3 | §10.5 #9 |
 | 15 | 旧核心已退出但其集成/宿主进程仍存活（孤儿），新核心接管 | 孤儿进程持已退出核心的通道、可能有在途回执 | 新实例：见表下 | 不产生双写；已结束的会话化身的消息不进入核心 | §7.2；§8.3；§6.6 | §10.5 #8(c) |
-| 16 | 程序宿主崩溃（trap），或核心在 `Advance` 输出持久化前崩溃 | 程序 state 依最近已提交的 `Checkpoint`；未提交的 `Output` 整体不存在；trap 时同事务有 `ProgramHalted{Trap}` 与 `ProgramFailed` | 核心：trap → 失败抑制，只有引用它的 `load_program` `Applied` 才从最近 `Checkpoint` 重新装载；核心在 `Advance` 提交前崩溃 → 重启第 5 步从与 cursor 同事务持久化的 `Checkpoint` 重新 `Load`，重放该 cursor 之后的记录；`state_version` 不兼容则 `Reset` 记录 + 冷启动回填（H9） | 程序从 checkpoint 续跑，不重复 `Emit`；或显式冷启动；trap 后在重新装载前不运行 | §4.3；§7.5；§8.6 程序的活动集合与失败抑制 | §10.5 #16 |
+| 16 | 程序宿主崩溃（trap），或核心在 `Advance` 输出持久化前崩溃 | 程序 state 依最近已提交的 `Checkpoint`；未提交的 `Output` 整体不存在；trap 时同事务有 `ProgramHalted{Trap}` 与 `ProgramFailed` | 核心：trap → 失败抑制，只有引用它的 `load_program` `Applied` 才从最近 `Checkpoint` 重新装载；核心在 `Advance` 提交前崩溃 → 重启第 5 步从与 cursor 同事务持久化的 `Checkpoint` 重新 `Load`，重放该 cursor 之后的记录；`Load` 不比对版本：本成员可交回的 `Checkpoint` 的 `state_version` 总在它接受的集合内（`Output` 时已检查，§8.6） | 程序从 checkpoint 续跑，不重复 `Emit`；trap 后在重新装载前不运行 | §4.3；§7.5；§8.6 程序的活动集合与失败抑制 | §10.5 #16 |
 | 17 | 可选子系统 op 崩溃 | 段借用未释放 | 子系统回收借用 + H10 fence；核心记失败观察 | op 失败观察；核心与其他消费者不受影响 | §8.7；hpc-derivation/design.md §5.3/§6.5 | hpc §10 #3/#4 |
 | 18 | 可选子系统 op 已产生结果、核心在结果持久化前崩溃/断连 | 输出段在段池、未接入派生流持久点 | 核心：段池不持久，重启由 `Pooled` 重洗重算；未发布结果不半接入下游 | 结果重算；下游只见成功发布的派生流 | §8.7；hpc-derivation/design.md §1.5/§5.3 | hpc §10 #7/#13 |
 | 19 | 核心崩溃时可选子系统 op 孤儿 | op 进程存活、核心死 | 新核心 + fence：op 为孤儿由 H10 fence 回收；重连后重新握手 | 无双写；孤儿被回收 | §7.2；hpc-derivation/design.md §6.5 | hpc §10 #3 |
@@ -561,7 +561,7 @@
 **#21 的恢复动作（核心）：** fold 出无 `EffectResponse` 的已注册请求重派（§6.1）。
 
 - 读处理器重新执行一次；
-- 写处理器重新开单。`Draft` 与 `EffectResponse{Drafted}` 同事务，不存在“有 `Draft` 无响应”。
+- 写处理器重新开单。`Draft` 与 `EffectResponse{Drafted}` 同事务，不存在“有 `Draft` 无响应”。重派按请求所记发出成员 `member` 所指 `Applied` 的事实处理：负责人是该 `Applied` 的装载 principal，`ScopeNotObserved` 按它所记的执行事实输入判定；该成员在崩溃前后已被替换或卸载、程序值文件已改或删去时亦然（§6.1）。
 
 **可进验收（§10.5）的可测项：**
 
