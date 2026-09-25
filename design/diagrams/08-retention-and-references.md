@@ -27,7 +27,7 @@ stateDiagram-v2
   state "取证 ResolutionEvidence 引用的观察位置" as R {
     state "已登记" as R1
     state "已解除" as R2
-    [*] --> R1 : ResolutionEvidence append
+    [*] --> R1 : 等待仍 Active 时 append 的 ResolutionEvidence
     R1 --> R2 : 该尝试等待结束（结果确立、Expired、Abandoned）
   }
 ```
@@ -58,10 +58,10 @@ flowchart TB
   WIN -->|"否"| RJ2["Rejected(InsideWindow{bound})"]
   WIN -->|"是，且各流都通过"| APPLY["写各流新边界；控制记录 Applied(position)"]
   APPLY --> COMPACT["compact_below_retention：仅观察侧 RetractableDelta 表，逐流按该流保留规则删边界之下，只删不改<br/>一般观察流：边界之下全部删去<br/>健康流：只删被同键后续记录取代的，每键最新一条留作基线<br/>程序流：只删被同一流 epoch 里后续值记录取代的值记录，每个流 epoch 最新一条值记录原样留作基线（撤回部分照留），开 epoch 的 Gap{Source} 留下<br/>执行 J 没有保留边界：不压缩、不删除"]
-  COMPACT --> INV["不变量 §6.9-3：边界推进不越过所在观察流已登记引用的最早位置；程序 Checkpoint 的 cursor 引用登记时可能已在边界之下（第一次提交的 cursor 为 from 的前一位置或一段被删位置的末位），此后阻止推进直到下一个 Checkpoint 取代它；未登记者得 BeyondRetention"]
+  COMPACT --> INV["不变量 §6.9-3：边界推进不越过所在观察流已登记引用的最早位置；程序 Checkpoint 的 cursor 引用登记时可能已在边界之下（第一次提交的 cursor 例如为 from 的前一位置或一段被删位置的末位），此后阻止推进直到下一个 Checkpoint 取代它；未登记者得 BeyondRetention"]
 ```
 
-读法：边界按观察流分别维持、只前进（`LogPosition` 只在同一 `StreamId` 内有序）；执行事实永不删除；派生历史的 `DELETE` 只在各流边界之下，留下的记录一条也不改写。健康流与程序流是状态值的流，按键 / 按流 epoch 留基线，所以任一 `as_of ≥ 边界` 的 fold 与压缩前相等；从边界订阅的消费者 cursor 为 `Start{边界}`，每次挂接先收到边界之下留下的记录（前导），第一次覆盖整段前导的确认之前断连或崩溃就再收一遍，确认之后成为 `At`，前导之下被删的段不是它的损失（§4.2 cursor 与确认）；cursor 为 `At` 而落在边界之下的订阅者得到的 `Gap{Delivery, compacted}` 只覆盖被删去的位置（每一段连续被删的位置一项），各段之间的基线照常按位置投递（§2.4、§4.2）。程序流的 fold 取最新一条值记录的正贡献，撤回部分只指名被取代的位置，所以基线指名已删记录不影响结果：新 fold、已折入被删记录的订阅者与收到压缩缺口的订阅者，收到基线之后都持有同一个值（§4.1 程序流的 fold）。
+读法：边界按观察流分别维持、只前进（`LogPosition` 只在同一 `StreamId` 内有序）；执行事实永不删除；派生历史的 `DELETE` 只在各流边界之下，留下的记录一条也不改写。健康流与程序流是状态值的流，按键 / 按流 epoch 留基线，所以任一 `as_of ≥ 边界` 的 fold 与压缩前相等；从边界订阅的消费者 cursor 为 `Start{边界}`，每次挂接先收到边界之下留下的记录（前导），第一次覆盖整段前导的确认之前断连或崩溃就再收一遍，确认之后成为 `At`，前导之下被删的段不是它的损失（§4.2 cursor 与确认）；cursor 为 `At` 而落在边界之下的订阅者得到的 `Gap{Delivery, compacted}` 只覆盖被删去的位置（每一段连续被删、且不在未确认缺口里的位置一项），各段之间的基线照常按位置投递（§2.4、§4.2）。程序流的 fold 取最新一条值记录的正贡献，撤回部分只指名被取代的位置，所以基线指名已删记录不影响结果：新 fold、已折入被删记录的订阅者与收到压缩缺口的订阅者，收到基线之后都持有同一个值（§4.1 程序流的 fold）。
 
 核出：边界是逐流的位置集、越过留存窗口的拒绝名 `InsideWindow{bound}`、执行事实侧没有边界，原文未写——已并入 §2.4、§8.5、§7.5。
 

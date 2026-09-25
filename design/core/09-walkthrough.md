@@ -341,7 +341,7 @@
 
 **扩展路径（取证记录模型）。** 撤单尝试或改单尝试的每次命中取证，同一事务落一条观察记录（`provenance: Reconciliation{AttemptRef}`）与一条 `ResolutionEvidence{Found}`（含 `Evidence`）；`Absent`/`Inconclusive` 只有 `ResolutionEvidence`（§6.5）。`AttemptRef` 使撤单尝试的回执观察不会被当作另一次尝试的归因证据。
 
-**走通**（验收 §10.5 #14/#17）。
+**走通**（验收 §10.5 #17/#41/#51/#66）。
 
 ### W13（Q28）保留边界推进与被引用位置
 
@@ -351,12 +351,12 @@
    - 核心 `Window` 节点的累加器随 `Checkpoint` 持久化，不回读历史。
    - `Pooled` 窗口从 `Journal` 重洗历史但不登记，越界只得 `BeyondRetention`（条件 4，§8.7）。
    - 观察侧可压缩（`compact_below_retention` 仅对 `RetractableDelta`，§4.1、§7.4）；执行事实只 append 不压缩（§3.1）。
-2. 边界推进前必须显式处理仍被引用的位置（不变量 §6.9-3）：保留对应历史、保存必要证据，或缩小重放承诺（`AS OF ≥ 保留边界`，§2.4）；否则拒绝推进。要删掉某流当前 epoch 的记录时，持久订阅先为它 append 覆盖检查点，序号覆盖不因压缩改变（§8.4 序号覆盖）。
+2. 已登记的引用阻止边界推进，直到它的持有者解除它（不变量 §6.9-3）；越过即拒绝推进，没有别的处理可以代替：证据字节在不压缩的执行 J 里，未登记的位置只把重放承诺缩小到 `AS OF ≥ 保留边界`（得 `BeyondRetention`，§2.4）。要删掉某流当前 epoch 的记录时，持久订阅先为它 append 覆盖检查点，序号覆盖不因压缩改变（§8.4 序号覆盖）。
    - 恢复者：核心（保留协议）。
    - 落到边界下的 `basis` 位置在 prepare 只读校验时为 `BeyondRetention`（§5.2）。
    - 对外可见：边界推进从不越过仍被登记引用的最早位置。
 3. 登记与审批（§2.4）：
-   - 引用由核心在 `Prepared`/`Checkpoint`/`ResolutionEvidence` append 时自动登记。
+   - 引用由核心自动登记：`Prepared`、`Checkpoint` 与等待仍 `Active` 时 append 的 `ResolutionEvidence`，各在 append 时登记。
    - 推进经控制面 `advance_retention(to)`，`to` 每条流一个新边界、逐流判定：越过该流已登记引用最早位置 → `Rejected(ReferencedBelow{min})`；越过该流留存窗口下界 → `Rejected(InsideWindow{bound})`。
    - 留存窗口是运行期参数（§7.6）。
    - 对外可见：控制记录可读；边界推进不越过所在流已登记引用的最早位置（程序 `Checkpoint` 的 cursor 引用登记时可能已在边界之下，此后阻止推进直到下一个 `Checkpoint` 取代它），执行事实无记录被删（§10.5 #4）。
@@ -395,8 +395,8 @@
 3. 原生 op 借用只读段计算，输出是普通节点值；下游节点像读任何节点值一样读它，经 `outputs` 导出时才落在程序流上（§8.7、§4.3）。
    - op 进程 panic/OOM → 只死计算进程，核心记失败观察（观察 J 派生失败记录），**不改名**为 `Gap{origin: Source}` 或 `NoResponse`（§8.7；hpc-derivation/design.md §5.3/§6.3）。
    - 恢复者：子系统的借用回收 + H10 fence（hpc-derivation/design.md §5.3/§6.5）。
-4. 核心崩溃时 op 成孤儿，由 fence 回收（§7.2；hpc-derivation/design.md §6.5）。若消费者产生外部写，仍经单据 → STS → IO 壳（§8.7，走 W1）。
-5. 核心层对外可见结论到此闭合：装载期拒绝、失败观察、孤儿回收、外部写仍经效应路径，都由 §8.7 与 §7.2 给出。段的跨平台映射与回收、布局 hash 规范化、触发与合并语义是子系统内部决定（hpc-derivation/design.md §5/§6，验收其 §10），不改变核心可见结论。
+4. 核心崩溃时，继任实例第 1 步回收宿主进程、结束这次宿主执行，这次执行的交出随之结束（§7.2 生命周期表）；op 进程的孤儿回收与任何重连握手属子系统（hpc-derivation/design.md §6.5）。若消费者产生外部写，仍经单据 → STS → IO 壳（§8.7，走 W1）。
+5. 核心层对外可见结论到此闭合：装载期拒绝、失败观察、宿主执行随继任实例结束、外部写仍经效应路径，都由 §8.7 与 §7.2 给出。段的跨平台映射与回收、布局 hash 规范化、触发与合并语义是子系统内部决定（hpc-derivation/design.md §5/§6，验收其 §10），不改变核心可见结论。
 
 **走通**（核心层最小验收 §10.5 #7；子系统验收在其 §10）。
 
@@ -536,7 +536,7 @@
 | 16 | 程序宿主崩溃（trap），或核心在 `Advance` 输出持久化前崩溃 | 程序 state 依最近已提交的 `Checkpoint`；未提交的 `Output` 整体不存在；trap 时同事务有 `ProgramHalted{Trap}` 与 `ProgramFailed` | 核心：trap → 失败抑制，只有引用它的 `load_program` `Applied` 才从最近 `Checkpoint` 重新装载；核心在 `Advance` 提交前崩溃 → 重启第 5 步从与 cursor 同事务持久化的 `Checkpoint` 重新 `Load`，重放该 cursor 之后的记录；`Load` 不比对版本：本成员可交回的 `Checkpoint` 的 `state_version` 总在它接受的集合内（`Output` 时已检查，§8.6） | 程序从 checkpoint 续跑，不重复 `Emit`；trap 后在重新装载前不运行 | §4.3；§7.5；§8.6 程序的活动集合与失败抑制 | §10.5 #16 |
 | 17 | 可选子系统 op 崩溃 | 段借用未释放 | 子系统回收借用 + H10 fence；核心记失败观察 | op 失败观察；核心与其他消费者不受影响 | §8.7；hpc-derivation/design.md §5.3/§6.5 | hpc §10 #3/#4 |
 | 18 | 可选子系统 op 已产生结果、核心在结果持久化前崩溃/断连 | 输出段在段池，op 的输出值还没有随 `Advance` 的输出事务提交 | 核心：段池不持久，重启由 `Pooled` 重洗重算；op 的输出是普通节点值，只有 `outputs` 导出它时才随 `Advance` 的输出事务写上程序流（§4.5），未提交的不半接入下游 | 结果重算；下游只见已提交的程序流记录 | §8.7；hpc-derivation/design.md §1.5/§5.3 | hpc §10 #7/#13 |
-| 19 | 核心崩溃时可选子系统 op 孤儿 | op 进程存活、核心死 | 新核心 + fence：op 为孤儿由 H10 fence 回收；重连后重新握手 | 无双写；孤儿被回收 | §7.2；hpc-derivation/design.md §6.5 | hpc §10 #3 |
+| 19 | 核心崩溃时可选子系统 op 孤儿 | op 进程存活、核心死 | 继任实例第 1 步回收宿主进程、结束宿主执行，这次执行的交出随之结束；op 进程的孤儿回收与任何重连握手属子系统 | 无双写；宿主执行已结束，op 孤儿由子系统处理 | §7.2 生命周期表（宿主执行与交出）；hpc-derivation/design.md §6.5（op 孤儿） | hpc §10 #3 |
 | 20 | Alice（或其他下游）或解释层崩溃 | 核心订阅/程序/lane 完整；解释层无持久状态 | 核心：独立存活；下游凭续传令牌重连，解释层代它握手取 principal，读模型取 `as_of`，从已确认 cursor 之后订阅原始记录（§8.5） | 断连损失以缺失通知给出，不伪造补发 | §7.1；§8.5；H5/C5；`design/downstream/design.md` 3.3 | §10.5 #23 |
 | 21 | `EffectRequest` 记录已随 `Advance` 输出提交，处理器未执行或其 `EffectResponse` 未持久化 | `EffectRequest` 有、无 `EffectResponse` | 核心：见表下 | 每条请求最终恰一条 `EffectResponse`；写至多一张单据；`Unhandled` 不重派；读结论等观察记录被压缩不影响判定 | §6.1；§8.6；§3.4 | §10.5 #16 |
 

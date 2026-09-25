@@ -52,7 +52,7 @@ flowchart LR
     B0["Seq 1 = Gap{Source, disconnect}<br/>含前一 StreamId 与最后 Seq 1200"] --- B1["Seq 2 backfilled"] --- B2["…"] --- B3["Seq 40：首条实时记录<br/>（其 venue seq = live_from）"] --- B4["…"] --- B5["Seq 88"]
   end
   A6 -.->|"断线无游标 → 新 epoch"| B0
-  RET["保留边界<br/>epoch1 @ 901<br/>≤ min(配置窗口下界, 最早登记引用)（可推进上限）"] -.-> A4
+  RET["保留边界<br/>epoch1 @ 901<br/>推进不越过 min(配置窗口下界, 最早登记引用)（程序 Checkpoint 的 cursor 引用可已在边界之下，§2.4）"] -.-> A4
   CUR["消费位置 cursor<br/>订阅者 X：epoch2 @ 60"] -.-> B4
   COV["完备进度 = 序号覆盖（仅当 epoch 2 开始时的会话有效声明含 joinable_venue_seq）<br/>只计入 append 在 epoch 2 上同会话、确认供给 All 且 refused 为空的路由结论记录之后的推送<br/>命题：epoch 2 内 venue 序号落在 [from, through) 的记录都已 append<br/>坐标是 epoch 2 的 venue 序号，不是 Seq，也不是事件时间<br/>from = live_from（回填 Closed 后为任务起点）· through = 计入的推送序号连续到达的第一个缺口<br/>随下一 epoch 的 Gap{Source} 停止变化 · 保留边界推进前留覆盖检查点 {epoch, from, through, above, frozen, folded_below}"] -.-> B3
 ```
