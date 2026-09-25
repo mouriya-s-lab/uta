@@ -100,7 +100,7 @@ sequenceDiagram
   Note over N,H: 第 5 步 恢复观察侧与消费面
   N->>I: 为已建立会话的集成，持久订阅按订阅表与核心自己的需求（非配额池作用域的订单状态流与成交流恒为 All）合成全集经 route 下发，按需 backfill（不等回填完成）
   N->>H: 活动集合（控制流的 fold）中未被失败抑制、所引用来源都已有声明版本的程序：读程序值并核对 Applied 所钉的内容 hash，拉起宿主并登记；交回本成员可交回的最近 checkpoint（Applied 沿用的或之后持久化的）→ Load(program, checkpoint?, budget)；来源尚无声明版本的程序留在活动集合里等待，不拉起、不 ProgramHalted
-  H-->>N: Loaded 或 LoadRejected（→ ProgramHalted；版本不被接受不是 LoadRejected：不携带 checkpoint 装载并 Reset，D4.2）
+  H-->>N: Loaded 或 LoadRejected（→ ProgramHalted）；交回的 checkpoint 的 state_version 总在本成员接受的集合内（替换 Applied 比对或 Output 检查，§8.6 状态迁移），Load 不比对版本
   N->>A: 开放下游会话；此前 health() 返回 Starting
 ```
 

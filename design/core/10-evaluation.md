@@ -630,6 +630,20 @@
 - 不选：读模型按当前 epoch 过滤回填进度（`IntegrationHealth` 多一个输入）；重启时不写会话状态、等第一次状态变化（`Halted` 永不再变，旧实例的 `Established` 一直留着）；核心为各流 append `Disconnected`（核心代写一条集成没说过的话，且崩溃后只能倒填一个时刻）。
 - 证据：§2.4 健康流按键保留；§7.2 第 3 步 `Halted` 的持久化。
 
+**`EffectRequest` 绑定发出成员**（§6.1 发出成员、§8.5 `load_program`、§8.6 卸载与替换）。已定（验收 §10.5 #85）。
+
+- 选中：每条 `EffectRequest` 记下 `member`：开始发出成员的 `load_program` / 替换 `Applied` 在控制流上的位置，由核心在 `Advance` 输出事务里写下；该 `Applied` 以值记下装载 principal、内容 hash、预算、接受的 `state_version` 集合与声明的执行事实输入集合。写处理器与重启重派只读发出成员的这些事实：以它的装载 principal 为负责人开单，按它的执行事实输入判定 `ScopeNotObserved`；发出成员已被替换或卸载、程序值文件已被改或删去时亦然。
+- Q 场景后果：Q9/Q19/Q25：替换或卸载之前提交的请求在其后分派、或在重启后重派，负责人与作用域判定都与不替换时相同；“谁负责这张单据”不随后来的装载者漂移。
+- 不选：按处理时的当前成员判定（替换或卸载之后以另一成员的 principal 开单、按另一份声明判定作用域，卸载之后无成员可读）；按请求与 `Applied` 的位置先后推断成员（请求流与控制流之间没有可比的序，§2.3）；结束成员之前处理完它的全部请求（`Unhandled` 请求永无响应，在途读没有上界）；处理时重读程序值文件（文件可被改或删去，钉住的 hash 只能发现不符，给不出原内容）。
+- 证据：§0.1“权威源头与生命周期”；§2.3；§7.2 生命周期表。
+
+**程序 `Checkpoint` 的版本契约**（§8.6 状态迁移、预算语义、崩溃恢复）。已定（验收 §10.5 #86）。
+
+- 选中：本成员可交回的每个 `Checkpoint`，其 `state_version` 都在本成员 `Applied` 所记的接受集合内：沿用的由替换的 `Applied` 比对（不接受即该事务按 `Reset(Replace)` 处理），其后持久化的由核心在 `Output` 上检查（不在集合内视同 trap：`Output` 不持久化，同一事务 `ProgramHalted{Trap}` + `ProgramFailed`）。`Load` 不比对版本，没有装载时的 `Reset`；`Reset` 的原因只有 `Replace` 与 `Operator`，都在替换的 `Applied` 事务里。
+- Q 场景后果：Q25：程序状态不被静默丢弃；Q17/Q21：崩溃重启不重复 `Reset`，不把 `Tail` 输入的 cursor 挪到更晚的流末。
+- 不选：`Load` 时比对、不接受就 `Reset`（`ProgramReset` 是可压缩的观察，没有执行事实结束旧 `Checkpoint` 的可交回性；`Reset` 之后、新宿主第一个 `Checkpoint` 之前崩溃，重启又交回它、再 `Reset` 一次）；保留装载时的 `Reset`、另写一条结束旧 `Checkpoint` 可交回性的控制记录（为程序自己就能避免的违例增加一种控制事实，而契约在 `Output` 上即可检查）。
+- 证据：§0.1“权威源头与生命周期”（机制即信号）；C14；§8.6 崩溃恢复。
+
 ## 10.2 风险 / 敏感点 / 权衡点
 
 ### 风险
@@ -756,7 +770,7 @@
     - 在 `Advance` 输出持久化前崩溃，则该批记录整批重放，且无重复 `Emit`；
     - 在 `EffectRequest` 提交后、`EffectResponse` 持久化前崩溃，重启后每条请求恰得一条 `EffectResponse`，写请求至多一张 `Draft`；
     - 读结论记录被压缩后重启，不重派（§9.2 #21）；
-    - `state_version` 不兼容时显式 `Reset` 记录，而非静默丢失。
+    - 替换时新程序不接受旧 `state_version`：同一 `Applied` 事务显式记录 `ProgramReset{Replace}`，而非静默丢失；`Output` 交出不被本成员接受的 `state_version` 按 trap 处理（#86），`Load` 从不因版本 `Reset`。
 17. **取证记录矩阵**（§6.5、§6.6）：任一取证渠道的一次 venue 交互，按结果恰产生：（对应 Q3/Q27）
     - `Found` → 该回应的观察记录（观察 J：回应含订单状态时订单状态一条，及每笔可识别执行一条成交记录，§8.1；带 `provenance: Reconciliation{AttemptRef, channel}`，`attribution` 按各条自己的关联证据）+ 一条 `ResolutionEvidence{Found{observation, evidence}}`（执行 J，含 `Evidence`：契约载荷与原始负载），同一事务；
     - `Absent`/`Inconclusive` → 仅一条 `ResolutionEvidence`；
@@ -1056,13 +1070,24 @@
     - 来源已有声明版本而此刻没有会话（fixture 集成断开）：`load_program` 之后的装载期校验按该来源的最近声明比对 `required_inputs`；最近声明提供所引用的字段时程序照常装载并运行，不等会话；最近声明缺该字段时按装载期校验失败处理（§8.6），错误指出该字段；校验结果与该来源此刻有没有会话无关；
     - 所引用的来源在采纳集合里而从未有过声明版本（新登记、尚未握手成功）：`load_program` 的 `Applied` 之后程序在活动集合里，核心不为它拉起宿主，控制流上没有它的 `ProgramHalted`，观察侧也没有它的 `ProgramFailed`；核心在此期间重启，第 5 步同样不拉起它、不写 `ProgramHalted`；
     - 该来源第一次握手成功（append 第一个声明版本）之后：核心按这一版声明重做校验，成立则拉起宿主装载，程序从它的 cursor 起收到等待期间 append 的记录；不成立则按装载期校验失败处理；该来源握手返回 `Refused` 或投影不合法、一直没有声明版本时，程序继续等待，不写 `ProgramHalted`；
-    - 等待中的程序可被 `unload_program` 卸载，此后该来源第一次握手成功也不再装载它。
+    - 等待中的程序可被 `unload_program` 卸载，此后该来源第一次握手成功也不再装载它；
+    - 替换一个等待中的成员：`Applied` 直接 append，fixture 宿主观测不到 `Unload`；新程序所引用的来源都已有声明版本时照常装载，否则新成员继续等待，不拉起宿主、不写 `ProgramHalted`；
+    - 替换一个运行中或失败抑制中的程序、或卸载之后再装载，而新程序引用一个从未有声明版本的来源：`Applied` 之后没有宿主被拉起，控制流上没有 `ProgramHalted`；该来源第一次握手成功之后才按其声明校验与装载。
 84. **会话内开的新流 epoch**（§8.4 readiness 与回填进度、§8.2 `route`、§8.3 供给中断）：fixture 集成在一个已建立的会话里，对一条声明 `joinable_venue_seq` 且 readiness 为 `Live` 的流上报 `Gap{origin: Source}`（fixture 上游推送通道断开重连）：（对应 Q11/Q14/Q31）
     - `Gap{origin: Source}` 与该逻辑流的 `None{新 epoch}` 在同一事务 append；`health` 上该流的 readiness 立即回到 `Starting`，会话仍是 `Established`，旧 epoch 的 `Live` 不再出现；核心没有为该流 append `Disconnected` 或 `Starting`；
     - 核心为该流重发 `route`，fixture 集成在收到之前不送出该流的推送；新 epoch 的路由结论记录 append 在新 epoch 里，覆盖只计入它确认之后的推送；
     - fixture 集成为新 epoch 声明 `Live{live_from}` 之后，回填任务在这个 `live_from` 声明时按 §8.4 的条件判定一次，与握手时开的新 epoch 相同：回填深度为 `Origin` 且声明含 `backfill_from_origin` 时建立从 `Origin` 起的任务，深度为 0 时不建立；同一 epoch 里之后的需求变化不补建任务；
     - 旧 epoch 的覆盖、路由结论与回填进度都不沿用：旧 epoch 的完整界不再给出，新 epoch 的完整界只在它自己的回填 `Closed` 后给出；
     - 在 `Gap{origin: Source}` 已 append、`route` 结论尚未 append 时注入核心崩溃：重启后该流在新会话的握手里按续接或新 epoch 决定，不把崩溃前的路由结论当作新 epoch 的确认。
+85. **请求按发出成员处理**（§6.1 发出成员、§8.5 `load_program`/`unload_program`、§8.6 卸载与替换、§9.2 #21）：以 fixture 推迟出站请求处理器的分派：（对应 Q9/Q19/Q25）
+    - principal P 装载声明执行事实输入 `(X, S)` 的程序 A；A 的一次 `Advance` 发出三个写请求：作用域 S 的、作用域 T 的、锚点构造不出且作用域为 T 的。三条 `EffectRequest` 的 `member` 都是 P 的 `Applied` 位置；
+    - 该输出事务提交之后、分派之前，principal Q 以声明 `(X, T)` 的新程序替换 A；替换的 `Applied` 之后分派：S 的得 `Drafted`，单据负责人为 P；T 的得 `NotDrafted(ScopeNotObserved)`；构造不出的得 `NotDrafted(Malformed)`，不经作用域判定；
+    - 同一场景改为 `unload_program`：三条请求照常分派，结果同上；
+    - 在 `EffectRequest` 提交之后、`EffectResponse` 持久化之前注入核心崩溃，重启之前改写或删去 A 的程序值文件，再以 Q 替换或卸载：重启后重派的结果、负责人与判定同上，每条请求恰一条 `EffectResponse`，写请求至多一张单据。
+86. **`Checkpoint` 的版本契约**（§8.6 状态迁移、预算语义、崩溃恢复）：（对应 Q17/Q25）
+    - fixture 程序在某次 `Output` 里交出 `state_version` 不在其接受集合内的 `checkpoint`：该 `Output` 的 `EffectRequest`、派生记录、`checkpoint` 与 cursor 都不持久化；同一事务 `ProgramHalted{Trap}` + `ProgramFailed`，之后宿主被终止；此前的 `Checkpoint` 与 cursor 不变；
+    - 任意次重启、失败抑制后的重新装载与沿用的替换之后，`Load` 交回的 `Checkpoint` 的 `state_version` 都在当时成员的接受集合内，没有 `ProgramReset` 出现在替换的 `Applied` 事务之外；
+    - 替换时新程序不接受旧版本：`ProgramReset{Replace}` 在该 `Applied` 事务里；该事务提交之后、新宿主第一个 `Checkpoint` 之前反复注入崩溃：重启后没有第二条 `ProgramReset`、程序流没有第二个新 epoch，`Tail` 输入的 cursor 仍是该 `Applied` 所定的位置。
 
 ## 10.6 明确不做
 

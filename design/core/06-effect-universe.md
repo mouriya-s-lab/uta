@@ -35,11 +35,11 @@ Emit(EffectRequest { effect_kind: EffectKind, payload: Bytes, basis: Basis })
 
 - 请求被当作 Intent，进入单据 → STS → IO 壳的完整效应路径；结果是执行事实与决议记录。
 - **构造**：写处理器从请求载荷构造意图，只要求意图的锚点（§8.1）：`WriteLaneKey`、交易协议的操作种类之一、`basis`，撤单 / 改单还要 `target: VenueRef | IdemKey`；平仓的 `target: PositionRef` 由核心从 `basis` 所指的持仓观察记录构造（§6.2）。锚点构造不出（缺锚点、操作种类不在交易协议的封闭集合内、`IdemKey` 不是该作用域内某次尝试的 `SendBarrier` 记为订单键的键、平仓所指的持仓观察记录取不出 `PositionRef`，§6.2）即不是意图，不开单，记 `NotDrafted(Malformed{reason})`（见下）。参数（守卫字段与载荷）不在构造时判定：参数是否合规是单据 fold 的状态，送审时由输入约束步否决（§6.2、§6.3），所以程序发出的非法参数与人起的非法参数得到同一对记录（意图 + 否决，Q8）。[设计]
-- **负责人**：写处理器以程序的**装载 principal**（装载该程序的人或服务账户）为 `responsible` 开单（§6.2）。程序本身不是 principal。
+- **负责人**：写处理器以**发出成员的装载 principal**（装载该程序成员的人或服务账户，即开始该成员的 `Applied` 所记的 principal，见下文“发出成员”）为 `responsible` 开单（§6.2）。程序本身不是 principal。
 - 该 principal 的授权范围决定单据能否不经人工直接放行（授权步，§6.3）。
 - 开单的 `Draft.basis` 含该 `EffectRequest` 记录的位置：执行事实侧位置作因果依据（§5.1）。
 - 程序意图没有编辑期：写处理器在同一事务 `Draft` 并 `SubmitForDecision`，单据直接进入 `AwaitingDecision`。
-- 之后的退回、改写、移交由装载 principal 经单据操作进行（§8.5），与人起的单据无异。
+- 之后的退回、改写、移交由该 principal 经单据操作进行（§8.5），与人起的单据无异。
 
 **完成事实在执行事实侧** [设计]。
 
@@ -49,6 +49,10 @@ Emit(EffectRequest { effect_kind: EffectKind, payload: Bytes, basis: Basis })
   - 写处理器：`Drafted(ticket_id)` | `NotDrafted(Malformed{reason} | ScopeNotObserved)`。
 - `EffectResponse` 与产生它的读结论记录 / `Gap` / `Draft` 同一事务 append；`NotCalled` 与 `NotDrafted` 没有伴随记录，`EffectResponse` 单独 append。
 - **落点**：`EffectRequest` 与它的 `EffectResponse`（全部结果，含 `NotCalled` 与 `NotDrafted`）都在该程序的**请求流**上：按程序 id 各成一条的执行事实流。它们是 UTA 关于这个程序自己生命周期的事实，不属任何来源、lane 或作用域，所以没有有效 lane 或未登记来源的请求也有落点（§8.5 执行事实流）。
+- **发出成员**：每条 `EffectRequest` 记下发出它的程序成员 `member`，即开始该成员的 `load_program` 或替换 `Applied` 在控制流上的位置。核心在 `Advance` 的输出事务里写下它：哪个成员在运行是核心自己的控制事实（§8.6）。
+  - 该 `Applied` 以值记下成员的事实：装载 principal（该控制动作的 principal）、声明的执行事实输入集合、钉住的内容 hash 与接受的 `state_version` 集合（§8.5 `load_program`）。
+  - 写处理器与重启重派只读发出成员的这些事实，不读当前成员的，也不重读程序值文件。请求可以在发出成员结束之后才被处理（§8.6 卸载与替换）；`Applied` 是控制流上的执行事实，成员结束、程序值文件被改或删去之后照样可读。
+  - 不选：**按处理时的当前成员判定**：替换或卸载之后分派的请求会以另一成员的 principal 开单、按另一份声明判定作用域，卸载之后则无成员可读；**按请求与 `Applied` 的位置先后推断成员**：请求流与控制流之间没有可比的序（§2.3）；**结束成员之前处理完它的全部请求**：`Unhandled` 请求永远没有响应，在途读没有上界。
 - 理由：观察记录可压缩（§2.4），`EffectRequest` 永存（§7.5）；“是否已处理”必须能从与请求同寿命的事实重建。
 - `Concluded` 引用的读结论记录落到保留边界下后，`EffectResponse` 仍成立，不钉住保留。
 - `Unhandled` 请求没有 `EffectResponse`，也不重派。
@@ -56,7 +60,7 @@ Emit(EffectRequest { effect_kind: EffectKind, payload: Bytes, basis: Basis })
   - 它的请求流是隐含的输入：同一条流上先有它自己的 `EffectRequest`（位置由此得知；程序按自己放进载荷的内容认出它们），后有指回这些位置的 `EffectResponse`，同流有序；
   - 要看写请求之后的单据与尝试，程序在值树里声明执行事实输入 `(来源, WriteScope?)`，与执行事实订阅同一个 selector（§8.5 订阅组）：该作用域各 lane 流上的单据记录（含 `Close` 的结局；放行时 `Close(Prepared(p))` 给出尝试位置 `p`）与 `p` 这次尝试的记录（`SendBarrier`、回执、`NotSent`、`Undetermined`、`ResolutionEvidence`、`ReconciliationReopened`、`Expired`、`Abandoned`，§6.5）按位置投给它；
   - 解释②在程序内按自己的锚点（`Drafted(ticket_id)` 所指单据、`Close(Prepared(p))` 所给的 `p`）挑出属于自己的事实；宿主与投递不做关联，只按位置搬运。请求流与 lane 流之间不定投递顺序（§8.5）：`Draft` 与 `Drafted` 同事务提交，程序可能先看到单据记录、后看到指向它的 `Drafted`，解释②按 `ticket_id` 两种次序都能匹配。解释①的节点不消费这些事实。
-  - **构造规则**：写请求意图的 `WriteLaneKey` 所属的 `(来源, 作用域)` 不被该程序声明的任何执行事实输入选中时，写处理器不开单，记 `NotDrafted(ScopeNotObserved)`（在 `Malformed` 判定之后）。它只由 UTA 自己的事实（程序值与请求锚点）判定，所以程序不会写进一个自己看不到结果的作用域。
+  - **构造规则**：写请求意图的 `WriteLaneKey` 所属的 `(来源, 作用域)` 不被发出成员的 `Applied` 所记的任何执行事实输入选中时，写处理器不开单，记 `NotDrafted(ScopeNotObserved)`（在 `Malformed` 判定之后）。它只由 UTA 自己的事实（发出成员的 `Applied` 与请求锚点）判定，所以程序不会写进一个自己看不到结果的作用域。
   - 理由：未调用与 `NotDrafted` 都不产生观察记录，程序只有经响应才看得到它们，而伪造观察记录去承载它们会把效应侧结论放进观察宇宙；程序若要组合多次写（例如先撤单、确认后再下单，§6.2 改单），它自己的尝试有没有结局只能从这些事实得知。撤单的回执或 `Found` 只说明撤单请求到达，不说明目标订单已结束：目标订单的状态要从订单状态观察读（§6.6 撤单的取证）。
   - 代价：声明的作用域里其他 principal 的单据与尝试同样投给程序，每批都唤起一次 `Advance`、计入它的预算；这是接受的代价。
   - 不选：**宿主按锚点动态关联、只投递程序自己的单据与尝试**：宿主要按已看到的 `EffectResponse` 维护一份可达集合决定投递资格，是一个新的关联索引机制（§0.1“机制即信号”）；**为程序另设结果订阅种类**：同一事实两条投递路径。
@@ -65,6 +69,7 @@ Emit(EffectRequest { effect_kind: EffectKind, payload: Bytes, basis: Basis })
 
 - 读处理器重新执行一次；
 - 写处理器重新开单。`Drafted` 与 `Draft` 同事务，所以“有 `Draft` 无 `EffectResponse`”不可达；`NotDrafted` 已是响应，不重派。
+- 重派同首次分派一样按发出成员的 `Applied` 所记事实开单与判定作用域；发出成员此后已被替换或卸载时亦然。
 
 核心只保证：写类走两阶段，读类可重试，两类都被记录、都带 `basis`。
 
@@ -516,7 +521,7 @@ trait Rule {
 | lane | 读该 `WriteLaneKey` 的阻塞头集合；集合非空则停在本步；集合为空时判冷却，冷却期内否决，否则放行 | H4；C12 |
 | 过期 | `deadline` 过期规则，由 `deadline` 到时触发 | H6 |
 
-**授权步。** 查询的是：哪些 principal 的记录足以让写进入 prepare。写处理器的装载 principal 授权范围，决定能否不经人工直接放行。
+**授权步。** 查询的是：哪些 principal 的记录足以让写进入 prepare。程序意图的单据以发出成员的装载 principal 为负责人，它的授权范围决定能否不经人工直接放行。
 
 **输入约束步** [设计]。以下各项彼此独立，以 `Validated` 累积，一次否决列出全部违反：
 
