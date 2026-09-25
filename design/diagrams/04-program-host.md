@@ -19,8 +19,9 @@ sequenceDiagram
   Note over H: 解释①：nodes 增量 DAG，cutoff<br/>解释②：rules fold → On / Require / Expire / Emit
   H-->>C: Output{effects, derivations, checkpoint{bytes, state_version}}
   alt Output 超预算（意图速率 / 状态大小）
-    C->>H: 终止宿主进程
-    C->>J: append ProgramFailed{Budget(kind)}；程序 Failed
+    C->>DB: 同事务 append ProgramHalted{Budget(kind)}（执行 J）+ ProgramFailed{Budget(kind)}（观察 J）
+    C->>H: 提交之后终止宿主进程；OS 确认退出后清除登记
+    Note over C: 程序进入失败抑制，本批输出不落
   else 正常
     C->>DB: BEGIN
     C->>DB: append EffectRequest 记录（执行 J）× effects
@@ -63,23 +64,25 @@ sequenceDiagram
 
 ## D4.2 程序生命周期
 
-对照：§8.6 `Load`/`Reset`/`Unload`、预算语义、状态迁移、运维冷启动；§8.5 `load_program`/`unload_program`；§4.2 `program_upgrade`。
+对照：§8.6 `Load`/`Reset`/`Unload`、程序的活动集合与失败抑制、预算语义、状态迁移、运维冷启动；§8.5 `load_program`/`unload_program`；§4.2 `program_upgrade`；§7.2 生命周期表与受控停止。
 
 ```mermaid
 stateDiagram-v2
-  [*] --> Loading : load_program(manifest_ref, cold_start?) 或 启动第 5 步
+  [*] --> Loading : load_program(manifest_ref, cold_start?) 的 Applied（钉内容 hash，进入活动集合）或 启动第 5 步（活动集合中未被抑制的程序）
   Loading --> Running : Load(program, checkpoint?, budget) → Loaded{state_version}
-  Loading --> Rejected : LoadRejected（Id 越界/环、required_inputs 缺、含 Pooled 而子系统未装）
+  Loading --> Halted : 程序值内容 hash 与 Applied 所钉不符 / LoadRejected（Id 越界/环、required_inputs 缺、含 Pooled 而子系统未装）→ 同事务 ProgramHalted{ContentUnavailable 或 LoadRejected(reason)} + ProgramFailed
   state "Reset 处理中" as RST
   Loading --> RST : 核心 Load 前比对：checkpoint 的 state_version 不被程序接受 → 不携带装载，Reset(StateVersionMismatch)；替换时 Reset(Replace)
   Loading --> RST : load_program(…, cold_start = true) → 不携带 checkpoint 装载，Reset(Operator)
   RST --> Running : append ProgramReset；程序流新 epoch Gap{Source, program_upgrade}；按 H9 回填
   Running --> Running : Advance 循环（D4.1）
-  Running --> Failed : 超预算 / trap（宿主异常退出） → 终止宿主，append ProgramFailed
-  Running --> Unloaded : unload_program → Unload，清除进程登记，最近 Checkpoint 保留
-  Failed --> Loading : load_program 重新装载（携最近 Checkpoint；状态本身致 trap 时用 cold_start）
-  Unloaded --> Loading : 替换程序 = Unload 旧 + Load 新（携旧 checkpoint；新程序不接受旧版本 → Reset(Replace)）
-  Rejected --> [*]
+  Running --> Halted : 超预算 / trap（宿主异常退出）→ 同事务 ProgramHalted + ProgramFailed，提交后终止宿主、OS 确认退出后清除登记
+  Running --> Stopped : 受控停止第 2 步 → Unload；活动集合不变，下一实例第 5 步重新 Load
+  Running --> Unloaded : unload_program 的 Applied → Unload，离开活动集合，Checkpoint cursor 引用解除（Checkpoint 本身保留）
+  Halted --> Loading : load_program 的 Applied 以位置引用 ProgramHalted（重新钉内容 hash；携最近 Checkpoint，状态本身致 trap 时用 cold_start）
+  Halted --> Halted : 核心重启：ProgramHalted 未被解除，第 5 步不装载
+  Unloaded --> Loading : 再 load_program；替换程序 = unload_program 旧 + load_program 新（携旧 checkpoint；新程序不接受旧版本 → Reset(Replace)）
+  Stopped --> [*]
   note right of Running
     核心崩溃：重启后从与 cursor 同事务持久化的
     最近 Checkpoint 重新 Load，重放 cursor 之后的记录，
@@ -87,7 +90,11 @@ stateDiagram-v2
   end note
 ```
 
-读法：`Failed` 不自动恢复——超预算是程序作者的问题，由控制面 principal 决定是否重装；其他程序、账户、核心不受影响。
+读法：
+
+- `Halted` 是失败抑制：它由执行事实 `ProgramHalted` 承载，跨核心重启保持，不自动恢复——超预算是程序作者的问题，由控制面 principal 决定是否重装；其他程序、账户、核心不受影响。`ProgramFailed` 只供展示。
+- 活动集合是 `load_program`/`unload_program` 的 `Applied` 的 fold；改装载清单或程序值文件不改变它，内容与所钉 hash 不符时不装载。
+- 宿主执行在程序成员与核心实例两者之内：`Stopped`（受控停止）与崩溃都只结束宿主执行，成员与 `Checkpoint` 引用不变。
 
 核出：无。
 
