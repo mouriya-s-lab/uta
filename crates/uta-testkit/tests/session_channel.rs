@@ -284,9 +284,8 @@ async fn terminating_child_closes_pending_calls_and_clears_its_process_row() {
     let tempdir = tempfile::tempdir().expect("temporary store directory should be created");
     let mut store = Store::open(&tempdir.path().join("uta.db")).expect("store should open");
     let previous = store
-        .transact(|tx| tx.instances().begin(UnixMillis::now()))
-        .expect("first instance should begin")
-        .into_inner();
+        .begin_instance(UnixMillis::now().expect("system clock should provide Unix milliseconds"))
+        .expect("first instance should begin");
     let role = ProcessRole::Integration(
         IntegrationId::parse("fixture-integration").expect("fixture role id should parse"),
     );
@@ -337,11 +336,15 @@ async fn terminating_child_closes_pending_calls_and_clears_its_process_row() {
         .expect("OS exit confirmation timed out");
     assert_eq!(exited.id(), identity);
 
-    drop(previous);
+    store
+        .end_instance(
+            previous,
+            UnixMillis::now().expect("system clock should provide Unix milliseconds"),
+        )
+        .expect("first instance should end");
     let later = store
-        .transact(|tx| tx.instances().begin(UnixMillis::now()))
-        .expect("later instance should begin")
-        .into_inner();
+        .begin_instance(UnixMillis::now().expect("system clock should provide Unix milliseconds"))
+        .expect("later instance should begin");
     let orphan_rows = store
         .processes_of_other_instances(&later)
         .expect("process rows should be readable");
@@ -360,6 +363,12 @@ async fn terminating_child_closes_pending_calls_and_clears_its_process_row() {
             .is_empty(),
         "later instance still saw a process row after OS-confirmed clearing"
     );
+    store
+        .end_instance(
+            later,
+            UnixMillis::now().expect("system clock should provide Unix milliseconds"),
+        )
+        .expect("later instance should end");
 }
 
 #[tokio::test]

@@ -272,9 +272,8 @@ fn sigterm_stops_cleanly_restarts_and_persists_the_end_anchor() {
 
     let mut store = uta_store::Store::open(&db).expect("open store after second daemon stopped");
     let later = store
-        .transact(|tx| tx.instances().begin(UnixMillis::now()))
-        .expect("begin later inspection instance")
-        .into_inner();
+        .begin_instance(UnixMillis::now().expect("read current time"))
+        .expect("begin later inspection instance");
     let previous = store
         .previous_instance(&later)
         .expect("read preceding instance")
@@ -286,9 +285,8 @@ fn sigterm_stops_cleanly_restarts_and_persists_the_end_anchor() {
         previous.end
     );
     store
-        .transact(|tx| tx.instances().end(later, UnixMillis::now()))
-        .expect("end inspection instance")
-        .into_inner();
+        .end_instance(later, UnixMillis::now().expect("read current time"))
+        .expect("end inspection instance");
     store.close().expect("close inspection store");
 }
 
@@ -338,6 +336,83 @@ fn sigkill_leaves_no_end_anchor_and_restart_reports_the_crash() {
 
 #[cfg(unix)]
 #[test]
+fn malformed_prior_process_row_fails_closed_and_stops_current_instance() {
+    let home = TempDir::new().expect("create isolated state root");
+    let mut first = Daemon::spawn(home.path());
+    first.wait_ready();
+    first.send_signal(libc::SIGTERM);
+    let first_status = first.wait_for_exit(EXIT_TIMEOUT);
+    assert_eq!(
+        first_status.code(),
+        Some(0),
+        "initial daemon run should stop cleanly:\n{}",
+        first.logs()
+    );
+
+    let db = db_path(home.path());
+    let raw = Connection::open(&db).expect("open database to insert malformed process row");
+    assert_eq!(
+        instance_count(&raw),
+        1,
+        "initial daemon run should create exactly one instance"
+    );
+    let first_instance_id: i64 = raw
+        .query_row(
+            "SELECT instance_id FROM instances ORDER BY instance_id DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .expect("read completed instance ID");
+    let inserted = raw
+        .execute(
+            "INSERT INTO processes (pid, start_time, instance_id, role_kind, role_id) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![42_i64, 1_i64, first_instance_id, "integration", ""],
+        )
+        .expect("insert process row with invalid integration ID");
+    assert_eq!(inserted, 1, "malformed orphan row should be inserted");
+    drop(raw);
+
+    let mut second = Daemon::spawn(home.path());
+    let second_status = second.wait_for_exit(EXIT_TIMEOUT);
+    assert_eq!(
+        second_status.code(),
+        Some(1),
+        "unreadable orphan rows should fail startup:\n{}",
+        second.logs()
+    );
+    let logs = second.logs();
+    assert!(
+        !logs.contains("core ready"),
+        "daemon must not report readiness after orphan-row parsing fails:\n{logs}"
+    );
+    assert!(
+        logs.contains("cannot read the process table, orphans cannot be reclaimed")
+            && logs.contains("process table row has an invalid id"),
+        "stderr should identify the malformed process row as the reclamation failure:\n{logs}"
+    );
+
+    let raw = Connection::open(&db).expect("reopen database after failed startup");
+    let (latest_instance_id, latest_end): (i64, Option<i64>) = raw
+        .query_row(
+            "SELECT instance_id, ended_at_ms FROM instances \
+             ORDER BY instance_id DESC LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .expect("read newest instance end anchor");
+    assert!(
+        latest_instance_id > first_instance_id,
+        "failed startup should have opened an instance after the malformed row's instance"
+    );
+    assert!(
+        latest_end.is_some(),
+        "controlled stop should persist an end anchor for the failed startup instance"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn startup_reclaims_orphan_process_and_clears_its_row() {
     use uta_proc::is_running;
 
@@ -363,9 +438,8 @@ fn startup_reclaims_orphan_process_and_clears_its_row() {
 
     let mut store = uta_store::Store::open(&db).expect("open store to seed crash state");
     let crashed_instance = store
-        .transact(|tx| tx.instances().begin(UnixMillis::now()))
-        .expect("begin seed instance")
-        .into_inner();
+        .begin_instance(UnixMillis::now().expect("read current time"))
+        .expect("begin seed instance");
     let role = ProcessRole::Integration(
         IntegrationId::parse("orphan-child").expect("valid integration id"),
     );
@@ -409,9 +483,8 @@ fn startup_reclaims_orphan_process_and_clears_its_row() {
 
     let mut store = uta_store::Store::open(&db).expect("open store to inspect reclaimed rows");
     let fresh = store
-        .transact(|tx| tx.instances().begin(UnixMillis::now()))
-        .expect("begin fresh inspection instance")
-        .into_inner();
+        .begin_instance(UnixMillis::now().expect("read current time"))
+        .expect("begin fresh inspection instance");
     let other_rows = store
         .processes_of_other_instances(&fresh)
         .expect("read process rows from other instances");
@@ -420,9 +493,8 @@ fn startup_reclaims_orphan_process_and_clears_its_row() {
         "no processes from previous instances should remain: {other_rows:?}"
     );
     store
-        .transact(|tx| tx.instances().end(fresh, UnixMillis::now()))
-        .expect("end inspection instance")
-        .into_inner();
+        .end_instance(fresh, UnixMillis::now().expect("read current time"))
+        .expect("end inspection instance");
     store.close().expect("close inspection store");
 }
 

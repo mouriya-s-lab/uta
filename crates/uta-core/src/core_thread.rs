@@ -2,10 +2,10 @@
 //! instance's durable state.
 //!
 //! Other parts of the process reach it through [`CoreHandle`] by sending
-//! closed, typed [`Command`]s over a bounded channel; each command runs to
-//! completion on the core thread (one command, one transaction) and replies
-//! over a oneshot. No closure, connection or transaction crosses the thread
-//! boundary.
+//! closed, typed [`Command`]s over a bounded channel. Each command runs to
+//! completion on the core thread (a write command is one transaction; a read
+//! command is one statement) and replies over a oneshot. No closure,
+//! connection or transaction crosses the thread boundary.
 //!
 //! Lifecycle, as handshakes:
 //! - start: the thread opens the store and commits the fence transaction
@@ -13,7 +13,12 @@
 //!   exists and the thread has ended.
 //! - stop: [`CoreHandle::stop`] consumes the handle; the thread writes the
 //!   instance end anchor, closes the connection on itself, replies, and is
-//!   joined before `stop` returns. Only then may the caller release the lock.
+//!   joined before `stop` returns. It blocks and is called outside the async
+//!   runtime, so it cannot be cancelled halfway.
+//! - drop without stop: the handle closes the command channel and joins the
+//!   thread, which drops the store on itself without an end anchor (the crash
+//!   path of design §7.2). The thread therefore never outlives its handle, and
+//!   the OS lock (declared before the handle) is released only after it.
 
 use std::path::PathBuf;
 use std::sync::mpsc as std_mpsc;
@@ -22,8 +27,8 @@ use std::thread::{self, JoinHandle};
 use tokio::sync::{mpsc, oneshot};
 use uta_proc::ExitConfirmed;
 use uta_store::{
-    Committed, CurrentInstance, InstanceId, InstanceRecord, OpenError, ProcessRecord, ReadError,
-    SqliteError, Store, TxError, UnixMillis,
+    ClockError, Committed, CurrentInstance, EndError, InstanceId, InstanceRecord, OpenError,
+    ProcessRecord, ReadError, SqliteError, Store, TxError, UnixMillis,
 };
 
 /// Bound on queued commands; senders wait when the core thread is behind.
@@ -40,8 +45,10 @@ pub struct Ready {
 pub enum StartError {
     #[error("cannot open the store: {0}")]
     Open(#[from] OpenError),
+    #[error("cannot read the core clock: {0}")]
+    Clock(ClockError),
     #[error("the fence transaction did not commit: {0}")]
-    Fence(TxError<SqliteError>),
+    Fence(SqliteError),
     #[error("cannot read the previous instance: {0}")]
     Read(#[from] ReadError),
     #[error("cannot start the core thread: {0}")]
@@ -50,14 +57,18 @@ pub enum StartError {
     Vanished,
 }
 
+/// Why a controlled stop did not complete. Whether the end anchor exists is
+/// part of the answer, because the exit code reports it.
 #[derive(Debug, thiserror::Error)]
 pub enum StopError {
+    #[error("cannot read the core clock; no end anchor written: {0}")]
+    Clock(ClockError),
     #[error("the end anchor did not commit: {0}")]
-    EndAnchor(TxError<SqliteError>),
-    #[error("closing the store failed: {0}")]
-    Close(SqliteError),
-    #[error("the core thread ended without completing the stop")]
-    Vanished,
+    EndAnchor(EndError),
+    #[error("the core thread ended without completing the stop; no end anchor confirmed")]
+    CoreGone,
+    #[error("the end anchor was written, but closing the store failed: {0}")]
+    CloseAfterAnchor(SqliteError),
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -93,11 +104,11 @@ struct CoreState {
     current: CurrentInstance,
 }
 
-/// Sends commands to the core thread. Consumed by [`CoreHandle::stop`].
+/// Sends commands to the core thread and owns the thread's lifetime.
 #[derive(Debug)]
 pub struct CoreHandle {
-    commands: mpsc::Sender<Command>,
-    thread: JoinHandle<()>,
+    commands: Option<mpsc::Sender<Command>>,
+    thread: Option<JoinHandle<()>>,
 }
 
 /// Opens the store on a new core thread and commits the fence transaction.
@@ -110,7 +121,13 @@ pub fn start(db: PathBuf) -> Result<(CoreHandle, Ready), StartError> {
         .spawn(move || run(db, ready_tx, inbox))
         .map_err(StartError::Spawn)?;
     match ready_rx.recv() {
-        Ok(Ok(ready)) => Ok((CoreHandle { commands, thread }, ready)),
+        Ok(Ok(ready)) => Ok((
+            CoreHandle {
+                commands: Some(commands),
+                thread: Some(thread),
+            },
+            ready,
+        )),
         Ok(Err(e)) => {
             let _ = thread.join();
             Err(e)
@@ -137,29 +154,50 @@ impl CoreHandle {
         Ok(answer.await.map_err(|_| CommandError::CoreGone)??)
     }
 
-    /// Controlled stop, instance part (design §7.2 受控停止 steps 5–6 up to
-    /// closing SQLite): end anchor, close, join the thread.
-    pub async fn stop(self) -> Result<(), StopError> {
-        let (reply, answer) = oneshot::channel();
-        let sent = self.commands.send(Command::Stop { reply }).await;
-        let result = match sent {
-            Ok(()) => answer.await.unwrap_or(Err(StopError::Vanished)),
-            Err(_) => Err(StopError::Vanished),
+    /// Controlled stop, instance part (design §7.2 受控停止 step 5 and closing
+    /// SQLite): end anchor, close, join the thread. Blocking; call it outside
+    /// the async runtime.
+    pub fn stop(mut self) -> Result<(), StopError> {
+        let result = match self.commands.take() {
+            Some(commands) => {
+                let (reply, answer) = oneshot::channel();
+                match commands.blocking_send(Command::Stop { reply }) {
+                    Ok(()) => answer.blocking_recv().unwrap_or(Err(StopError::CoreGone)),
+                    Err(_) => Err(StopError::CoreGone),
+                }
+            }
+            None => Err(StopError::CoreGone),
         };
-        let thread = self.thread;
-        let joined = tokio::task::spawn_blocking(move || thread.join()).await;
-        match (result, joined) {
-            (Ok(()), Ok(Ok(()))) => Ok(()),
+        match (result, self.join()) {
+            (Ok(()), Ok(())) => Ok(()),
             (Err(e), _) => Err(e),
-            (Ok(()), _) => Err(StopError::Vanished),
+            (Ok(()), Err(())) => Err(StopError::CoreGone),
         }
     }
 
     async fn send(&self, command: Command) -> Result<(), CommandError> {
-        self.commands
-            .send(command)
-            .await
-            .map_err(|_| CommandError::CoreGone)
+        match &self.commands {
+            Some(commands) => commands
+                .send(command)
+                .await
+                .map_err(|_| CommandError::CoreGone),
+            None => Err(CommandError::CoreGone),
+        }
+    }
+
+    /// Closes the command channel and waits for the thread to end.
+    fn join(&mut self) -> Result<(), ()> {
+        self.commands = None;
+        match self.thread.take() {
+            Some(thread) => thread.join().map_err(|_| ()),
+            None => Ok(()),
+        }
+    }
+}
+
+impl Drop for CoreHandle {
+    fn drop(&mut self) {
+        let _ = self.join();
     }
 }
 
@@ -185,10 +223,8 @@ fn run(
 
 fn open(db: PathBuf) -> Result<(CoreState, Ready), StartError> {
     let mut store = Store::open(&db)?;
-    let current = store
-        .transact(|tx| tx.instances().begin(UnixMillis::now()))
-        .map_err(StartError::Fence)?
-        .into_inner();
+    let now = UnixMillis::now().map_err(StartError::Clock)?;
+    let current = store.begin_instance(now).map_err(StartError::Fence)?;
     let previous = store.previous_instance(&current)?;
     let ready = Ready {
         instance: current.id(),
@@ -217,16 +253,17 @@ fn serve(mut state: CoreState, inbox: &mut mpsc::Receiver<Command>) {
         }
     }
     // Every handle is gone without a stop: the instance ends like a crash,
-    // without an end anchor (design §7.2 "崩溃路径不变").
+    // without an end anchor (design §7.2 "崩溃路径不变"); the store is dropped
+    // (and its connection closed) here, on the owning thread.
 }
 
 impl CoreState {
     fn stop(self) -> Result<(), StopError> {
         let CoreState { mut store, current } = self;
+        let now = UnixMillis::now().map_err(StopError::Clock)?;
         store
-            .transact(|tx| tx.instances().end(current, UnixMillis::now()))
-            .map_err(StopError::EndAnchor)?
-            .into_inner();
-        store.close().map_err(StopError::Close)
+            .end_instance(current, now)
+            .map_err(StopError::EndAnchor)?;
+        store.close().map_err(StopError::CloseAfterAnchor)
     }
 }

@@ -49,8 +49,7 @@ fn validate(raw: &str) -> Result<(), IdError> {
 macro_rules! config_id {
     ($(#[$doc:meta])* $name:ident) => {
         $(#[$doc])*
-        #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-        #[serde(try_from = "String", into = "String")]
+        #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub struct $name(Arc<str>);
 
         impl $name {
@@ -65,17 +64,28 @@ macro_rules! config_id {
             }
         }
 
-        impl TryFrom<String> for $name {
-            type Error = IdError;
-            fn try_from(raw: String) -> Result<Self, IdError> {
-                validate(&raw)?;
-                Ok(Self(Arc::from(raw)))
+        /// Serialized as the plain string, without an intermediate copy.
+        impl Serialize for $name {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                serializer.serialize_str(&self.0)
             }
         }
 
-        impl From<$name> for String {
-            fn from(id: $name) -> String {
-                id.0.as_ref().to_owned()
+        /// Deserialized through [`Self::parse`], from the deserializer's
+        /// (possibly borrowed) string: the only copy is the `Arc<str>`.
+        impl<'de> Deserialize<'de> for $name {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                struct Visitor;
+                impl serde::de::Visitor<'_> for Visitor {
+                    type Value = $name;
+                    fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                        f.write_str(concat!("a ", stringify!($name), " string"))
+                    }
+                    fn visit_str<E: serde::de::Error>(self, raw: &str) -> Result<$name, E> {
+                        $name::parse(raw).map_err(E::custom)
+                    }
+                }
+                deserializer.deserialize_str(Visitor)
             }
         }
 

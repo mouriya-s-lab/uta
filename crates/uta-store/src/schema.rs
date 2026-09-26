@@ -35,7 +35,7 @@ const MIGRATIONS: [&str; FORMAT_VERSION as usize] = [
          source_kind TEXT NOT NULL CHECK (source_kind IN ('integration', 'program')),
          source_id   TEXT NOT NULL,
          name        TEXT NOT NULL,
-         epoch       INTEGER NOT NULL CHECK (epoch > 0),
+         epoch       INTEGER NOT NULL CHECK (epoch BETWEEN 1 AND 4294967295),
          next_seq    INTEGER NOT NULL CHECK (next_seq > 0),
          UNIQUE (source_kind, source_id, name, epoch)
      );
@@ -63,26 +63,48 @@ const MIGRATIONS: [&str; FORMAT_VERSION as usize] = [
      ) WITHOUT ROWID;",
 ];
 
-/// The version recorded in the file; `None` for a file without the meta table.
-pub(crate) fn recorded_version(conn: &Connection) -> rusqlite::Result<Option<u32>> {
+/// What the file says about its format.
+#[derive(Debug)]
+pub(crate) enum Recorded {
+    /// No meta table: a new (or foreign, empty) file.
+    Fresh,
+    Version(u32),
+    /// The meta table exists but does not hold a valid version.
+    Unreadable(String),
+}
+
+pub(crate) fn recorded_version(conn: &Connection) -> rusqlite::Result<Recorded> {
     let has_meta: bool = conn.query_row(
         "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_meta')",
         [],
         |r| r.get(0),
     )?;
     if !has_meta {
-        return Ok(None);
+        return Ok(Recorded::Fresh);
     }
-    conn.query_row(
-        "SELECT format_version FROM schema_meta WHERE singleton = 1",
-        [],
-        |r| r.get(0),
-    )
-    .optional()
+    let value = conn
+        .query_row(
+            "SELECT format_version FROM schema_meta WHERE singleton = 1",
+            [],
+            |r| r.get::<_, rusqlite::types::Value>(0),
+        )
+        .optional()?;
+    Ok(match value {
+        None => Recorded::Unreadable("schema_meta has no row".to_owned()),
+        Some(rusqlite::types::Value::Integer(v)) => match u32::try_from(v) {
+            Ok(v) => Recorded::Version(v),
+            Err(_) => Recorded::Unreadable(format!("format version {v} is out of range")),
+        },
+        Some(other) => Recorded::Unreadable(format!("format version is not an integer: {other:?}")),
+    })
 }
 
 pub(crate) fn bring_forward(conn: &mut Connection) -> Result<(), OpenError> {
-    let found = recorded_version(conn)?.unwrap_or(0);
+    let found = match recorded_version(conn)? {
+        Recorded::Fresh => 0,
+        Recorded::Version(v) => v,
+        Recorded::Unreadable(reason) => return Err(OpenError::FormatUnreadable(reason)),
+    };
     if found > FORMAT_VERSION {
         return Err(OpenError::FormatTooNew {
             found,

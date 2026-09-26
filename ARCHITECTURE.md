@@ -18,8 +18,8 @@ flowchart TB
   TASKS <-->|"核心创建的通道（socketpair / 匿名管道对）<br/>长度前缀 JSON-RPC"| CHILD
 ```
 
-- **主线程**依次执行三件事：先取 OS 锁（`fence::acquire`），再启动核心线程并等待它报告就绪，最后进入 tokio runtime。受控停止时顺序是：核心线程写结束锚点、在自己线程上关闭 SQLite、被 join，之后主线程才释放锁（设计 §7.2 受控停止第 5、6 步）。
-- **核心线程**是 `rusqlite::Connection` 唯一的所有者，也是核心自有状态唯一的写入者。它按顺序执行 `Command`：一个命令对应一个事务，回复在提交之后发出。设计里同一事务必须一起提交的记录集合（§7.4、D1.5），都由一个命令在一个事务里写完。连接、事务和闭包都不会跨出这个线程。
+- **主线程**依次执行：先建好 tokio runtime，再取 OS 锁（`fence::acquire`），然后启动核心线程并等待它报告就绪（fence 事务已提交），最后在 runtime 里进入运行阶段。停止信号的监听在任何等待之前装好，所以孤儿回收期间和"core ready"之后的停止请求都走受控停止，不走系统默认动作；Unix 上是 SIGINT、SIGTERM，Windows 上是 Ctrl-C、Ctrl-Break 与控制台的 close、shutdown 事件。运行阶段结束后先丢掉 runtime，再在主线程上阻塞调用 `CoreHandle::stop`：核心线程写结束锚点、在自己线程上关闭 SQLite、被 join，之后主线程才释放锁（设计 §7.2 受控停止第 5、6 步）。`stop` 是阻塞调用而不是 future，不存在停到一半被取消的情况；`CoreHandle` 被丢弃而没有调用 `stop` 时，`Drop` 关闭命令通道并 join 线程，线程丢掉 store、不写结束锚点（即崩溃路径），锁在 `CoreHandle` 之后才被释放。
+- **核心线程**是 `rusqlite::Connection` 唯一的所有者，也是核心自有状态唯一的写入者。它按顺序执行 `Command`：写命令是一个事务，回复在提交之后发出；读命令是一条语句（SQLite 的语句级快照）。设计里同一事务必须一起提交的记录集合（§7.4、D1.5），都由一个命令在一个事务里写完。连接、事务和闭包都不会跨出这个线程。
 - **tokio 任务**持有 I/O 对象（通道、子进程句柄、信号），以及嵌套在某个会话之内、只存在于内存的生命周期状态，例如一条通道上的在途调用表。它们要持久化什么，一律发 `Command` 给核心线程。设计把这类状态放在某个元素里，例如集成会话元素拥有调用通道（§7.3），落到代码就是该元素的任务，生命周期不超过这个会话。
 - **子进程**只经由核心创建的通道和凭据句柄与核心交换数据，不接触 SQLite（§7.1、§7.4）。
 
@@ -29,8 +29,8 @@ flowchart TB
 
 | crate | 层 | 拥有 | 依赖（工作区内） |
 |---|---|---|---|
-| `uta-base` | 值 | 源头在核心之外的标识：`IntegrationId`、`ProgramId`（Alice 写的配置文件），以及 `ProcessRole` | — |
-| `uta-proc` | OS | 进程身份 `OsProcessId{pid, start_time}` 与退出证明 `ExitConfirmed`，由 OS 确认 | — |
+| `uta-base` | 值 | 源头在核心之外的标识：`IntegrationId`、`ProgramId`（Alice 写的配置文件），`StreamName`、`WriteLaneKey`（集成声明与程序值），以及带命名空间标签的 `Source` 与 `ProcessRole`；serde 直接读写字符串，只经解析器构造 | — |
+| `uta-proc` | OS | 进程身份 `OsProcessId{pid, start_time}`（`start_time` 是 OS 给出的精确启动标记，只做相等比较）与退出证明 `ExitConfirmed`：只有 OS 明确回答"该进程已不存在"时才铸造，查询失败不算退出 | — |
 | `uta-rpc` | 传输 | 对称 JSON-RPC 2.0 peer：长度前缀分帧，每个调用恰好完成一次 | — |
 | `uta-channel` | 传输 | 核心创建的会话通道与凭据句柄，只交给被拉起的子进程；子进程一侧用 `take_inherited` 取回 | — |
 | `uta-store` | 存储 | 单写者 SQLite：格式版本与迁移、实例表、进程表、两侧 Journal 的存储原语（观察流 `StreamId`/epoch/`Seq` 的分配、按边界与按位置删除；执行事实流只 append）、`Store::transact` / `Committed` | `uta-base`、`uta-proc` |
@@ -65,17 +65,17 @@ flowchart TB
 ## 4 所有权规则
 
 1. **标识定义在铸造它的 crate，构造器私有。**
-   - `InstanceId` 只由 `uta-store` 的 fence 事务（`Instances::begin`）铸造。
+   - `InstanceId` 只由 `uta-store` 的 fence 事务（`Store::begin_instance`）铸造。
    - `ExitConfirmed` 只由 `uta-proc` 在 OS 确认之后铸造。
    - 将来的 `SessionEpoch` 只由 `uta-session` 在创建通道时铸造。`StreamId`（其中的 epoch）与 `Seq` 只由 `uta-store` 在事务里分配（`Observations::open_epoch`、`append`）；`Seq` 按流单调，用每流计数器分配，删除记录后也不会复用。执行事实流的身份 `ExecStream`（控制流、声明流、lane 流、请求流）是设计里已有的流的名字，不需要铸造，其上的位置同样由存储分配。
    - 集成交来的线缆输入里不存在这些字段，所以集成无从伪造。
 2. **证明是可移动、不可复制的值，由它授权的操作消费。**
-   - `CurrentInstance` 只被 `Instances::end` 消费，所以一个实例至多结束一次，且只能结束自己。
+   - `CurrentInstance` 只由 `Store::begin_instance` 在 fence 事务提交之后交出，只被 `Store::end_instance` 消费；结束锚点的 UPDATE 必须恰好改动本实例那一行，否则报 `EndError::NotOpen`。所以一个实例至多结束一次，且只能结束自己。fence 与结束锚点不经 `transact` 的闭包：闭包出错时 `TxError::Aborted(E)` 会把 `E` 带出事务，在已回滚的事务里铸造的证明因此可能流出去。同理，事务里分配的位置不能经 `Aborted` 带出，它们指向的行已被回滚。
    - `ExitConfirmed` 只被 `Processes::clear` 消费，所以进程表的行只能凭 OS 确认清除。
    - `Responder` 在 `respond` 时消费；被丢弃时自动回错误，因此每个请求恰好得到一个回复。
    - 将来的 `SendBarrier`（§6.5、§7.7）同理：私有构造器，在 durable append 提交之后才产生，由 `submit` / `cancel` 消费。
 3. **内存状态只从已提交的值推进。** `Store::transact` 只在 `COMMIT` 返回之后交出 `Committed<T>`；闭包失败时整个事务回滚，调用方拿不到 `Committed`。核心线程上的 fold、索引等内存副本只根据 `Committed` 更新，所以不存在"内存领先于磁盘"的状态。`RuleState` 这类由记录 fold 出来的值不单独存储（§6.3、§7.4），每次都从记录求出。
-4. **事务不外泄。** `Tx<'c>` 借用连接，只存在于 `transact` 的闭包里。表视图（`Instances`、`Processes`、`Observations`、`Executions`）只暴露设计允许的操作：`Executions` 只有 `append`（§3.1、§7.4），这一点由视图类型保证，不靠 SQL 权限；`Observations` 另有两个压缩原语（按保留边界删、按位置删），但删哪些记录由观察 `Journal` 元素按流的规则决定（§2.4）。记录体是带 `RecordKind` 标签的不透明字节，存储不解析。存储不提供执行任意 SQL 的入口。
+4. **事务不外泄。** `Tx<'c>` 借用连接，只存在于 `transact` 的闭包里。表视图（`Processes`、`Observations`、`Executions`）只暴露设计允许的操作：`Executions` 只有 `append`（§3.1、§7.4），这一点由视图类型保证，不靠 SQL 权限；`Observations` 另有两个压缩原语（按保留边界删、按位置删），但删哪些记录由观察 `Journal` 元素按流的规则决定（§2.4）。epoch 的上限是 u32，`Seq` 计数器用尽时分配失败，不会溢出成别的类型。记录体是带 `RecordKind` 标签的不透明字节，存储不解析。存储不提供执行任意 SQL 的入口，所有语句都是固定文本。
 5. **I/O 对象由单个任务独占，共享只靠消息。**
    - 一条通道由一个 peer 任务持有，同一个任务还持有该通道的在途调用表；其他任务只拿到 `PeerHandle`（mpsc 发送端）。
    - 不用 `Arc<Mutex<_>>` 包裹 I/O 或生命周期状态。
@@ -87,11 +87,11 @@ flowchart TB
 
 | 状态 | 所有者（线程/任务） | 开始 | 结束 | 持久化 | 边界上的表示 |
 |---|---|---|---|---|---|
-| 实例 OS 锁 | 主线程，`InstanceLock` | `fence::acquire` 成功 | 核心线程被 join 之后 `release`；崩溃时由 OS 随进程释放 | 锁文件 `data/uta/uta.lock`（内容为空） | 不可继承的文件句柄 |
-| SQLite 连接 | 核心线程，`Store` | 核心线程里 `Store::open` | 同一线程里 `Store::close` | `data/uta/uta.db`（WAL） | 不跨线程 |
-| 当前实例 | 核心线程，`CurrentInstance` | fence 事务提交 | `Instances::end` 提交（结束锚点） | 实例表的一行 | 对外只给 `InstanceId`（`Copy`） |
-| 格式版本 | 存储 | 首次打开或迁移事务 | 只前进 | `schema_meta` | 版本更新的文件拒绝打开（退出码 11） |
-| 进程表的行 | 核心线程 | 拉起之后 `Processes::register` | `Processes::clear(ExitConfirmed)` | `processes` 表 | `OsProcessId` 是索引，本身不授予任何权利 |
+| 实例 OS 锁 | 主线程，`InstanceLock` | `fence::acquire` 成功 | 核心线程被 join 之后 `release`；崩溃时由 OS 随进程释放 | 锁文件 `<root>/data/uta/uta.lock`（内容为空）；`<root>` 与 Alice 同法求出：设了 `OPENALICE_HOME`（空串也算）就用它，否则 `~/.openalice`，再按 Node `path.resolve` 对工作目录做词法归一 | 不可继承的文件句柄 |
+| SQLite 连接 | 核心线程，`Store` | 核心线程里 `Store::open` | 同一线程里 `Store::close` | `<root>/data/uta/uta.db`（WAL） | 不跨线程 |
+| 当前实例 | 核心线程，`CurrentInstance` | `Store::begin_instance` 提交 | `Store::end_instance` 提交（结束锚点） | 实例表的一行；时间取核心时钟，时钟不可表示时报错，不代入任何值 | 对外只给 `InstanceId`（`Copy`） |
+| 格式版本 | 存储 | 首次打开或迁移事务 | 只前进 | `schema_meta` | 版本更新或不可读（缺行、非整数、超出 u32）的文件拒绝打开（退出码 11） |
+| 进程表的行 | 核心线程 | 拉起之后 `Processes::register` | `Processes::clear(ExitConfirmed)`；启动时读不出或清不掉，本实例不进入就绪，走受控停止并以 1 退出 | `processes` 表 | `OsProcessId` 是索引，本身不授予任何权利 |
 | 子进程句柄 | 拉起它的任务，`ChildProcess` | `uta_channel::spawn` | `wait` 消费句柄，之后 `uta_proc::confirm_exit` 得到 `ExitConfirmed` | 不持久化 | 不可 Clone |
 | 会话通道（核心端） | 持有它的 peer 任务 | `spawn` 创建 | peer 结束或句柄被丢弃时关闭；关闭后读不到该化身的任何消息（§7.1） | 不持久化 | `SessionChannel`：`AsyncRead + AsyncWrite` |
 | 凭据副本 | 核心：`spawn` 执行期间（写入后清零）；子进程：直到进程退出 | 写入继承句柄 | 核心关闭写端；子进程读到 EOF 后关闭读端 | 从不持久化 | `Credential`（zeroize）；不出现在 env 或参数里 |
@@ -135,7 +135,7 @@ flowchart TB
 ## 8 存储
 
 - 单个 SQLite 文件，WAL 模式，`synchronous=FULL`：`COMMIT` 返回时 WAL 已经同步到磁盘。§6.5 要求 `SendBarrier` 先 durable 再发送，这一点由此成立。
-- 一个命令对应一个 `BEGIN IMMEDIATE` 事务。把多个命令合进一次提交（group commit）只作为 §10.5 #19 实测之后的优化，而且不能拆散设计里要求同事务的记录集合。
+- 写命令对应一个 `BEGIN IMMEDIATE` 事务，读命令是一条语句。把多个命令合进一次提交（group commit）只作为 §10.5 #19 实测之后的优化，而且不能拆散设计里要求同事务的记录集合。
 - 格式版本记在 `schema_meta`。`MIGRATIONS[n]` 把 n 迁到 n+1，所有待执行的迁移在同一个事务里完成，所以文件只可能是旧版本或新版本（§10.5 格式升级）。遇到版本更高的文件，拒绝打开。
 - SQLite 的访问只由构造保证：只有核心线程持有读写连接。没有使用 `locking_mode=EXCLUSIVE`：进程间的互斥已经由 OS 锁保证，而 EXCLUSIVE 会挡住后续投递要用的进程内只读连接。只读连接只能看到已提交的数据。
 
@@ -144,9 +144,9 @@ flowchart TB
 | 码 | 含义 | 设计依据 |
 |---|---|---|
 | 0 | 受控停止完成：结束锚点已写，锁已释放 | §7.2 受控停止 |
-| 1 | 没有专用码的失败（状态目录 I/O、SQLite 错误），原因写在 stderr | — |
+| 1 | 没有专用码的失败，原因写在 stderr。包括：状态目录 I/O、SQLite 错误；启动时孤儿回收失败（进程表读不出或清不掉，此时已走受控停止、写了结束锚点）；结束锚点已写但关闭 SQLite 失败 | — |
 | 10 | 第 1 步：该状态根已有实例持有 fence | §7.1、§7.2 第 1 步 |
-| 11 | 第 2 步：文件格式比本构建新，或迁移失败 | §7.2 第 2 步、C14 |
+| 11 | 第 2 步：文件格式比本构建新、格式版本不可读，或迁移失败 | §7.2 第 2 步、C14 |
 | 14 | 受控停止没能完成：没有写结束锚点 | §7.2 "停止在两种情形下失败" |
 
 第 2 步"重建失败"和第 3 步"读取统一路径配置失败"的专用码，随各自的切片加入。
@@ -158,7 +158,7 @@ flowchart TB
 | 异步运行时 | tokio（多线程） | 信号、进程、通道 I/O；CPU 重的计算不放在 worker 线程上 |
 | 存储 | rusqlite（`bundled`） | 同步事务，直接对应"事务即函数"（§7.7）；只在核心线程上使用 |
 | 单实例锁 | std `File::try_lock`（Rust 1.89 起） | Unix 用 `flock`，Windows 用 `LockFileEx`；锁随句柄释放 |
-| 进程身份 | sysinfo | 跨平台读取 `(pid, start_time)` 并终止进程 |
+| 进程身份 | 各平台 OS 接口（Linux `/proc/<pid>/stat` 的 starttime，macOS `proc_pidinfo`，Windows `GetProcessTimes` 与 `WaitForSingleObject`） | 启动标记精确到 OS 能给出的粒度，pid 复用不会被当成同一进程；存活判断分"存活 / 已不存在 / 查不到"三种，只有"已不存在"才铸造退出证明 |
 | 分帧 | tokio-util `LengthDelimitedCodec` | 直接产出 `BytesMut`，可以零拷贝切片 |
 | JSON-RPC | 自写对称 peer（`uta-rpc`） | jsonrpsee 的服务端只支持 HTTP/WS，自定义传输只有客户端可用，且是非对称的；会话语义要求同一连接双向调用、恰好完成一次 |
 | 集成出站 HTTP / WS（写集成时） | reqwest、tokio-tungstenite | reqwest 默认会重试协议层 NACK，写路径必须设 `retry::never()` 并关闭重定向（`design/integration/design.md` 2.1 "每次写至多一次上游写"） |

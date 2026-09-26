@@ -155,6 +155,7 @@ impl Observations<'_> {
             params![kind, id, name.as_str()],
             |r| r.get(0),
         )?;
+        let epoch = Epoch(to_u32(next)?);
         self.tx.execute(
             "INSERT INTO obs_streams (source_kind, source_id, name, epoch, next_seq) \
              VALUES (?1, ?2, ?3, ?4, 1)",
@@ -163,7 +164,7 @@ impl Observations<'_> {
         Ok(StreamId {
             source: source.clone(),
             name: name.clone(),
-            epoch: Epoch(to_u32(next)?),
+            epoch,
         })
     }
 
@@ -199,7 +200,7 @@ impl Observations<'_> {
         body: &[u8],
     ) -> Result<LogPosition, rusqlite::Error> {
         let key = obs_stream_key(self.tx, stream)?;
-        let seq = take_seq(self.tx, "obs_streams", key)?;
+        let seq = take_seq(self.tx, Side::Observation, key)?;
         self.tx.execute(
             "INSERT INTO obs_records (stream_key, seq, kind, body) VALUES (?1, ?2, ?3, ?4)",
             params![key, to_i64(seq.0)?, kind.0, body],
@@ -261,7 +262,7 @@ impl Executions<'_> {
             params![skind, owner, lane],
             |r| r.get(0),
         )?;
-        let seq = take_seq(self.tx, "exec_streams", key)?;
+        let seq = take_seq(self.tx, Side::Execution, key)?;
         self.tx.execute(
             "INSERT INTO exec_records (stream_key, seq, kind, body) VALUES (?1, ?2, ?3, ?4)",
             params![key, to_i64(seq.0)?, kind.0, body],
@@ -282,7 +283,7 @@ pub(crate) fn read_observations(
     let Some(key) = obs_stream_key_opt(conn, stream)? else {
         return Ok(Vec::new());
     };
-    read_records(conn, "obs_records", key, after, limit)
+    read_records(conn, Side::Observation, key, after, limit)
 }
 
 pub(crate) fn read_executions(
@@ -300,23 +301,59 @@ pub(crate) fn read_executions(
         )
         .optional()?;
     match key {
-        Some(key) => read_records(conn, "exec_records", key, after, limit),
+        Some(key) => read_records(conn, Side::Execution, key, after, limit),
         None => Ok(Vec::new()),
+    }
+}
+
+/// Which journal a record table belongs to; selects fixed SQL text, so no
+/// statement is assembled at runtime.
+#[derive(Debug, Clone, Copy)]
+enum Side {
+    Observation,
+    Execution,
+}
+
+impl Side {
+    fn read_sql(self) -> &'static str {
+        match self {
+            Side::Observation => {
+                "SELECT seq, kind, body FROM obs_records \
+                 WHERE stream_key = ?1 AND seq > ?2 ORDER BY seq LIMIT ?3"
+            }
+            Side::Execution => {
+                "SELECT seq, kind, body FROM exec_records \
+                 WHERE stream_key = ?1 AND seq > ?2 ORDER BY seq LIMIT ?3"
+            }
+        }
+    }
+
+    /// Takes the counter's current value and advances it, unless it would
+    /// leave the INTEGER range (SQLite would silently turn it into a REAL).
+    fn take_seq_sql(self) -> &'static str {
+        match self {
+            Side::Observation => {
+                "UPDATE obs_streams SET next_seq = next_seq + 1 \
+                 WHERE stream_key = ?1 AND next_seq < 9223372036854775807 RETURNING next_seq - 1"
+            }
+            Side::Execution => {
+                "UPDATE exec_streams SET next_seq = next_seq + 1 \
+                 WHERE stream_key = ?1 AND next_seq < 9223372036854775807 RETURNING next_seq - 1"
+            }
+        }
     }
 }
 
 fn read_records(
     conn: &rusqlite::Connection,
-    table: &str,
+    side: Side,
     key: i64,
     after: Option<Seq>,
     limit: usize,
 ) -> Result<Vec<StoredRecord>, ReadError> {
     let after = to_i64(after.map_or(0, |s| s.0))?;
     let limit = i64::try_from(limit).unwrap_or(i64::MAX);
-    let mut stmt = conn.prepare(&format!(
-        "SELECT seq, kind, body FROM {table} WHERE stream_key = ?1 AND seq > ?2 ORDER BY seq LIMIT ?3"
-    ))?;
+    let mut stmt = conn.prepare_cached(side.read_sql())?;
     let rows = stmt.query_map(params![key, after, limit], |r| {
         Ok((
             r.get::<_, i64>(0)?,
@@ -336,13 +373,14 @@ fn read_records(
 }
 
 /// Allocates the stream's next `Seq` (per-stream counter, so deleting records
-/// never lets a sequence number be reused).
-fn take_seq(tx: &rusqlite::Transaction<'_>, table: &str, key: i64) -> Result<Seq, rusqlite::Error> {
-    let seq: i64 = tx.query_row(
-        &format!("UPDATE {table} SET next_seq = next_seq + 1 WHERE stream_key = ?1 RETURNING next_seq - 1"),
-        params![key],
-        |r| r.get(0),
-    )?;
+/// never lets a sequence number be reused). The stream row must exist; when
+/// its counter is exhausted nothing is updated and allocation fails.
+fn take_seq(tx: &rusqlite::Transaction<'_>, side: Side, key: i64) -> Result<Seq, rusqlite::Error> {
+    let seq: Option<i64> = tx
+        .prepare_cached(side.take_seq_sql())?
+        .query_row(params![key], |r| r.get(0))
+        .optional()?;
+    let seq = seq.ok_or(rusqlite::Error::IntegralValueOutOfRange(0, i64::MAX))?;
     Ok(Seq(u64::try_from(seq).map_err(|_| {
         rusqlite::Error::IntegralValueOutOfRange(0, seq)
     })?))

@@ -9,20 +9,16 @@
 use std::io;
 use std::time::Duration;
 
-use sysinfo::{Pid, Process, ProcessRefreshKind, ProcessStatus, ProcessesToUpdate, System};
-
-#[cfg(unix)]
-use sysinfo::Signal;
-
-/// Identity of one OS process: the pid together with the OS-reported start
-/// time, so that a reused pid is not mistaken for the same process.
+/// Identity of one OS process: the pid together with an opaque, platform-precise
+/// OS start token. Persist the token unchanged and compare it only for equality;
+/// its units differ between Linux, macOS and Windows.
 ///
 /// This is an index, not a capability: constructing one from stored numbers
 /// grants nothing. Proof of exit is [`ExitConfirmed`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OsProcessId {
     pid: u32,
-    /// Start time as reported by the OS, in seconds since the Unix epoch.
+    /// Opaque OS start token; not a Unix timestamp.
     start_time: u64,
 }
 
@@ -60,86 +56,206 @@ impl ExitConfirmed {
 
 const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
-fn refreshed_process(pid: u32) -> (System, Pid) {
-    let pid = Pid::from_u32(pid);
-    let mut system = System::new();
-    system.refresh_processes_specifics(
-        ProcessesToUpdate::Some(std::slice::from_ref(&pid)),
-        true,
-        ProcessRefreshKind::nothing(),
-    );
-    (system, pid)
+/// An OS query that could not establish liveness must never prove an exit.
+#[derive(Debug)]
+enum Liveness {
+    Alive,
+    Gone,
+    Unknown(io::Error),
 }
 
-fn process_is_live(process: &Process) -> bool {
-    // A zombie still has a process-table entry, but has already exited and
-    // cannot receive a signal. Treat it as exited while its parent reaps it.
-    process.status() != ProcessStatus::Zombie && still_active(process.pid().as_u32())
+fn token_liveness(id: OsProcessId, token: io::Result<Option<u64>>) -> Liveness {
+    match token {
+        Ok(Some(token)) if token == id.start_time => Liveness::Alive,
+        Ok(_) => Liveness::Gone,
+        Err(error) => Liveness::Unknown(error),
+    }
 }
 
-/// Windows keeps an exited process in the process list while any handle to
-/// it is open (the counterpart of a Unix zombie). The exit code tells whether
-/// the OS considers it running.
-#[cfg(windows)]
-fn still_active(pid: u32) -> bool {
-    use windows_sys::Win32::Foundation::STILL_ACTIVE;
-    use windows_sys::Win32::System::Threading::{
-        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+fn liveness(id: OsProcessId) -> Liveness {
+    token_liveness(id, live_start_token(id.pid))
+}
+
+/// Reads a single /proc stat record. `comm` can contain both whitespace and ')',
+/// so fields must be counted only after its final closing parenthesis.
+#[cfg(target_os = "linux")]
+fn parse_linux_stat(stat: &str) -> io::Result<Option<u64>> {
+    let malformed = || io::Error::new(io::ErrorKind::InvalidData, "malformed /proc stat");
+    let (_, fields) = stat.rsplit_once(')').ok_or_else(malformed)?;
+    let mut fields = fields.split_whitespace();
+    let state = fields.next().ok_or_else(malformed)?;
+    let token = fields.nth(18).ok_or_else(malformed)?; // field 22, after state (field 3)
+    let start_time = token.parse::<u64>().map_err(|_| malformed())?;
+    match state {
+        "Z" | "X" | "x" => Ok(None),
+        "R" | "S" | "D" | "T" | "t" | "W" | "I" | "P" => Ok(Some(start_time)),
+        _ => Err(malformed()),
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn live_start_token(pid: u32) -> io::Result<Option<u64>> {
+    let stat = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(stat) => stat,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
     };
-    // SAFETY: OpenProcess takes only scalar arguments and returns an owned handle.
-    let raw = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    parse_linux_stat(&stat)
+}
+
+#[cfg(target_os = "macos")]
+fn live_start_token(pid: u32) -> io::Result<Option<u64>> {
+    use std::mem::{MaybeUninit, size_of};
+
+    let pid = i32::try_from(pid).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "pid is outside the OS pid range",
+        )
+    })?;
+    let mut info = MaybeUninit::<libc::proc_bsdinfo>::uninit();
+    // SAFETY: proc_pidinfo writes at most the supplied size to our local buffer.
+    // Reset errno so a zero-byte return cannot inherit a previous ESRCH.
+    let count = unsafe {
+        *libc::__error() = 0;
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            size_of::<libc::proc_bsdinfo>() as libc::c_int,
+        )
+    };
+    if count != size_of::<libc::proc_bsdinfo>() as libc::c_int {
+        let error = io::Error::last_os_error();
+        return if error.raw_os_error() == Some(libc::ESRCH) {
+            Ok(None)
+        } else if count > 0 {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "short proc_pidinfo result",
+            ))
+        } else {
+            Err(error)
+        };
+    }
+    // SAFETY: the OS filled the complete proc_bsdinfo structure.
+    let info = unsafe { info.assume_init() };
+    if info.pbi_pid != pid as u32 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "proc_pidinfo returned a different pid",
+        ));
+    }
+    if info.pbi_status == libc::SZOMB {
+        return Ok(None);
+    }
+    let start_time = info
+        .pbi_start_tvsec
+        .checked_mul(1_000_000)
+        .and_then(|time| time.checked_add(info.pbi_start_tvusec))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "process start time overflow"))?;
+    Ok(Some(start_time))
+}
+
+#[cfg(windows)]
+fn open_process(pid: u32, access: u32) -> io::Result<Option<ProcessHandle>> {
+    use windows_sys::Win32::Foundation::ERROR_INVALID_PARAMETER;
+    use windows_sys::Win32::System::Threading::OpenProcess;
+
+    // SAFETY: OpenProcess accepts scalar parameters and returns an owned handle.
+    let raw = unsafe { OpenProcess(access, 0, pid) };
     if raw.is_null() {
-        // Cannot query: keep the process list's answer.
-        return true;
+        let error = io::Error::last_os_error();
+        return if error.raw_os_error() == Some(ERROR_INVALID_PARAMETER as i32) {
+            Ok(None)
+        } else {
+            Err(error)
+        };
     }
-    let handle = ProcessHandle(raw);
-    let mut code = 0u32;
-    // SAFETY: `handle` is a valid process handle owned for this call.
-    if unsafe { GetExitCodeProcess(handle.0, &mut code) } == 0 {
-        return true;
+    Ok(Some(ProcessHandle(raw)))
+}
+
+#[cfg(windows)]
+fn handle_start_token(handle: &ProcessHandle) -> io::Result<Option<u64>> {
+    use windows_sys::Win32::Foundation::{FILETIME, WAIT_OBJECT_0, WAIT_TIMEOUT};
+    use windows_sys::Win32::System::Threading::{GetProcessTimes, WaitForSingleObject};
+
+    let mut creation = FILETIME::default();
+    let mut exit = FILETIME::default();
+    let mut kernel = FILETIME::default();
+    let mut user = FILETIME::default();
+    // SAFETY: This owned handle is open; each output points to a valid FILETIME.
+    if unsafe { GetProcessTimes(handle.0, &mut creation, &mut exit, &mut kernel, &mut user) } == 0 {
+        return Err(io::Error::last_os_error());
     }
-    code == STILL_ACTIVE as u32
+    // SAFETY: This owned handle has PROCESS_SYNCHRONIZE access.
+    match unsafe { WaitForSingleObject(handle.0, 0) } {
+        WAIT_OBJECT_0 => Ok(None),
+        WAIT_TIMEOUT => Ok(Some(
+            (u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime),
+        )),
+        _ => Err(io::Error::last_os_error()),
+    }
 }
 
-#[cfg(not(windows))]
-fn still_active(_pid: u32) -> bool {
-    true
+#[cfg(windows)]
+fn live_start_token(pid: u32) -> io::Result<Option<u64>> {
+    use windows_sys::Win32::System::Threading::{
+        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+    };
+    let Some(handle) = open_process(pid, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE)?
+    else {
+        return Ok(None);
+    };
+    handle_start_token(&handle)
 }
 
-fn matching_process(system: &System, id: OsProcessId) -> Option<&Process> {
-    system
-        .process(Pid::from_u32(id.pid))
-        .filter(|process| process.start_time() == id.start_time && process_is_live(process))
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+fn live_start_token(_pid: u32) -> io::Result<Option<u64>> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "process inspection is unsupported on this platform",
+    ))
 }
 
-/// Returns the identity of a live process as reported by the OS.
+/// Returns the identity of a live process as reported by the OS. A failed
+/// query cannot provide an identity; it must not be interpreted as an exit.
 pub fn observe(pid: u32) -> Option<OsProcessId> {
-    let (system, process_pid) = refreshed_process(pid);
-    let process = system.process(process_pid)?;
-    process_is_live(process).then_some(OsProcessId::from_row(pid, process.start_time()))
+    live_start_token(pid)
+        .ok()
+        .flatten()
+        .map(|token| OsProcessId::from_row(pid, token))
 }
 
-/// Returns whether the OS currently reports the same live `(pid, start_time)`.
+/// Returns false only if the OS confirmed this indexed identity is gone.
 pub fn is_running(id: OsProcessId) -> bool {
-    let (system, _) = refreshed_process(id.pid);
-    matching_process(&system, id).is_some()
+    !matches!(liveness(id), Liveness::Gone)
 }
 
 #[cfg(unix)]
-fn signal_if_running(id: OsProcessId, signal: Signal) -> io::Result<()> {
-    let (system, _) = refreshed_process(id.pid);
-    let Some(process) = matching_process(&system, id) else {
-        return Ok(());
-    };
-
-    match process.kill_with(signal) {
-        Some(true) => Ok(()),
-        Some(false) => Err(io::Error::last_os_error()),
-        None => Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "the requested process signal is unsupported",
-        )),
+fn signal_if_running(id: OsProcessId, signal: libc::c_int) -> io::Result<()> {
+    match liveness(id) {
+        Liveness::Gone => return Ok(()),
+        Liveness::Unknown(error) => return Err(error),
+        Liveness::Alive => {}
     }
+    let pid = libc::pid_t::try_from(id.pid).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "pid is outside the OS pid range",
+        )
+    })?;
+    // Unix kill is addressed by PID; a PID reuse between the probe and this
+    // syscall cannot be ruled out without a handle-based OS signaling API.
+    // SAFETY: Only the matching, currently live positive PID is signaled.
+    if unsafe { libc::kill(pid, signal) } == -1 {
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() != Some(libc::ESRCH) {
+            return Err(error);
+        }
+    }
+    Ok(())
 }
 
 /// Requests graceful exit from the identified process.
@@ -150,7 +266,7 @@ fn signal_if_running(id: OsProcessId, signal: Signal) -> io::Result<()> {
 /// channel.
 #[cfg(unix)]
 pub fn request_exit(id: OsProcessId) -> io::Result<()> {
-    signal_if_running(id, Signal::Term)
+    signal_if_running(id, libc::SIGTERM)
 }
 
 /// On Windows, arbitrary processes have no graceful termination signal. The
@@ -171,7 +287,7 @@ pub fn request_exit(_id: OsProcessId) -> io::Result<()> {
 /// Immediately terminates the identified process if it is still running.
 #[cfg(unix)]
 pub fn terminate(id: OsProcessId) -> io::Result<()> {
-    signal_if_running(id, Signal::Kill)
+    signal_if_running(id, libc::SIGKILL)
 }
 
 /// Immediately terminates the identified process if it is still running.
@@ -190,64 +306,25 @@ pub fn terminate(_id: OsProcessId) -> io::Result<()> {
 
 #[cfg(windows)]
 fn terminate_windows(id: OsProcessId) -> io::Result<()> {
-    use windows_sys::Win32::Foundation::FILETIME;
     use windows_sys::Win32::System::Threading::{
-        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE,
-        TerminateProcess,
+        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, TerminateProcess,
     };
 
-    if !is_running(id) {
-        return Ok(());
-    }
-
-    // Open a handle and validate its creation time before terminating it. This
-    // prevents a reused PID from turning a stale identity into a kill request.
-    // SAFETY: OpenProcess takes only scalar arguments and returns an owned handle.
-    let raw_handle = unsafe {
-        OpenProcess(
-            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE,
-            0,
-            id.pid,
-        )
-    };
-
-    if raw_handle.is_null() {
-        return Err(io::Error::last_os_error());
-    }
-    let handle = ProcessHandle(raw_handle);
-
-    let mut creation_time = FILETIME::default();
-    let mut exit_time = FILETIME::default();
-    let mut kernel_time = FILETIME::default();
-    let mut user_time = FILETIME::default();
-    // SAFETY: The handle is open, and each output pointer refers to a local FILETIME.
-    if unsafe {
-        GetProcessTimes(
-            handle.0,
-            &mut creation_time,
-            &mut exit_time,
-            &mut kernel_time,
-            &mut user_time,
-        )
-    } == 0
-    {
-        return Err(io::Error::last_os_error());
-    }
-
-    const WINDOWS_EPOCH_TICKS: u64 = 116_444_736_000_000_000;
-    let creation_ticks =
-        (u64::from(creation_time.dwHighDateTime) << 32) | u64::from(creation_time.dwLowDateTime);
-    let Some(start_time) = creation_ticks
-        .checked_sub(WINDOWS_EPOCH_TICKS)
-        .map(|ticks| ticks / 10_000_000)
+    // Keep this handle from identity validation through termination: a PID may
+    // be reused between two separate OpenProcess calls.
+    let Some(handle) = open_process(
+        id.pid,
+        PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE | PROCESS_TERMINATE,
+    )?
     else {
         return Ok(());
     };
-    if start_time != id.start_time {
-        return Ok(());
+    match token_liveness(id, handle_start_token(&handle)) {
+        Liveness::Alive => {}
+        Liveness::Gone => return Ok(()),
+        Liveness::Unknown(error) => return Err(error),
     }
-
-    // SAFETY: The validated process handle is open with PROCESS_TERMINATE access.
+    // SAFETY: The open handle is the matching process and has PROCESS_TERMINATE access.
     if unsafe { TerminateProcess(handle.0, 1) } == 0 {
         return Err(io::Error::last_os_error());
     }
@@ -265,14 +342,16 @@ impl Drop for ProcessHandle {
     }
 }
 
-/// Waits until the OS no longer reports this process as running.
+/// Waits until the OS positively reports this indexed process has exited.
 ///
-/// The OS is the confirmer, so this has no overall timeout.
+/// Unknown OS query outcomes keep polling; there is no overall timeout.
 pub async fn confirm_exit(id: OsProcessId) -> ExitConfirmed {
-    while is_running(id) {
+    loop {
+        if matches!(liveness(id), Liveness::Gone) {
+            return ExitConfirmed { id };
+        }
         tokio::time::sleep(EXIT_POLL_INTERVAL).await;
     }
-    ExitConfirmed { id }
 }
 
 /// Requests graceful exit, waits up to `grace`, then forcibly terminates and
@@ -337,6 +416,7 @@ mod tests {
         let mut child = RunningChild::spawn();
         let id = observe(child.0.id()).expect("observe spawned process");
         assert_eq!(id.pid(), child.0.id());
+        assert_eq!(observe(child.0.id()), Some(id));
         assert!(is_running(id));
 
         child.0.kill().expect("kill spawned process");
@@ -354,6 +434,7 @@ mod tests {
         request_exit(stale_id).expect("request exit for stale identity");
         terminate(stale_id).expect("terminate stale identity");
         assert!(is_running(id));
+        assert_eq!(observe(child.0.id()), Some(id));
     }
 
     #[test]
@@ -370,6 +451,25 @@ mod tests {
     }
 
     #[test]
+    fn confirmation_waits_for_actual_exit() {
+        let mut child = RunningChild::spawn();
+        let id = observe(child.0.id()).expect("observe spawned process");
+        let runtime = runtime();
+        assert!(
+            runtime
+                .block_on(async {
+                    tokio::time::timeout(Duration::from_millis(100), confirm_exit(id)).await
+                })
+                .is_err(),
+            "live process cannot have exit confirmation"
+        );
+        assert!(is_running(id));
+        child.0.kill().expect("kill spawned process");
+        child.0.wait().expect("reap spawned process");
+        assert_eq!(runtime.block_on(confirm_exit(id)).id(), id);
+    }
+
+    #[test]
     fn terminate_ends_matching_process() {
         let mut child = RunningChild::spawn();
         let id = observe(child.0.id()).expect("observe spawned process");
@@ -377,5 +477,34 @@ mod tests {
         terminate(id).expect("terminate spawned process");
         child.0.wait().expect("reap terminated process");
         assert!(!is_running(id));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_stat_parses_start_tick_after_complex_process_name() {
+        let stat = format!("123 (name with ) spaces) S {} 987654 0", "0 ".repeat(18));
+        assert_eq!(parse_linux_stat(&stat).expect("parse stat"), Some(987654));
+        let zombie = stat.replacen(") S ", ") Z ", 1);
+        assert_eq!(parse_linux_stat(&zombie).expect("parse zombie stat"), None);
+        assert!(parse_linux_stat("123 (truncated) S 0").is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn process_exited_with_code_259_is_gone() {
+        // The command waits long enough to observe it before exiting. The
+        // Child retains a process handle even after wait, exposing the old
+        // GetExitCodeProcess/STILL_ACTIVE ambiguity.
+        let mut child = Command::new("cmd")
+            .args(["/C", "ping -n 3 127.0.0.1 >NUL & exit /B 259"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn cmd");
+        let id = observe(child.id()).expect("observe running cmd");
+        assert!(is_running(id));
+        assert_eq!(child.wait().expect("wait cmd").code(), Some(259));
+        assert!(!is_running(id));
+        assert_eq!(runtime().block_on(confirm_exit(id)).id(), id);
     }
 }

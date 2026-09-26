@@ -39,6 +39,8 @@ pub use schema::FORMAT_VERSION;
 pub enum OpenError {
     #[error("database file is format version {found}, newer than the supported {supported}")]
     FormatTooNew { found: u32, supported: u32 },
+    #[error("database file's format version is unreadable: {0}")]
+    FormatUnreadable(String),
     #[error("migrating the database from format version {from} to {to} failed: {source}")]
     Migration {
         from: u32,
@@ -52,6 +54,11 @@ pub enum OpenError {
 }
 
 /// A write that did not commit. Nothing it did is visible afterwards.
+///
+/// Values minted inside the transaction (positions, epochs) must not be
+/// carried out through `Aborted`: they name rows that were rolled back.
+/// Proofs (`CurrentInstance`) are never minted inside a caller's closure; see
+/// [`Store::begin_instance`].
 #[derive(Debug, thiserror::Error)]
 pub enum TxError<E> {
     /// The closure returned an error; the transaction was rolled back.
@@ -59,6 +66,26 @@ pub enum TxError<E> {
     Aborted(E),
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
+}
+
+/// The end anchor could not be written.
+#[derive(Debug, thiserror::Error)]
+pub enum EndError {
+    #[error(transparent)]
+    Sqlite(#[from] rusqlite::Error),
+    /// The instance row is missing or already has an end anchor; nothing was
+    /// written.
+    #[error("instance {0} has no open row to end")]
+    NotOpen(InstanceId),
+}
+
+/// The core's clock cannot be represented as milliseconds since the epoch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum ClockError {
+    #[error("the system clock is before the Unix epoch")]
+    BeforeEpoch,
+    #[error("the system clock is beyond the representable range")]
+    OutOfRange,
 }
 
 /// A row read back from the store did not decode into its domain type.
@@ -96,11 +123,15 @@ impl<T> Committed<T> {
 pub struct UnixMillis(i64);
 
 impl UnixMillis {
-    pub fn now() -> Self {
-        let millis = SystemTime::now()
+    /// Reads the core's clock. An unrepresentable clock is an error, never a
+    /// substituted value: timestamps are written into anchors.
+    pub fn now() -> Result<Self, ClockError> {
+        let since = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
-        Self(millis)
+            .map_err(|_| ClockError::BeforeEpoch)?;
+        i64::try_from(since.as_millis())
+            .map(Self)
+            .map_err(|_| ClockError::OutOfRange)
     }
 
     pub fn get(self) -> i64 {
@@ -109,7 +140,7 @@ impl UnixMillis {
 }
 
 /// A core instance id (design §7.2 step 1): monotonically increasing, minted
-/// only by [`Instances::begin`] inside the fence transaction.
+/// only by [`Store::begin_instance`] in the fence transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InstanceId(u64);
 
@@ -127,8 +158,9 @@ impl std::fmt::Display for InstanceId {
 
 /// The running instance's authority to write its own end anchor.
 ///
-/// Minted once per process by the fence transaction and consumed by
-/// [`Instances::end`], so an instance ends at most once and only itself.
+/// Minted once per process by [`Store::begin_instance`] after the fence
+/// transaction committed, and consumed by [`Store::end_instance`], so an
+/// instance ends at most once and only itself.
 #[derive(Debug)]
 #[must_use = "the current instance must eventually be ended by a controlled stop"]
 pub struct CurrentInstance {
@@ -209,9 +241,61 @@ impl Store {
         Ok(Committed(value))
     }
 
-    /// The format version recorded in the file.
-    pub fn format_version(&self) -> Result<u32, rusqlite::Error> {
-        schema::recorded_version(&self.conn).map(|v| v.unwrap_or(0))
+    /// The fence transaction (design §7.2 step 1): inserts the next instance
+    /// row in its own `BEGIN IMMEDIATE` transaction and returns the proof only
+    /// after `COMMIT`. Call only while the OS instance lock is held; the lock
+    /// plus this row are the fence. If a previous instance has no end anchor,
+    /// this commit is its loss-of-authority point.
+    pub fn begin_instance(
+        &mut self,
+        started_at: UnixMillis,
+    ) -> Result<CurrentInstance, rusqlite::Error> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let next: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(instance_id), 0) + 1 FROM instances",
+            [],
+            |r| r.get(0),
+        )?;
+        let id =
+            u64::try_from(next).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, next))?;
+        tx.execute(
+            "INSERT INTO instances (instance_id, started_at_ms, ended_at_ms) VALUES (?1, ?2, NULL)",
+            params![next, started_at.0],
+        )?;
+        tx.commit()?;
+        Ok(CurrentInstance { id: InstanceId(id) })
+    }
+
+    /// Controlled stop step 5: writes this instance's end anchor, the last
+    /// write of the instance, in its own transaction. Consumes the proof.
+    pub fn end_instance(
+        &mut self,
+        current: CurrentInstance,
+        at: UnixMillis,
+    ) -> Result<(), EndError> {
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = tx.execute(
+            "UPDATE instances SET ended_at_ms = ?2 WHERE instance_id = ?1 AND ended_at_ms IS NULL",
+            params![to_sql_u64(current.id.0)?, at.0],
+        )?;
+        if changed != 1 {
+            return Err(EndError::NotOpen(current.id));
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// The format version recorded in the file (0 for a file without one).
+    pub fn format_version(&self) -> Result<u32, OpenError> {
+        match schema::recorded_version(&self.conn)? {
+            schema::Recorded::Fresh => Ok(0),
+            schema::Recorded::Version(v) => Ok(v),
+            schema::Recorded::Unreadable(reason) => Err(OpenError::FormatUnreadable(reason)),
+        }
     }
 
     /// The most recent instance before `current`, if any.
@@ -279,10 +363,6 @@ pub struct Tx<'c> {
 }
 
 impl Tx<'_> {
-    pub fn instances(&mut self) -> Instances<'_> {
-        Instances { tx: &self.tx }
-    }
-
     pub fn processes(&mut self) -> Processes<'_> {
         Processes { tx: &self.tx }
     }
@@ -294,42 +374,6 @@ impl Tx<'_> {
     /// The execution-fact journal: append only (§3.1, §7.4).
     pub fn executions(&mut self) -> Executions<'_> {
         Executions { tx: &self.tx }
-    }
-}
-
-/// The instance table. Rows are inserted by the fence transaction and receive
-/// at most one end anchor, written by the instance itself.
-#[derive(Debug)]
-pub struct Instances<'t> {
-    tx: &'t rusqlite::Transaction<'t>,
-}
-
-impl Instances<'_> {
-    /// Inserts the next instance row (design §7.2 step 1). Call only while the
-    /// OS instance lock is held; the lock plus this row are the fence.
-    pub fn begin(&mut self, started_at: UnixMillis) -> Result<CurrentInstance, rusqlite::Error> {
-        let next: i64 = self.tx.query_row(
-            "SELECT COALESCE(MAX(instance_id), 0) + 1 FROM instances",
-            [],
-            |r| r.get(0),
-        )?;
-        self.tx.execute(
-            "INSERT INTO instances (instance_id, started_at_ms, ended_at_ms) VALUES (?1, ?2, NULL)",
-            params![next, started_at.0],
-        )?;
-        let id =
-            u64::try_from(next).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, next))?;
-        Ok(CurrentInstance { id: InstanceId(id) })
-    }
-
-    /// Writes the end anchor of the current instance (controlled stop step 5).
-    /// Consumes the token: an instance is ended at most once, and only by itself.
-    pub fn end(&mut self, current: CurrentInstance, at: UnixMillis) -> Result<(), rusqlite::Error> {
-        self.tx.execute(
-            "UPDATE instances SET ended_at_ms = ?2 WHERE instance_id = ?1 AND ended_at_ms IS NULL",
-            params![to_sql_u64(current.id.0)?, at.0],
-        )?;
-        Ok(())
     }
 }
 
@@ -404,13 +448,13 @@ fn process_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<ProcessRec
     let instance: i64 = row.get(0)?;
     let pid: i64 = row.get(1)?;
     let start_time: i64 = row.get(2)?;
-    let kind: String = row.get(3)?;
-    let id: String = row.get(4)?;
+    let kind = row.get_ref(3)?.as_str()?;
+    let id = row.get_ref(4)?.as_str()?;
     Ok((|| {
-        let role = match kind.as_str() {
-            ROLE_INTEGRATION => ProcessRole::Integration(IntegrationId::parse(&id)?),
-            ROLE_PROGRAM_HOST => ProcessRole::ProgramHost(ProgramId::parse(&id)?),
-            _ => return Err(ReadError::UnknownRoleKind(kind)),
+        let role = match kind {
+            ROLE_INTEGRATION => ProcessRole::Integration(IntegrationId::parse(id)?),
+            ROLE_PROGRAM_HOST => ProcessRole::ProgramHost(ProgramId::parse(id)?),
+            other => return Err(ReadError::UnknownRoleKind(other.to_owned())),
         };
         let pid = u32::try_from(pid).map_err(|_| ReadError::OutOfRange)?;
         Ok(ProcessRecord {
