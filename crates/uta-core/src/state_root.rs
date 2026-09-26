@@ -42,12 +42,11 @@ fn resolve_lexically(cwd: &Path, path: &Path) -> PathBuf {
     out
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::resolve_lexically;
     use std::path::Path;
 
-    #[cfg(unix)]
     #[test]
     fn resolves_like_node_path_resolve() {
         let cwd = Path::new("/work/dir");
