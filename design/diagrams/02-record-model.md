@@ -153,14 +153,14 @@ flowchart LR
 
 ## D2.5 记录种类总表（假想磁盘上有什么）
 
-对照：§3.1、§4.1、§4.2、§6.1、§6.2、§6.3、§6.5、§7.5、§8.1、§8.4、§8.5、§8.6。这张表是 D1.4 的"内容"侧：每种记录归哪个 `Journal`、谁 append、关键字段、引用了谁。
+对照：§3.1、§4.1、§4.2、§6.1、§6.2、§6.3、§6.5、§7.5、§7.6、§8.1、§8.4、§8.5、§8.6。这张表是 D1.4 的"内容"侧：每种记录归哪个 `Journal`、谁 append、关键字段、引用了谁。
 
 | Journal | 记录 | 写者 | 关键字段 | 位置引用（→ 谁） |
 |---|---|---|---|---|
 | 观察 | 推送观察记录 | 集成推送入口（核心盖上到达会话的 `SessionEpoch` 与 `LogPosition`） | `StreamId`、`Seq`、`session_epoch`、`received_at`、venue 序号 / 游标证据、`occurred_at?`、`attribution?`、`idempotency_key?`、契约载荷 + `payload_schema`、原始负载（写路径与可带 `attribution` 的流必带，其余按记录映射声明，§8.1）、质量标记 | — |
 | 观察 | `Gap{origin: Source, reason}` | 集成推送入口（会话内上报的断代）/ 集成会话（握手开新 epoch，含 `credential_rotated`；与该逻辑流的 `None{epoch}` 同事务）/ 持久订阅（`backfill_incomplete`）/ 控制面（程序流新 epoch，在开始不沿用旧状态之成员的 `Applied` 同事务：`load_program` 让 id 进入活动集合为 `start`，不沿用旧状态的替换为 `program_upgrade`，§8.6） | 开 epoch 的：前一 `StreamId` 与最后 `Seq`（该逻辑流的第一个 epoch 为无前驱）、`reason`；会话内由集成上报的另带集成给的 `generation`（按流、按会话，会话开始为 0，每上报一条加一并带上新值；`route` 所带的见 §8.2）。`backfill_incomplete` 是 epoch 内的记录：标出未覆盖的区间，不开也不结束 epoch，不带 `generation` | 开 epoch 的 → 前一 epoch（第一个 epoch 无）；`backfill_incomplete` 无 |
-| 观察 | 一次性读 / 回填的结果项 | 一次性读元素（发起方：读处理器 / 检查项的"先查后判" / 消费方 `read`，§7.5）/ 持久订阅元素（回填） | 与该流推送记录同形；一次性读：`provenance: OneShot{origins, request}`（`origins ⊆ {Request(pos), Ticket(id), Session(principal)}`）、`dispatch_end`、`one_shot`；回填：`backfilled`；只在调用的发出 epoch（一次性读为 `dispatch_end` 所在的流 epoch，回填为任务所在的流 epoch）仍是当前流 epoch 时 append，否则该调用完成为 `Unavailable`，只在当前 epoch 记 `Gap{Channel}`（§8.2） | 出处值（不解析）；`Request` → `EffectRequest` 位置；`dispatch_end` → 调用发出时该流已提交的流末 |
-| 观察 | 读结论记录 | 同上（集成作答或上游 `Refused` 时） | 请求身份、`origins`、本次结果项的位置与 `dispatch_end`（一次性读）或窗口与 `covered_to`（回填）、或拒绝原因；控制记录，不是载荷 | → 本次结果项 |
+| 观察 | 一次性读 / 回填的结果项 | 一次性读元素（发起方：读处理器 / 检查项的"先查后判" / 消费方 `read`，§7.5）/ 持久订阅元素（回填） | 与该流推送记录同形；一次性读：`provenance: OneShot{origins, request}`（`origins ⊆ {Request(pos), Ticket(id), Session(principal)}`）、`dispatch_end`、发出这次调用的会话的 `session_epoch`、`one_shot`；回填：`backfilled`；只在调用的发出 epoch（一次性读为 `dispatch_end` 所在的流 epoch，回填为任务所在的流 epoch）仍是当前流 epoch 时 append，否则该调用完成为 `Unavailable`，只在当前 epoch 记 `Gap{Channel}`（§8.2） | 出处值（不解析）；`Request` → `EffectRequest` 位置；`dispatch_end` → 调用发出时该流已提交的流末 |
+| 观察 | 读结论记录 | 同上（集成作答或上游 `Refused` 时） | 请求身份、`origins`、本次结果项的位置、`dispatch_end` 与发出会话的 `session_epoch`（一次性读）或窗口与 `covered_to`（回填）、或拒绝原因；控制记录，不是载荷 | → 本次结果项 |
 | 观察 | 路由结论记录 | 持久订阅元素（`route` 返回 `Routed` 时，§8.2；`route` 义务嵌在集成会话里，每条流至多一项：会话建立时为需求非空的流起，已建立期间接受会话内开 epoch 的 gap 或需求变化时起或并入，第一次 `Routed` 了结，会话结束时丢弃；所带 `generation` 见 §8.2）；集成只以 `Routed` 回答带它当前 `generation` 的调用，跨过流 epoch 更替的 `route` 由集成答 `Unavailable`，核心不另判 | 本次生效的主体全集（`All` 或主体集）、`refused` 与原因，不记增减；控制记录，不是载荷；主体的记录从加入它的这条记录之后开始；同会话、全集为 `All` 且 `refused` 为空的记录之后的推送才计入该流 epoch 的序号覆盖（§8.4） | 前一条路由结论记录（同流 epoch；增减由这两条算出） |
 | 观察 | 回执的观察记录 | IO 壳 | 该回应的观察记录：回应含订单状态时订单状态一条，加回应所含每笔可识别执行一条成交记录（带 `execution_id`）；同一回应的各条 `provenance: Receipt{AttemptRef}` 相同，`dispatch_end` 各是自己所在流的：IO 壳在发出调用时为该作用域的订单状态流与成交流各记下已提交的流末位置（§6.5）；`attribution` 按各条自己的关联证据填写，不因同在一个回应而继承：订单状态一条只在这次尝试投放了该订单时为 `FromAttempt(AttemptRef)`，撤单回执里目标订单的状态按目标订单自己的关联证据填写，不归到这次撤单；一条记录的 `dispatch_end` 所在的流 epoch（发出 epoch）不是它 append 所在的流 epoch 时照常 append，但所带 venue 序号不作来源顺序证据，按不带序号的回答处理（§8.1）；可压缩；契约载荷与原始负载永存于执行侧 `Evidence` | 出处值（不解析）；`dispatch_end` → 所在流的流末位置 |
 | 观察 | 取证的观察记录 | IO 壳 | 同上，`provenance: Reconciliation{AttemptRef, channel}` 相同，`dispatch_end` 各是自己所在流的；只对由自己的关联证据属于该尝试的记录填 `FromAttempt(AttemptRef)`；`list_fills` 命中只有成交记录，不造订单状态记录；可压缩 | 出处值（不解析）；`dispatch_end` → 所在流的流末位置 |
@@ -178,6 +178,7 @@ flowchart LR
 | 执行 | `Expired(deadline)` | IO 壳（发出前门到期） | `AttemptRef` | → `Prepared` |
 | 执行 | `Abandoned` | IO 壳（经 `abandon` 授权；该尝试的在途取证调用先完成） | `AttemptRef`、`principal`、`note`、`rule_version`；随该 lane 的执行事实流；UTA 自己的放弃等待，不是结果 | → `Prepared` |
 | 执行 | `IntegrationHalted` | 集成会话 | 集成、`cause`（`ProjectionInvalid` / `ContractIncompatible` / `Refused(reason)`）、`session_epoch`；落控制流；与 `Halted` 健康观察同事务 | — |
+| 执行 | 轮换兑现记录 | 集成会话（兑现轮换的那次成功握手的事务里，与声明版本、`Established` 健康观察与各流 `Gap{Source, credential_rotated}` 同事务，§7.6） | 集成、`session_epoch`；落控制流 | → 被兑现的每条 `rotate_credential` `Applied`（控制流上的位置；其后没有兑现记录引用的即未兑现的轮换） |
 | 执行 | 采纳记录 | 集成会话（启动第 3 步） | 集成登记文件的内容 hash、其中列出的集成 id、本实例的 `instance_id`；落控制流 | — |
 | 执行 | `ProgramHalted{program, reason}` | 程序宿主（核心） | 程序 id、`reason`；落控制流；与 `ProgramFailed` 观察同事务 | — |
 | 执行 | `ResolutionEvidence{AttemptRef, channel, round, outcome}` | IO 壳 / 归因处理器 | `channel ∈ {ByKey, Listing, Fills, Replay, Attributed}`、`round`（主动取证：发起时所属轮次；`Attributed`：append 时的当前轮）、`outcome ∈ {Found{observation, evidence: Evidence}, Absent, Inconclusive}`；每条 `Found` 都带 `evidence`（五渠道一视同仁） | `Found` → 命中的那条观察记录（`list_fills` 命中多笔归因到该尝试的成交时，取同一成交流上 `Seq` 最小者）；`round` → `ReconciliationReopened` |
@@ -185,7 +186,7 @@ flowchart LR
 | 执行 | `CapabilityObserved` | IO 壳 | `(WriteLaneKey, OperationKind)` 或逻辑流 `(source, stream)` 的读 / 回填、新 `Verdict`、所更新声明版本的 `session_epoch`（被接受的那条推送或回应所携的 `SessionEpoch`）；不属于任何 Attempt | → 同来源同 `session_epoch` 的声明版本 |
 | 执行 | 声明版本 | 集成会话 | 该握手 `Projection` 除记录映射外的全部（作用域与 `account_ref` 可解析判定、流声明、写能力、配额、扩展 schema）、`session_epoch` | — |
 | 执行 | `Gap{origin: Channel, channel}`（取证渠道） | IO 壳 | `AttemptRef`、渠道 | → `Prepared` |
-| 观察 | `Gap{origin: Channel, channel}`（回填 / 一次性读） | 持久订阅元素（回填）/ 一次性读元素（调用后 `Unavailable`，含会话结束时强制完成与发出 epoch 已结束的；无会话不调用、不记） | 流、渠道；一次性读的另带这次调用的 `provenance: OneShot{origins, request}` 与 `dispatch_end`，与它的结论记录会带的相同（§8.2 `read`） | 一次性读的：出处值（不解析）；`dispatch_end` → 调用发出时该流已提交的流末 |
+| 观察 | `Gap{origin: Channel, channel}`（回填 / 一次性读） | 持久订阅元素（回填）/ 一次性读元素（调用后 `Unavailable`，含会话结束时强制完成与发出 epoch 已结束的；无会话不调用、不记） | 流、渠道；一次性读的另带这次调用的 `provenance: OneShot{origins, request}`、`dispatch_end` 与发出这次调用的会话的 `session_epoch`（核心强制完成时也是），与它的结论记录会带的相同（§8.2 `read`） | 一次性读的：出处值（不解析）；`dispatch_end` → 调用发出时该流已提交的流末 |
 | 执行 | `EffectRequest` | 出站请求处理器（随 `Advance` 输出提交） | 程序 id（即所在请求流）、`member`（发出成员：开始该成员的 `load_program` / 替换 `Applied` 的位置，核心在输出事务里写下）、`effect_kind`、`basis`、载荷；不带调用方键（键由核心在发出时按 `AttemptRef` 铸造，§6.5） | `basis` → 观察位置；`member` → 控制流上的 `Applied`（处理器与重派读它所记的装载 principal 与执行事实输入，§6.1） |
 | 执行 | `EffectResponse{request, outcome}` | 出站请求处理器 | 同一请求流；读：`Concluded(读结论记录位置)` / `Unavailable(gap)` / `NotCalled(reason)`；写：`Drafted(ticket)` / `NotDrafted(Malformed{reason} \| ScopeNotObserved)`（§6.1） | → `EffectRequest` |
 | 执行 | 控制记录 `Applied(position)` / `Rejected(reason)` | 控制面 | principal、动作、配置版本 hash；落控制流（`bypass_lane` 的除外，见下）；`restart_integration` 的 `Applied` 带本实例的 `instance_id`；解除 `Halted` 的 `restart_integration` / `rotate_credential` 的 `Applied` 带被解除的 `IntegrationHalted` 位置；`load_program` 的 `Applied` 记下装载 principal（即其 principal）、内容 hash、预算、接受的 `state_version` 集合、`facts` 声明的执行事实输入集合、值树引用的原生 op 名集合、输出契约（`outputs` 各项的 `(name, 值类型)`，以值记下，供沿用判定、程序流的 epoch 与程序来源的接纳）、沿用的 `Checkpoint`（位置或无），解除失败抑制时带被解除的 `ProgramHalted` 位置；`install_native_op` 的 `Applied` 以值记下 op 名、声明的签名、artifact 引用与内容 hash，`remove_native_op` 的记下 op 名，这两种的 fold 是已安装 op 集合（§8.7） | — |
@@ -194,9 +195,9 @@ flowchart LR
 
 读法：
 
-- 两个 `Journal` 的记录种类就是上表。执行 J 上除 lane 流、各来源的声明流、各程序的请求流之外，有一条核心唯一、不属任何来源的控制流：采纳记录、除 `bypass_lane` 之外的控制记录、`IntegrationHalted`、`ProgramHalted`（§8.5 订阅组）。lane 的阻塞头集合、尝试的结果是否确立、"下一取证渠道"是执行 J 的 fold（§6.4）；单据状态是执行 J 与其评估所读观察、当前能力证据和策略的 fold（§6.2）。它们都不是记录。
+- 两个 `Journal` 的记录种类就是上表。执行 J 上除 lane 流、各来源的声明流、各程序的请求流之外，有一条核心唯一、不属任何来源的控制流：采纳记录、除 `bypass_lane` 之外的控制记录、`IntegrationHalted`、轮换兑现记录、`ProgramHalted`（§8.5 订阅组）。lane 的阻塞头集合、尝试的结果是否确立、"下一取证渠道"是执行 J 的 fold（§6.4）；单据状态是执行 J 与其评估所读观察、当前能力证据和策略的 fold（§6.2）。它们都不是记录。
 - 投递缺口 `Gap{origin: Delivery}` 不在表里：它是订阅的状态，按（订阅，流）记为 `{流, from, to, reason}`，存在订阅表里，唯一写者是持久订阅元素；不是任何 `Journal` 的记录，不在任何流上（§4.2、§7.5）。
-- 一个尝试是一次写：`SendBarrier` 之后，写调用的封闭结果落为 `VenueAccepted` / `VenueRejected` / `NotSent`，或 `Undetermined(NoResponse)`；崩溃窗口为 `Undetermined(CrashWindow)`。`Expired` 与 `Abandoned` 是 UTA 自己的出口，不是写的结果；`Abandoned` 之后被动来源证据（`Attributed`）仍可补上结果，补上的结果不是门。
+- 一个尝试是一次写：`SendBarrier` 之后，写调用的封闭结果落为 `VenueAccepted` / `VenueRejected` / `NotSent`，或 `Undetermined(NoResponse)`；崩溃窗口为 `Undetermined(CrashWindow)`。`Expired` 与 `Abandoned` 是 UTA 自己的出口：`Expired` 不是写调用的结果，但结果轴上是确知的未交出（与 `NotSent` 同一个值，不另写 `NotSent` 记录）；`Abandoned` 只结束等待，不是结果，之后被动来源证据（`Attributed`）仍可补上结果，补上的结果不是门。
 - 观察 J 的记录可被压缩到其所在流的保留边界之下；执行 J 的记录永不删除，没有保留边界（§2.4）。
 
 核出：回执与取证的 `Evidence`（契约载荷与原始负载，C13）归执行事实、观察侧的记录可压缩；尝试身份 `AttemptRef`；`EffectResponse`；`ReconciliationReopened`；`checked_as_of`——均在画图/复核时并入正文（§6.1、§6.2、§6.3、§6.5）。

@@ -142,9 +142,10 @@ stateDiagram-v2
   state "结果（上游事实的副本，从不作为门）" as O {
     state "Unknown（尚无回执或证据结论）" as UNK
     state "Undetermined（结果未知）" as UND
-    state "Accepted / Rejected / NotSent / Found / Absent" as KNOWN
+    state "Accepted / Rejected / NotSent（确知未交出）/ Found / Absent" as KNOWN
     [*] --> UNK
     UNK --> KNOWN : 回执 / NotSent（只在 Undetermined 之前）
+    UNK --> KNOWN : Expired（发出前到期，UTA 确知未交出）
     UNK --> UND : Undetermined（NoResponse / CrashWindow）
     UND --> KNOWN : 第一条 Found 或 Absent（Active 或 Abandoned 时都可以补上）；这是 Undetermined 的唯一出口
     UND --> UND : Abandoned 后 retry_reconciliation 那一轮得 Inconclusive → 什么都不变（等待仍 Abandoned，结果仍未知；渠道穷尽即停）
@@ -160,7 +161,7 @@ stateDiagram-v2
 
 读法：
 
-- 左轴回答"UTA 还要不要等"，源头是 UTA；右轴回答"这次写发生没有"，源头是上游。principal 只能动左轴：没有人工写结果的操作。
+- 左轴回答"UTA 还要不要等"，源头是 UTA；右轴回答"这次写发生没有"，源头是上游，只有“未交出”（`NotSent`，与 `Expired` 折成的同一个值）由 UTA 确知。principal 只能动左轴：没有人工写结果的操作。
 - `abandon` 没有中间记录：①只是 IO 壳进程内的停发；③之前崩溃，日志里没有 `Abandoned`，恢复后仍 `Active`（§9.2 #8）。在途调用已给出结果时不写 `Abandoned`，返回 `Rejected(NotUndetermined)`。受控停止开始时已在执行的 `abandon` 照常完成：②里没有返回的调用在停止第 3 步被强制完成为 `Unavailable`，③在实例结束锚点之前得出（§7.2 受控停止“停止之前已在执行的控制动作”）。
 - 离开 `Active` 的那一刻移出 lane 阻塞头集合、释放保留钉（§6.4、§2.4）。
 

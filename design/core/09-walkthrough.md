@@ -212,7 +212,7 @@
 
 3. 控制面 `rotate_credential(integration)`（认证 principal，§8.5）：
    - 集成会话结束该集成的会话：在途的写得 `NoResponse`（→ `Undetermined`）、读得 `Unavailable`，各计数一次，然后关闭通道（§7.2 第 3 步）；请求该集成进程退出，OS 确认退出之后清除进程表的行。凭据的旧副本随这个进程结束（§7.1 凭据链）。
-   - 之后才重读封存文件，拉起新进程，把凭据经继承句柄交给它，并为新通道分配新 `session_seq`（进入 `Connecting`）；新会话握手时各流开新 epoch，首条为 `Gap{origin: Source, reason: credential_rotated}`，由集成会话 append（§7.6）。其他集成 `Seq` 连续（§8.3）。
+   - 之后才重读封存文件，拉起新进程，把凭据经继承句柄交给它，并为新通道分配新 `session_seq`（进入 `Connecting`）；新会话握手时各流开新 epoch，首条为 `Gap{origin: Source, reason: credential_rotated}`，由集成会话 append，同一事务在控制流上 append 以位置引用这次 `rotate_credential` `Applied` 的轮换兑现记录（§7.6）。其他集成 `Seq` 连续（§8.3）。
    - 恢复者：核心（进程与会话的结束、拉起与凭据交付）+ 该集成（握手）。
    - 对外可见：目标集成的旧进程退出先于新进程拉起；会话重建与原因可见；其他流不受影响。
 
@@ -264,10 +264,10 @@
    - 对外可见：接管不产生双写（§7.1 单实例、§7.4 单写者，fence 与 H10）；进程表中无旧 `instance_id` 名下的存活进程。
 4. **受控停止变体。** 原持有者收到 OS 的停止请求，按 §7.2“受控停止”从内到外结束：
    - 第 1 步关闭会话入口与全部消费方会话，核心不再发起新的集成调用，也不再拉起集成进程；解释层看到连接关闭（`design/downstream/design.md` 第 5 节“服务已停止”）。
-   - 第 2 步每个程序等在途 `Advance` 的事务提交（或确知不提交）后 `Unload`；受控停止本身不改变成员，停止之前已在执行的控制动作照常完成（`unload_program` 或替换的 `Applied`、`abandon` 的 `Abandoned`、等旧集成进程退出的 `restart_integration` / `rotate_credential` 的 `Applied`，都在实例结束锚点之前；后两者的 `Applied` 不带 `Connecting` 健康观察、不开始运行，§7.2 受控停止“停止之前已在执行的控制动作”）。
-   - 第 3 步每个集成会话以“在途调用恰好完成一次”结束：在途写得 `NoResponse`（→ `Undetermined`），在途读得 `Unavailable`（一次性读的 `Gap{origin: Channel}` 带这次调用的出处与 `dispatch_end`，与计数同事务提交，`Pending` 的等待者重连后从 `from` 收到它，按请求身份、`origins` 与 `dispatch_end` 认出它）。
+   - 第 2 步每个程序等在途 `Advance` 的事务提交（或确知不提交）后 `Unload`；受控停止本身不改变成员，停止之前已在执行的控制动作照常完成（`unload_program` 或替换的 `Applied`、`abandon` 的 `Abandoned`、`restart_integration` / `rotate_credential` 的 `Applied`（有旧集成进程的先等它退出，采纳新 id 的不等），都在实例结束锚点之前；后两者的 `Applied` 不带 `Connecting` 健康观察、不开始运行，§7.2 受控停止“停止之前已在执行的控制动作”）。
+   - 第 3 步每个集成会话以“在途调用恰好完成一次”结束：在途写得 `NoResponse`（→ `Undetermined`），在途读得 `Unavailable`（一次性读的 `Gap{origin: Channel}` 带这次调用的出处、`dispatch_end` 与发出它的会话的 `session_epoch`，与计数同事务提交，`Pending` 的等待者重连后从 `from` 收到它，按请求身份、`origins`、`dispatch_end` 与 `session_epoch.instance_id` 认出它）。
    - 第 4 步 OS 确认全部集成与宿主进程退出，进程表清空；第 5 步写实例结束锚点；第 6 步释放 fence。
-   - 新实例启动：第 1 步没有要回收的行，第 2 步没有无后继的 `SendBarrier`；第 3 步为每个采纳的集成开始新的运行（停止中被解除 `Halted` 的集成也在其中），第 5 步照常判定装载活动集合：受控停止本身不改变成员，与停止之前相比，只差停止前已在执行、在结束锚点之前完成的控制动作所记下的变化；停止中 `rotate_credential` 的 `Applied` 之后该集成的第一次握手使各流开新 epoch（`credential_rotated`）。
+   - 新实例启动：第 1 步没有要回收的行，第 2 步没有无后继的 `SendBarrier`；第 3 步为每个采纳的集成写初始状态；不在 `Halted` 抑制下的（含停止中被解除的）开始新的运行，第 5 步照常判定装载活动集合：受控停止本身不改变成员，与停止之前相比，只差停止前已在执行、在结束锚点之前完成的控制动作所记下的变化；停止中 `rotate_credential` 的 `Applied` 仍是未兑现的轮换，该集成第一次成功的握手使各流开新 epoch（`credential_rotated`），同一事务 append 以位置引用它的轮换兑现记录。
    - 有进程得不到 OS 确认退出，或第 2–4 步都已完成时停止之前已发出的原生 op 交出仍没有子系统的回答，原持有者不写结束锚点、不释放 fence，停止以失败报告（后者不因没有回答而 append `ProgramHalted`，核心不替子系统判定超时；等这次交出的 `unload_program` 或替换、等那个进程退出的 `restart_integration` / `rotate_credential` 都没有 `Applied`，随实例结束、不生效）；之后它被外力结束，按变体 2 接管。
    - 对外可见：停止成功时没有孤儿进程；每个在途调用都有结果；实例表显示上一实例有结束锚点。
 
