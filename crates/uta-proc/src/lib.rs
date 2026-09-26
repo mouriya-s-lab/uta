@@ -74,7 +74,36 @@ fn refreshed_process(pid: u32) -> (System, Pid) {
 fn process_is_live(process: &Process) -> bool {
     // A zombie still has a process-table entry, but has already exited and
     // cannot receive a signal. Treat it as exited while its parent reaps it.
-    process.status() != ProcessStatus::Zombie
+    process.status() != ProcessStatus::Zombie && still_active(process.pid().as_u32())
+}
+
+/// Windows keeps an exited process in the process list while any handle to
+/// it is open (the counterpart of a Unix zombie). The exit code tells whether
+/// the OS considers it running.
+#[cfg(windows)]
+fn still_active(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::STILL_ACTIVE;
+    use windows_sys::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    // SAFETY: OpenProcess takes only scalar arguments and returns an owned handle.
+    let raw = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if raw.is_null() {
+        // Cannot query: keep the process list's answer.
+        return true;
+    }
+    let handle = ProcessHandle(raw);
+    let mut code = 0u32;
+    // SAFETY: `handle` is a valid process handle owned for this call.
+    if unsafe { GetExitCodeProcess(handle.0, &mut code) } == 0 {
+        return true;
+    }
+    code == STILL_ACTIVE as u32
+}
+
+#[cfg(not(windows))]
+fn still_active(_pid: u32) -> bool {
+    true
 }
 
 fn matching_process(system: &System, id: OsProcessId) -> Option<&Process> {
