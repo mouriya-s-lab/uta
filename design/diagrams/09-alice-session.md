@@ -124,7 +124,7 @@ flowchart TB
 
 ## D9.4 控制动作触发的记录
 
-对照：§8.5 控制组；§7.6 每文件契约与原子替换；§7.2 第 3 步；§4.2 gap 原因；W8。
+对照：§8.5 控制组；§7.6 每文件契约、原子替换与轮换强制的新流 epoch；§7.2 第 3 步与受控停止；§4.2 gap 原因；W8。
 
 ```mermaid
 flowchart LR
@@ -143,8 +143,10 @@ flowchart LR
   A1 --> F1["读策略/审批规则文件（Alice 原子替换写入）<br/>合法 → Applied，规则版本 = 内容 hash，写进此后每条 Outcome / Rejection<br/>不合法 → Rejected，保留上一有效版本"]
   A1 --> F1b["待决单据放行时按新规则重过五步（不冻结）；必要项集 / Lag 变化触发 alignment 重算（D5.5）"]
   A1r --> F1c["读运行期参数文件：快照频率 · 派生侧留存窗口 · deadline 全局缺省 · 投递缓冲上限 · 回填深度（按逻辑流，缺省取全局值；只影响下一个流 epoch 的回填任务判定）<br/>合法 → Applied；不合法 → Rejected，保留上一有效版本；不改规则版本"]
-  A2 --> F2["凭据链 文件 → 核心 → 集成；该集成新 session_seq<br/>各流强制新 epoch Gap{Source, credential_rotated}"]
-  A3 --> F3["终止并重新拉起集成进程；新 session_seq；各流按游标证明决定续接或新 epoch"]
+  A2 --> F2["凭据链 文件 → 核心 → 集成；该集成新 session_seq<br/>Applied 留下一项未兑现的轮换：该集成此后第一次成功的握手（可能在之后的实例里）强制各流新 epoch Gap{Source, credential_rotated}，同一事务在控制流上 append 以位置引用这条 Applied 的轮换兑现记录（§7.6）"]
+  A3 --> F3["终止并重新拉起集成进程；新 session_seq<br/>没有未兑现的轮换时，各流按游标证明决定续接或新 epoch；有则第一次成功的握手一律新 epoch Gap{Source, credential_rotated}，同一事务 append 轮换兑现记录（§7.6）"]
+  A2 -.-> FS["受控停止开始时 Applied 还没有提交的 rotate_credential / restart_integration：停止第 1 步以 Rejected(Stopping) 结束，不采纳、不解除 Halted、不留下未兑现的轮换（§7.2 受控停止）"]
+  A3 -.-> FS
   A4 --> F4["宿主 Load / Unload（D4.2）<br/>load_program，id 不在活动集合里：新成员每条程序流 Gap{Source, start}，不是 Reset<br/>load_program，id 已在活动集合里：沿用的替换（非 cold_start、输出契约相同、无旧 Checkpoint 或接受其 state_version）不写程序流；不沿用的替换：ProgramReset{cold_start 为 Operator，否则 Replace} + 新成员每条程序流 Gap{Source, program_upgrade}<br/>新成员不声明的流不写记录；unload_program 不写程序流，epoch 都不结束"]
   A4n --> F4n["install：读 artifact（原生计算制品目录里的文件；读不到或不合法 → Rejected），Applied 以值记下 op 名、声明的签名、artifact 引用与内容 hash；同名已安装 → Rejected(AlreadyInstalled)<br/>remove：活动成员的 Applied 所记原生 op 名集合含它 → Rejected(InUse)；未安装 → Rejected(NotInstalled)<br/>已安装 op 集合 = 这些 Applied 的 fold，声明校验读它（§8.7）；不看本实例有没有子系统<br/>每次拉起引用它的宿主之前，核心按这条 Applied 重读制品、核对 hash，不符 → ProgramHalted{NativeArtifactUnavailable}；相符的内容只为这次宿主执行交给子系统，未被接受 → ProgramHalted{LoadRejected(NativeHandoverFailed)}（D4.2）"]
   A5 --> F5["写快照（仅加速重建，不改 append-only）"]

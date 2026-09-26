@@ -243,7 +243,7 @@ flowchart TB
   Q{"缺口出在哪一段？"}
   Q -->|"来源流本身有缺口：断代，或 epoch 内未补齐的区间<br/>断线 / 配额 / 溢出 / 换凭据 / 载荷换版 / 程序装载 / 程序升级 / 回填穷尽"| S["Gap{origin: Source, reason}<br/>观察 J 该流上：新 epoch 首条（开 epoch）或 epoch 内记录（backfill_incomplete，不开 epoch）<br/>写者：集成推送入口（会话内上报的断代）/ 集成会话（握手开新 epoch）/ 持久订阅（backfill_incomplete）/ 控制面（程序流新 epoch，在开始不沿用旧状态之成员的 Applied 事务里、该成员的每条程序流上）"]
   Q -->|"核心到某个订阅的投递<br/>latest 订阅缓冲耗尽被停投 / 订阅位置被压缩 / latest 合并"| D["Gap{origin: Delivery, reason}<br/>订阅的状态：订阅表里按（订阅, 流）记 {流, from, to, reason}，不在任何流上<br/>写者：持久订阅（应投递调度请求，先写后跳）；订阅者确认不低于 to 的 cursor 即删除"]
-  Q -->|"核心发起的读渠道不可用<br/>取证 / 回填 / 一次性读 返回 Unavailable"| C["Gap{origin: Channel, channel}<br/>该次调用的结果，可再发；一次性读的带该次调用的 OneShot{origins, request} 与 dispatch_end<br/>写者：IO 壳（取证，执行事实侧属该 Attempt）/ 持久订阅（回填）/ 一次性读元素（观察侧该流）"]
+  Q -->|"核心发起的读渠道不可用<br/>取证 / 回填 / 一次性读 返回 Unavailable"| C["Gap{origin: Channel, channel}<br/>该次调用的结果，可再发；一次性读的带该次调用的 OneShot{origins, request}、dispatch_end 与发出它的会话的 session_epoch<br/>写者：IO 壳（取证，执行事实侧属该 Attempt）/ 持久订阅（回填）/ 一次性读元素（观察侧该流）"]
   Q -->|"submit 无业务回执"| U["不是 gap：Undetermined<br/>写边界 in-doubt（D6.1）"]
 ```
 

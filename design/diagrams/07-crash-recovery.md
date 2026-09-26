@@ -54,9 +54,13 @@ sequenceDiagram
   Note over C,I: ✕3 SendBarrier 有、写调用未发：可能已发出 → Undetermined(CrashWindow)
   C->>I: submit
   Note over C,I: ✕4 写调用已发、回执未到：同 ✕3；✕14 集成在此崩溃：会话结束，集成会话恰完成该调用一次 → NoResponse → Undetermined
-  I-->>C: Ack（或 NotSent）
+  I-->>C: Ack 或 NotSent
   Note over C,DB: ✕5 回执或 NotSent 已到、未 append：同 ✕3，by-key 取证重得同一状态（Evidence 落执行 J）；未交出的在唯一期内得 Absent
-  C->>DB: COMMIT VenueAccepted（含 Evidence）+ 该回应的观察记录 + 计数健康观察
+  alt Ack
+    C->>DB: COMMIT VenueAccepted（含 Evidence）+ 该回应的观察记录 + 计数健康观察
+  else NotSent
+    C->>DB: COMMIT NotSent{reason, evidence} + 计数健康观察（没有交给上游，不写该回应的观察记录）
+  end
   Note over C,A: ✕6 记录已提交、cursor 未推进：从已确认 cursor 重投，按 LogPosition 去重
   C->>A: 投递
 ```

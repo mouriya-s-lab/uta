@@ -179,7 +179,7 @@ flowchart LR
 | 执行 | `Abandoned` | IO 壳（经 `abandon` 授权；该尝试的在途取证调用先完成） | `AttemptRef`、`principal`、`note`、`rule_version`；随该 lane 的执行事实流；UTA 自己的放弃等待，不是结果 | → `Prepared` |
 | 执行 | `IntegrationHalted` | 集成会话 | 集成、`cause`（`ProjectionInvalid` / `ContractIncompatible` / `Refused(reason)`）、`session_epoch`；落控制流；与 `Halted` 健康观察同事务 | — |
 | 执行 | 轮换兑现记录 | 集成会话（兑现轮换的那次成功握手的事务里，与声明版本、`Established` 健康观察与各流 `Gap{Source, credential_rotated}` 同事务，§7.6） | 集成、`session_epoch`；落控制流 | → 被兑现的每条 `rotate_credential` `Applied`（控制流上的位置；其后没有兑现记录引用的即未兑现的轮换） |
-| 执行 | 采纳记录 | 集成会话（启动第 3 步） | 集成登记文件的内容 hash、其中列出的集成 id、本实例的 `instance_id`；落控制流 | — |
+| 执行 | 采纳记录 | 集成会话（启动第 3 步，与每个采纳的集成的初始会话健康观察同事务，§7.2） | 集成登记文件的内容 hash、其中列出的集成 id、本实例的 `instance_id`；落控制流 | — |
 | 执行 | `ProgramHalted{program, reason}` | 程序宿主（核心） | 程序 id、`reason`；落控制流；与 `ProgramFailed` 观察同事务 | — |
 | 执行 | `ResolutionEvidence{AttemptRef, channel, round, outcome}` | IO 壳 / 归因处理器 | `channel ∈ {ByKey, Listing, Fills, Replay, Attributed}`、`round`（主动取证：发起时所属轮次；`Attributed`：append 时的当前轮）、`outcome ∈ {Found{observation, evidence: Evidence}, Absent, Inconclusive}`；每条 `Found` 都带 `evidence`（五渠道一视同仁） | `Found` → 命中的那条观察记录（`list_fills` 命中多笔归因到该尝试的成交时，取同一成交流上 `Seq` 最小者）；`round` → `ReconciliationReopened` |
 | 执行 | `ReconciliationReopened{AttemptRef, cause}` | IO 壳（`SessionRestored`，不重开已 `Abandoned` 的）/ 控制面（`retry_reconciliation`） | `cause ∈ {SessionRestored, Manual(principal)}` | → `Undetermined` |
