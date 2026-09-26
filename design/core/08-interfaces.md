@@ -628,12 +628,12 @@
 
 | 字段 | 含义 | 源头与写者 |
 |---|---|---|
-| `session` | `Connecting{since}` / `Established{epoch, since}` / `Halted{cause, since}`（§7.2 第 3 步）/ `Unobserved`；`epoch` 是该会话的 `SessionEpoch`；一个切面上的值按下文“健康不留旧值”的会话一条取，`Unobserved` 是该切面上还没有本次采纳的会话观察时的值，不是记录 | 核心自己的会话生命周期；集成会话在会话状态改变时 append，每条会话观察带 append 它的核心实例的 `instance_id`（`Established` 的即其 `SessionEpoch.instance_id`） |
+| `session` | `Connecting{since}` / `Established{epoch, since}` / `Halted{cause, since}`（§7.2 第 3 步）/ `Unobserved`；`epoch` 是该会话的 `SessionEpoch`；一个切面上的值按下文“健康不留旧值”的会话一条取，`Unobserved` 是该切面把本次采纳与它的初始观察分开、还没有本次采纳的会话观察时的值，不是记录（同样没有、而属于那一条 `BeyondRetention` 分支的切面，`health` 读得 `BeyondRetention`） | 核心自己的会话生命周期；集成会话在会话状态改变时 append，每条会话观察带 append 它的核心实例的 `instance_id`（`Established` 的即其 `SessionEpoch.instance_id`） |
 | `readiness` | 每条流的 readiness（上文 fold）；`Disconnected` 是派生值 | 集成在某个会话里、对某个流 epoch 的陈述（副本）；核心盖上到达会话的 `SessionEpoch` 与该流当时的流 epoch 后 append |
 | `backfill` | 每条流当前流 epoch 的回填进度（上文）；值为 `None` 的不列 | 核心的回填任务；持久订阅在进度改变时 append（与读结论记录同事务）；epoch 起点的 `None` 与起点的 `Gap{origin: Source}` 同事务 |
 | 按调用目标的 `consecutive_failures`、`last_success_at` | 见下 | 核心自己的调用结果；集成会话给出内容，调用发起方在记录该结果的同一事务里提交（§7.3） |
 
-每条健康观察是状态值：它带所属键（上表各行的对象：集成、流、逻辑流、调用目标）上的完整当前值，同键后一条取代前一条；健康流因此按键保留（§2.4），`IntegrationHealth` 对任一不低于保留边界的 `as_of` 都 fold 得出。
+每条健康观察是状态值：它带所属键（上表各行的对象：集成、流、逻辑流、调用目标）上的完整当前值，同键后一条取代前一条；健康流因此按键保留（§2.4），`IntegrationHealth` 对任一不低于保留边界的 `as_of` 都 fold 得出，且与压缩前相等，唯一的例外是某个成员走到下文“健康不留旧值”会话一条的 `BeyondRetention` 分支（健康流前缀里没有带它最近一次采纳之 `instance_id` 的会话观察，而它最近一条会话观察所带的实例在控制流前缀里没有采纳），这个切面得 `BeyondRetention`。
 
 **健康不留旧值** [设计]：健康流按键只保留最近一条，一个键上的值只在有新观察时改变。所以旧值会因流 epoch 更替或核心重启而失效的键，要么在失效的那一刻由它的写者写入新值，要么由 fold 规则限定它的适用范围：
 
@@ -643,7 +643,7 @@
   - 没有：看健康流前缀里 X 最近的一条会话观察（不论实例），设它带 j。没有这样一条，或控制流前缀里有带 j 的采纳：会话值为 `Unobserved`，这个切面把 i 的采纳与它的初始观察分开了，i 的实例还没有写下会话观察。控制流前缀里没有带 j 的采纳：对 X 而言健康流走在控制流前缀前面，而 i 的观察已被压缩删去（§2.4），这个切面的 `health` 读得 `BeyondRetention`（§2.4、§5.2）。
   - 实例的先后只由采纳在控制流上的位置给出，不比较不同流上记录的先后。所以含整个事务的切面（第 3 步的采纳记录与初始观察，或采纳本实例尚未运行的 id 的 `Applied` 与它的 `Connecting`）给出初始观察；把二者分开的切面（控制流位置含采纳，健康流位置在初始观察之前）给出 `Unobserved`；上一实例的 `Established` 在之后的采纳之后从不适用，第 5 步开放下游会话之前也不会显得仍在。这一规则只读两条流上已有的字段（采纳所带的 `instance_id`、会话观察所带的 `instance_id`），对任一合法切面都确定，独立 fold 控制流与健康流的消费方从同样的两个前缀得到同一个值或同一个 `BeyondRetention`；不需要判定切面是否“完整”，也不需要跨流的全局序。
 - readiness：不另写。它只在带着会话值（上文“会话”一条）为 `Established` 的那个 `SessionEpoch`、且带着该流当前流 epoch 时有效（上文 fold）；当前流 epoch 取自健康流上该逻辑流最近一条回填进度所带的 epoch（新 epoch 的 `None{epoch}` 与起点的 `Gap{origin: Source}` 同事务 append，见上文“回填进度”一条），所以取当前流 epoch 不读健康流之外的输入。会话值为 `Unobserved` 时各流为 `Disconnected`（上文 fold）。旧会话、旧实例、旧流 epoch 的 `Live` 随会话值或回填进度的更替自动失效，所以不为各流 append `Disconnected` 或 `Starting`。
-- 理由：集成失效或核心重启时，旧值的写者恰好不再写；按键保留又使旧值一直可见。会话与回填进度由它们的写者（集成会话、持久订阅）在失效点写新值；readiness 的写者是集成，失效时它恰好写不了，所以由它所属的会话限定有效范围，而不是由核心代写一条集成没说过的话。会话值按采纳所带的 `instance_id` 取舍，而不是取健康流上的最近一条：两条流各自有序、彼此没有全局序（§2.3），一个切面可以含一次采纳而不含同一事务的初始观察，这时最近一条可能是上一实例的 `Established`。不选：由读模型按流的当前 epoch 过滤回填进度：`IntegrationHealth` 就要从健康流与控制流之外再读一个输入；也不选：重启时不写会话、等第一次状态变化：`Halted` 的集成不再有状态变化，旧的 `Established` 会一直显示；也不选：由核心为各流 append `Disconnected{since}`：同一个键有两个写者，且 `since` 只能取核心写它的时刻，把重启时刻冒充断线时刻；也不选：拒绝把采纳与初始观察分开的切面：独立 fold 的消费方要另有判定切面是否完整的规则，而这需要跨流的序；也不选：会话键按（集成，实例）分、每对各留一条基线：基线随实例累积而无界增长（§2.4 键集有界），而控制流前缀落在健康流基线之后的切面本就读不到被压缩的历史，得 `BeyondRetention` 即可。
+- 理由：集成失效或核心重启时，旧值的写者恰好不再写；按键保留又使旧值一直可见。会话与回填进度由它们的写者（集成会话、持久订阅）在失效点写新值；readiness 的写者是集成，失效时它恰好写不了，所以由它所属的会话限定有效范围，而不是由核心代写一条集成没说过的话。会话值按采纳所带的 `instance_id` 取舍，而不是取健康流上的最近一条：两条流各自有序、彼此没有全局序（§2.3），一个切面可以含一次采纳而不含同一事务的初始观察，这时最近一条可能是上一实例的 `Established`。不选：由读模型按流的当前 epoch 过滤回填进度：`IntegrationHealth` 就要从健康流与控制流之外再读一个输入；也不选：重启时不写会话、等第一次状态变化：`Halted` 的集成不再有状态变化，旧的 `Established` 会一直显示；也不选：由核心为各流 append `Disconnected{since}`：同一个键有两个写者，且 `since` 只能取核心写它的时刻，把重启时刻冒充断线时刻；也不选：拒绝把采纳与初始观察分开的切面：独立 fold 的消费方要另有判定切面是否完整的规则，而这需要跨流的序；也不选：会话键按（集成，实例）分、每对各留一条基线：基线随实例累积而无界增长（§2.4 键集有界），而走到上面 `BeyondRetention` 分支的成员，它最近一次采纳之实例的观察已被压缩，这个切面本就读不到被压缩的历史，得 `BeyondRetention` 即可。
 
 调用结果的计数：
 
@@ -767,18 +767,19 @@
 **读模型**：`read_model(kind, as_of?) → Snapshot{value, as_of?, gaps?}`。
 
 - 动作轴：读（核心内 fold）。核心内部结果：无。
-- 错误：`kind` 未定义 → 拒绝；`as_of` 未达（其中有位置在所涉流上尚未提交）→ `NotYetAvailable{positions}`，带所涉各流当前已提交的流末位置，观察流与执行事实流同一判定；对只给当前态的种类（`tickets`、`subscriptions`）带历史 `as_of` → 拒绝。`as_of` 的位置都已提交即照常 fold：位置是核心自己的事实，可判定；来源侧是否还有记录未到不是未达，读模型只在有来源证据时给出完整界（§8.1），并列出 `gaps`；观察历史已低于保留边界不属未达（§2.4）。读模型非权威（§4.4）；种类与各自的输入见下文“读模型集合”。
+- 错误：`kind` 未定义 → 拒绝；`as_of` 未达（其中有位置在所涉流上尚未提交）→ `NotYetAvailable{positions}`，带所涉各流当前已提交的流末位置，观察流与执行事实流同一判定；对只给当前态的种类（`tickets`、`subscriptions`）带历史 `as_of` → 拒绝；`as_of` 所涉某条观察流的位置低于该流的保留边界（§2.4），或 `health` 的切面上某个成员走到 §8.4 健康不留旧值“会话”一条的 `BeyondRetention` 分支 → `BeyondRetention`，不给该切面的状态。`as_of` 的位置都已提交即照常 fold：位置是核心自己的事实，可判定；来源侧是否还有记录未到不是未达，读模型只在有来源证据时给出完整界（§8.1），并列出 `gaps`；`BeyondRetention` 也不属未达：那段观察历史已被压缩，不会再变得可读（§2.4）。读模型非权威（§4.4）；种类与各自的输入见下文“读模型集合”。
 
 **单据组**：`draft(intent) → TicketId`；`revise(ticket, expected_version, diff)`；`submit_for_decision(ticket, expected_version)`；`decide(ticket, expected_version, Approve | Reject(reason))`；`send_back`；`withdraw`；`transfer(ticket, to: principal)`。
 
 - 动作轴：写（append `TicketAction`）。
 - 核心内部结果：单据 fold 转移（§6.2）；`Approve` 触发 STS 链放行（§6.3）。
 - `draft` / `revise` 不因参数不合规被拒：参数合规是单据 fold 的状态，读模型 `tickets` 返回它，送审时由输入约束步否决并留下意图与否决记录（§6.2 参数合规、§6.3）。
-- `decide` 由人或下游的自动决定者调用，二者同受一版一条 Decision 的约束；交易协议检查目录之外的 guard 只能以这种身份出现（§6.2）。
+- `decide` 由人或下游的自动决定者调用，二者同受一版一条 Decision 的约束，也同样只在当前规则对该单据要求人工审批时被接受（§6.3 审批步）；交易协议检查目录之外的 guard 只能以这种身份出现（§6.2）。
 - 错误：
   - `draft` 的意图构造不出锚点（缺 `WriteLaneKey`、操作种类不在交易协议的封闭集合内、缺 `basis`；撤单 / 改单缺 `target`，或 `IdemKey` 不是该作用域内某次尝试的 `SendBarrier` 记为订单键的键；平仓所指的持仓观察记录取不出该作用域的 `PositionRef`）→ `Rejected(Malformed)`，不开单、不 append；
   - `revise` 的 diff 使下一版意图构造不出锚点（同上各条）→ `Rejected(Malformed)`，不 append，单据与 `current_version` 不变（§6.2）；
   - `expected_version ≠ current_version` → `Conflict`，不执行；
+  - `decide` 时当前规则对该单据的 `(principal, WriteLaneKey, OperationKind)` 不要求人工审批（自动通过的单据，含已停在 lane 步的）→ 拒绝，不 append（错误名由实现定）；规则改为要求人工之后照常接受（§6.3 审批步）；
   - `decide` 时该 `(ticket, current_version)` 已有 Decision → `Conflict(AlreadyDecided)`。单据可能仍停在 lane 步而版本未变（§6.3）；
   - 越权 → `Unauthorized`；
   - `Closed` 后任何动作 → `Rejected(Closed)`；
@@ -844,8 +845,8 @@
 - `tickets`：单据 fold 的当前态（§6.2）：执行事实 + 其 `basis_validity` 与 `alignment` 的当前评估。逐版本给出 fold 到的理由（退回原因、否决原因、规则 `Rejection` 及其违反项）与该版本上 `Applied` 的 `bypass_lane` 控制记录（谁、所记阻塞头，§6.4），以及当前版本的参数有效性（§6.2）。评估还取决于各流的当前流末、撤回、保留边界与当时生效的能力证据和策略（§6.2、§6.3），所以这一种只给当前态；`Snapshot` 仍带它实际消费的位置（含 `checked_as_of`）供追溯，但那不是可重建的切面。
 - `subscriptions`：订阅表与 cursor 的当前态（§7.5）：每个订阅的整体状态与逐项状态（挂起原因、逐主体的“来源拒绝”），以及各项所在流上未确认的投递缺口（按（订阅，流）记，列在该流的各项下，不按项存）；程序订阅不在其中（§8.6 程序的输入）。订阅表不是 `Journal`，没有历史切面，所以这一种只给当前态：它的 `Snapshot` 不带 `as_of`、不带 `gaps`，每个订阅已确认的 cursor 在 `value` 里给出。
 - `sources`：按已有声明版本的来源，其最近声明（最近声明版本：作用域及 `account_ref`、`label`，流声明，写能力，配额，扩展 schema 身份；再 fold 引用该版本的 `CapabilityObserved`，§7.5）；每个 `account_ref` 是否可解析及原因（§2.2）。它的输入只有各来源的声明流（声明版本与针对逻辑流读 / 回填能力的 `CapabilityObserved`）与各 lane 流上的 `CapabilityObserved`，不读控制流，也不标来源是否在采纳集合里。它是来源说过什么的记录：来源处于已建立会话时，它就是写门与读路由此刻使用的会话有效声明；离线时它只是来源上一次会话里的陈述，不是此刻的能力（§2.2）。它只 fold 执行事实，可按历史 `as_of` 读取；历史切面只含该切面上已有声明版本的来源。来源的会话状态不在其中，在 `health`；“此刻能不能”由解释层合并二者（`design/downstream/design.md` 第 4 节）。
-- `health`：成员是 `as_of` 时的采纳集合（§7.2 第 3 步），由控制流 fold：`as_of` 在控制流上的位置及以前最近一条采纳记录列出的 id，加上该位置及以前、`instance_id` 与那条采纳记录相同的 `restart_integration` `Applied` 采纳的 id。每个成员一份（§8.4 健康面），各字段只由健康观察 fold（§8.3、§8.4）：集成会话 append 的会话状态，按该成员在 `as_of` 的控制流前缀里最近一次采纳所带的 `instance_id` 取那个实例的最近一条，没有即 `Unobserved`，或在健康流走在控制流前缀前面而那个实例的观察已被压缩时得 `BeyondRetention`（§8.4 健康不留旧值）；集成推送的 readiness（按所属会话的 `SessionEpoch` 与所属流 epoch 取舍：只取会话值为 `Established` 且是那个会话、流 epoch 是当前流 epoch 的值，`Disconnected` 由会话值派生）；调用结果计数；持久订阅 append 的回填进度与覆盖检查点。
-  - 健康流按键保留（§2.4）：从保留边界订阅（cursor 为 `Start{边界}`）或按 `as_of ≥ 边界` 读 `health` 时，先得到每个键在边界之下保留的基线（原位置），再是边界起的记录；控制流前缀对任何键都不落后于健康流基线（会话键的基线所带实例的采纳在控制流前缀里）的 `as_of`，fold 结果与压缩前相等；落后的得 `BeyondRetention`（§8.4 健康不留旧值的“会话”一条）。订阅在第一次覆盖整段前导的确认之前断连或崩溃，重新挂接时前导整段重新交出（§4.2 cursor 与确认）。这是压缩的结果，不是 cursor 退回；`as_of` 低于边界仍得 `BeyondRetention`。
+- `health`：成员是 `as_of` 时的采纳集合（§7.2 第 3 步），由控制流 fold：`as_of` 在控制流上的位置及以前最近一条采纳记录列出的 id，加上该位置及以前、`instance_id` 与那条采纳记录相同的 `restart_integration` `Applied` 采纳的 id。每个成员一份（§8.4 健康面），各字段只由健康观察 fold（§8.3、§8.4）：集成会话 append 的会话状态，按该成员在 `as_of` 的控制流前缀里最近一次采纳所带的 `instance_id` 取那个实例的最近一条；没有时看该成员最近一条会话观察所带的实例，没有这样一条或它在控制流前缀里有采纳即 `Unobserved`，没有采纳即 `BeyondRetention`（最近一次采纳之实例的观察已被压缩，§8.4 健康不留旧值）；集成推送的 readiness（按所属会话的 `SessionEpoch` 与所属流 epoch 取舍：只取会话值为 `Established` 且是那个会话、流 epoch 是当前流 epoch 的值，`Disconnected` 由会话值派生）；调用结果计数；持久订阅 append 的回填进度与覆盖检查点。
+  - 健康流按键保留（§2.4）：从保留边界订阅（cursor 为 `Start{边界}`）或按 `as_of ≥ 边界` 读 `health` 时，先得到每个键在边界之下保留的基线（原位置），再是边界起的记录；fold 结果与压缩前相等，唯一的例外是某个成员走到 §8.4 健康不留旧值“会话”一条的 `BeyondRetention` 分支（健康流前缀里没有带它最近一次采纳之 `instance_id` 的会话观察，而它最近一条会话观察所带的实例在控制流前缀里没有采纳），这个切面得 `BeyondRetention`；非成员的键（例如只被较新实例采纳的集成的会话键）不进入 fold，不影响这一等式。订阅在第一次覆盖整段前导的确认之前断连或崩溃，重新挂接时前导整段重新交出（§4.2 cursor 与确认）。这是压缩的结果，不是 cursor 退回；`as_of` 低于边界仍得 `BeyondRetention`。
 
 理由：持仓、订单状态、健康的原值在上游或来自观察，读模型只能 fold 已观察到的记录；lane 与单据是 UTA 自己的执行事实。读模型读观察记录，是效应侧读观察侧的同一条单向边（§3.2）。
 

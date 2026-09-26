@@ -96,7 +96,7 @@ flowchart TB
   C -->|"是"| WAITC["等待 decide(Approve / Reject)<br/>待决集合对审批人可见（读模型 tickets）<br/>同 (ticket, current_version) 第二条 decide → Conflict(AlreadyDecided)"]
   WAITC -->|"Reject"| RJ3["Close(DecisionRejected)"]
   WAITC -->|"Approve（绑定版本；决定者按动作种类授权）"| D
-  C -->|"否：以 rule_version 为依据通过，本步对 current_version 的 Outcome，不写 Decision"| D
+  C -->|"否：以 rule_version 为依据通过，本步对 current_version 的 Outcome，不写 Decision；当前规则仍不要求人工时 decide 被拒、不 append"| D
   D{"lane<br/>该 WriteLaneKey 阻塞头集合非空？"}
   D -->|"非空，且本笔既不是以阻塞头中某次尝试记为订单键的调用方键为 target 的撤单，也没有覆盖当前全部阻塞头的 bypass_lane 控制记录"| WAITD["停在 lane 步，单据仍 AwaitingDecision<br/>期间 alignment 照常重算"]
   WAITD -->|"该 lane 执行事实或 bypass_lane 提交：重跑 lane 步"| D

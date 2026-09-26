@@ -149,7 +149,7 @@ stateDiagram-v2
   note left of HS
     只有 Established 时 IO 壳才发写与取证（发出前门，D6.1）
     全部调用经集成会话的调用通道；每次状态改变（HS→HS 不算）集成会话 append 一条会话健康观察，带本实例的 instance_id；
-    readiness 不另写：会话值（带最近一次采纳之 instance_id 的最近一条会话观察，没有即 Unobserved）不是 Established 时，fold 派生 Disconnected
+    readiness 不另写：会话值（带最近一次采纳之 instance_id 的最近一条会话观察，没有即 Unobserved；按 §8.4 读得 BeyondRetention 的历史切面不给状态）不是 Established 时，fold 派生 Disconnected
   end note
 ```
 

@@ -86,8 +86,8 @@ flowchart LR
   S7 --> HL
   S2 -.->|"逐 target，按序判定：UnknownTarget（来源未登记，或来源是 Program(_)）/ Unavailable{source_state}（从未有声明）/ Unavailable{source_state}（此刻无已建立会话；以上都不调用、不记 gap）→ 按会话有效声明：Unsupported（流不在其中，或 read 为 Unsupported）/ Unconfirmed（read 为 Unknown）/ InvalidRequest{reason} → 调用之后：Answered{conclusion, items} / Refused{conclusion, reason} / Unavailable{gap}（渠道失败，已记 Gap{Channel}）/ Pending{from, request, instance_id}（deadline 到而调用在途；之后照常记结论或 gap，从 from 订阅只投递项可收到，按 request、origins、dispatch_end 与 session_epoch.instance_id 认出自己的那一条；核心实例已换则不再保证）"| S2
   S1 -.->|"逐项判定，没有任何一项被接纳或待接纳 → Rejected{items}：集成来源：来源不在采纳集合且从未有声明 → 该项拒绝；在采纳集合而从未有声明 → 该项待接纳；供给项：来源不在采纳集合 → 拒绝（来源未登记）；流不在最近声明里 / 配额池流上不带主体集 → 拒绝，放不下 → QuotaExceeded{quota, limit}；只投递项（不看采纳集合与会话）：流在任何一个声明版本里出现过 → 接纳（不进需求、不占配额），从未声明过 → 拒绝；程序来源 Program(p)（按 p 历代开始成员的 Applied 所记输出契约）：没有这种 Applied → 拒绝（来源未登记）；供给项 → 拒绝（ProgramStreamNotRouted）；带主体集 → 拒绝；整条流的只投递项：流在任一条输出契约里出现过 → 接纳，否则拒绝；from < 保留边界 → BeyondRetention；执行事实（不看采纳集合）：非 ordered、来源是 Program(_)，或 WriteScope.key 不在任何声明版本里 → 拒绝；控制：非 ordered → 拒绝"| S1
-  S3 -.->|"kind 未定义 → 拒绝；as_of 有位置尚未提交 → NotYetAvailable{positions}（各流已提交的流末）；tickets / subscriptions 带历史 as_of → 拒绝"| S3
-  S4 -.->|"expected_version ≠ current_version → Conflict；同版本已有 Decision → Conflict(AlreadyDecided)"| S4
+  S3 -.->|"kind 未定义 → 拒绝；as_of 有位置尚未提交 → NotYetAvailable{positions}（各流已提交的流末）；tickets / subscriptions 带历史 as_of → 拒绝；as_of 有位置低于所涉观察流的保留边界，或 health 切面上某成员走到会话值的 BeyondRetention 分支 → BeyondRetention"| S3
+  S4 -.->|"expected_version ≠ current_version → Conflict；当前规则对该单据不要求人工审批时 decide → 拒绝、不 append；同版本已有 Decision → Conflict(AlreadyDecided)"| S4
   S5 -.->|"越权 → Unauthorized；配置不合法 → Rejected 并保留上一有效版本；advance_retention 逐流判定 → NotForward / ReferencedBelow / InsideWindow"| S5
   S6 -.->|"越权 → Unauthorized（安全事件）；尝试不处于 Undetermined、等待已不是 Active 或结果已确立 → Rejected(NotUndetermined)"| S6
 ```

@@ -439,8 +439,8 @@
 
 **健康面的字段**（§8.4）。已定（验收 §10.5 #38）。
 
-- 选中：会话状态、逐流 readiness、逐流当前 epoch 的回填进度、按调用目标（作用域或逻辑流）的连续失败数与最近成功时间，全部是健康观察记录的 fold；成员是 `as_of` 时的采纳集合（控制流的 fold），每个集成一份；每条健康观察是其键上的完整当前值，健康流按键保留；会话值取带该切面上最近一次采纳之 `instance_id` 的最近一条会话观察，没有即 `Unobserved`（控制流前缀落后于已压缩的健康流时为 `BeyondRetention`）；readiness 带到达时会话的 `SessionEpoch` 与该流当时的流 epoch，只在会话值是那个会话的 `Established`、该流 epoch 是当前流 epoch 时有效（已建立而当前流 epoch 里没有这样的值为 `Starting`），会话值不是 `Established` 时各流的 `Disconnected` 由会话值派生；删去 `reach` 与 `tier`。
-- Q 场景后果：Q32：“公共可用、私有失败”可按目标看到；健康读模型可按不低于保留边界的历史 `as_of` 重建，保留边界推进与核心重启都不改变当前健康；断线与重启不会留下旧会话的 `Live`。
+- 选中：会话状态、逐流 readiness、逐流当前 epoch 的回填进度、按调用目标（作用域或逻辑流）的连续失败数与最近成功时间，全部是健康观察记录的 fold；成员是 `as_of` 时的采纳集合（控制流的 fold），每个集成一份；每条健康观察是其键上的完整当前值，健康流按键保留；会话值取带该切面上最近一次采纳之 `instance_id` 的最近一条会话观察，没有即 `Unobserved`（该集成最近一条会话观察所带的实例在控制流前缀里没有采纳时为 `BeyondRetention`）；readiness 带到达时会话的 `SessionEpoch` 与该流当时的流 epoch，只在会话值是那个会话的 `Established`、该流 epoch 是当前流 epoch 时有效（已建立而当前流 epoch 里没有这样的值为 `Starting`），会话值不是 `Established` 时各流的 `Disconnected` 由会话值派生；删去 `reach` 与 `tier`。
+- Q 场景后果：Q32：“公共可用、私有失败”可按目标看到；健康读模型可按不低于保留边界的历史 `as_of` 重建、与压缩前相等，唯一的例外是某个成员走到 §8.4 健康不留旧值“会话”一条 `BeyondRetention` 分支的切面，它得 `BeyondRetention`；保留边界推进与核心重启都不改变当前健康；断线与重启不会留下旧会话的 `Live`。
 - 不选：
   - 保留单一 `reach` 阶梯：合成一个可达度，丢掉哪一面不通；
   - 保留 `tier`：与投影里的能力判定重复并可能分叉；
@@ -450,7 +450,7 @@
 **健康与 `Halted` 跨保留与重启**（§2.4、§7.2 第 3 步、§8.4）。已定（验收 §10.5 #43）。
 
 - 选中：健康观察是按键的状态值，健康流按键压缩，每个键在保留边界之下的最新一条留作基线；`Halted` 另有执行事实 `IntegrationHalted`，解除它的 `Applied` 以位置引用它，重启只由这两种执行事实恢复 `Halted`。
-- Q 场景后果：Q32/Q28：推进保留边界、核心重启之后，健康与“被拒需要人处理”都不变；从边界订阅健康的新消费者 fold 出与压缩前相同的值。
+- Q 场景后果：Q32/Q28：推进保留边界、核心重启之后，健康与“被拒需要人处理”都不变；从边界订阅健康的新消费者 fold 出的当前健康与压缩前相同（历史切面唯一的例外是某个成员走到 §8.4 健康不留旧值“会话”一条 `BeyondRetention` 分支的切面，它得 `BeyondRetention`）。
 - 不选：
   - 把每键最新位置登记为引用：一个久不变化的键压住整条健康流；
   - 健康流免压缩：每次调用一条，无界增长；
@@ -646,7 +646,7 @@
 
 **健康不留旧值**（§8.4、§2.4、§7.2 第 3 步）。已定（验收 §10.5 #56）。
 
-- 选中：回填进度值带所属流 epoch，新 epoch 的 `None{epoch}` 与起点 `Gap{origin: Source}` 同事务 append；核心启动第 3 步为每个集成 append 初始会话状态（`Halted` 沿用原因与原起始时间），每条会话观察带 append 它的核心实例的 `instance_id`，会话值只取与该切面上最近一次采纳同一 `instance_id` 的观察，没有即 `Unobserved`（控制流前缀落后于已压缩的健康流时为 `BeyondRetention`）。readiness 不另写：它带到达时会话的 `SessionEpoch` 与该流当时的流 epoch，只在会话值是那个会话的 `Established`、且那个流 epoch 是该流当前流 epoch（最近一条回填进度所带的 epoch）时有效，所以旧会话、旧实例与旧流 epoch 的 `Live` 随会话值或回填进度的更替失效，已建立而当前流 epoch 里没有 readiness 的流为 `Starting`，各流的 `Disconnected` 由会话值派生。
+- 选中：回填进度值带所属流 epoch，新 epoch 的 `None{epoch}` 与起点 `Gap{origin: Source}` 同事务 append；核心启动第 3 步为每个集成 append 初始会话状态（`Halted` 沿用原因与原起始时间），每条会话观察带 append 它的核心实例的 `instance_id`，会话值只取与该切面上最近一次采纳同一 `instance_id` 的观察，没有即 `Unobserved`（该集成最近一条会话观察所带的实例在控制流前缀里没有采纳时为 `BeyondRetention`）。readiness 不另写：它带到达时会话的 `SessionEpoch` 与该流当时的流 epoch，只在会话值是那个会话的 `Established`、且那个流 epoch 是该流当前流 epoch（最近一条回填进度所带的 epoch）时有效，所以旧会话、旧实例与旧流 epoch 的 `Live` 随会话值或回填进度的更替失效，已建立而当前流 epoch 里没有 readiness 的流为 `Starting`，各流的 `Disconnected` 由会话值派生。
 - Q 场景后果：Q32：健康不把上一 epoch 的 `Closed` 或旧实例的 `Established`、`Live` 报成当前状态；`Halted` 的起始时间不因重启而更新；断线时刻不被补造。
 - 不选：读模型按当前 epoch 过滤回填进度（`IntegrationHealth` 多一个输入）；重启时不写会话状态、等第一次状态变化（`Halted` 永不再变，旧实例的 `Established` 一直留着）；核心为各流 append `Disconnected`（核心代写一条集成没说过的话，且崩溃后只能倒填一个时刻）；会话值取健康流上的最近一条（把采纳与初始观察分开的切面会给出上一实例的 `Established`）；会话键按（集成，实例）分（基线随实例累积无界增长）。
 - 证据：§2.4 健康流按键保留；§7.2 第 3 步 `Halted` 的持久化。
@@ -898,7 +898,7 @@
     - 一串注入的调用结果（`Unavailable`、`NoResponse`、`NotSent`、空 `Answered`、记录集为空的 `Covered`、`Routed`、`Reject`、`Refused`、`Absent`、`Inconclusive`）使对应目标的连续失败数按“失败加一、其余归零”变化，每个结果恰一条健康观察，与该结果的记录同一事务；握手、推送、`Attributed`、`Abandoned`、`CrashWindow` 与无会话时未发出的调用不改变计数；
     - 公共流的读成功、某作用域的调用连续失败时，健康同时给出二者；
     - 会话断开后该集成各流 readiness 为由会话状态派生的 `Disconnected`，健康流上没有为它们 append 的记录；`Halted` 与 `Connecting` 在健康中可区分，且跨核心重启不变；
-    - 健康中没有 `reach` 与 `tier`；`read_model(health)` 按任一不低于保留边界、控制流前缀不落后于健康流基线的历史 `as_of` 与对同一健康观察集与控制流的独立 fold 相等（同 #18；低于边界得 `BeyondRetention`，见 #43；控制流前缀落后的切面得 `BeyondRetention`，见 #80）。
+    - 健康中没有 `reach` 与 `tier`；`read_model(health)` 按任一不低于保留边界的历史 `as_of` 与对同一健康观察集与控制流的独立 fold 相等（同 #18；低于边界得 `BeyondRetention`，见 #43；某个成员走到 §8.4 健康不留旧值“会话”一条 `BeyondRetention` 分支的切面二者都得 `BeyondRetention`，见 #80）。
 39. **成交跨渠道计数**（§8.1、§8.3、§4.2）：以 fixture 上游让同一笔执行经推送、`submit` 回执、`list_fills` 取证命中、一次性 `read`、`backfill` 各到达一次，其间断线重连换流 epoch、核心重启一次：（对应 Q1/Q5）
     - 观察 J 中每次到达各有一条记录；`orders` 读模型与一个按 §8.1 规则独立写的参照 fold 都只计该执行一次，二者相等；
     - 两笔价格、数量、时间都相同而 `execution_id` 不同的执行计两笔；同一原生成交号在两个 `WriteScope` 下计两笔；
@@ -921,7 +921,7 @@
     - 阻塞头 `Undetermined` 时，以其订单键为 `target` 的撤单在该来源上同样被否决，阻塞头集合仍只有一条；
     - 已放行的撤单在重握手移除 `IdemKey` 后停在发出前门，到 `deadline` 记 `Expired`，从不发出。
 43. **健康与 `Halted` 跨保留与重启**（§2.4、§7.2 第 3 步、§8.4、§8.5）：（对应 Q28/Q32）
-    - 注入一串调用结果与会话变化后推进健康流的保留边界并执行压缩：每个键在边界之下恰留一条基线；`read_model(health)` 在压缩前后对任一 `as_of ≥ 边界` 相等；一个从边界订阅健康流的新消费者（cursor 为 `Start{边界}`），先收到各键基线、再收到边界起的记录，自行 fold 与读模型相等；`as_of` 低于边界得 `BeyondRetention`；
+    - 注入一串调用结果与会话变化后推进健康流的保留边界并执行压缩：每个键在边界之下恰留一条基线；`read_model(health)` 在压缩前后对任一 `as_of ≥ 边界` 相等，唯一的例外是某个成员走到 §8.4 健康不留旧值“会话”一条 `BeyondRetention` 分支的切面（压缩后得 `BeyondRetention`，见 #80）；一个从边界订阅健康流的新消费者（cursor 为 `Start{边界}`），先收到各键基线、再收到边界起的记录，自行 fold 与读模型相等；`as_of` 低于边界得 `BeyondRetention`；
     - 前导确认之前崩溃：该消费者在确认任何位置之前断连（或核心崩溃），重新挂接后再次先收到全部基线，按 `LogPosition` 去重后自行 fold 仍与读模型相等，没有一个安静的键丢失；只确认到中间某条基线就断连的，同样再次收到全部基线；确认到最后一条基线（或边界起的某条记录）之后断连，重新挂接只收到确认位置之后的记录，不再收到基线，也没有覆盖被删段的 `Gap{Delivery}`；
     - `Halted{Refused}` 后推进保留边界、再重启核心：集成仍 `Halted{Refused}`，不被拉起；一条以位置引用该 `IntegrationHalted` 的 `restart_integration` `Applied` 之后重启核心：集成进入 `Connecting`；不引用它的控制记录不解除；
     - 在 `IntegrationHalted` 与健康观察之间、在解除 `Applied` 与 `Connecting` 健康观察之间注入崩溃：重启后两者要么都在、要么都不在；解除事务提交之前 fixture 未收到握手；
@@ -982,6 +982,7 @@
 53. **撤单的输入约束**（§6.3 输入约束步与审批步、§7.6）：（对应 Q8/Q9）
     - 策略为 `(principal, WriteLaneKey, Cancel)` 给出 instrument 允许集合（含空集）、或给出名义阈值审批条件：规则文件不合法，按 §7.6 处理，不在运行期忽略；
     - 合法规则文件下，参数合规、目标子账户已枚举的 `Cancel` 通过输入约束步，不因没有 instrument 被否决；目标子账户未枚举时否决；审批为“总是”时送审、“从不”时直接通过；
+    - 审批为“从不”的 `Cancel` 自动通过、停在 lane 步（阻塞头集合非空，目标不是阻塞头的订单键）：有决定权的 principal 对它 `decide(Approve)` 与 `decide(Reject)` 都被拒，不 append Decision，单据仍 `AwaitingDecision`，放行的依据仍是审批步的 `Outcome`；`reload_config` 把该 `(principal, WriteLaneKey, Cancel)` 改为“总是”之后，单据按新规则停在审批步，这时的 `decide` 被接受；
     - 同一规则文件在两个实现里对同一组 `Cancel`、`Place`、`Close` 意图给出同一组放行与否决。
 54. **按主体投递与只投递项**（§8.1 公共 schema、§8.5 按主体投递、配额、一次性读）：以 fixture 上游与一条主体为 A、B 的报价流驱动：（对应 Q13/Q15/Q16）
     - 一个订阅以主体集 {A} 订该流：推送、回填、一次性读与回执写在该流上的 B 的记录都不投给它，A 的记录都投给它；该流上的 `Gap`、读结论记录与路由结论记录都投给它；同一订阅在该流上另有主体集 {A, B} 的项时每条记录只投递一次；
@@ -1087,6 +1088,7 @@
     - 启动第 3 步恰 append 一条采纳记录（控制流），带登记文件的内容 hash 与本实例的 `instance_id`，同一事务里有每个采纳的集成的初始会话健康观察（`Connecting`，或恢复的 `Halted`），每条都带本实例的 `instance_id`；在这一事务提交之前注入崩溃，二者皆无；`read_model(health, as_of)` 的 `as_of` 含整个这一事务时，列出的每个集成的会话值是这条初始观察；运行期修改登记文件：运行的集成、健康列出的集成都不变；
     - 分开的切面：上一实例里集成 X 为 `Established`、各流 `Live`，新实例第 3 步提交之后，以控制流位置含新采纳记录、健康流位置在 X 的初始观察之前的 `as_of` 读 `read_model(health, as_of)`：X 被列出，会话值为 `Unobserved`，各流为不带时刻的 `Disconnected`，不给上一实例的 `Established` 或 `Live`；同一 `as_of` 上从起点订阅控制流与健康流、按 §8.4 的规则自行 fold 的结果与之相等；对 `restart_integration` 采纳本实例尚未运行的 id，把 `Applied` 与它的 `Connecting` 分开的切面同样给出 `Unobserved`；
     - 反向分开的切面：新实例第 3 步提交、X 有了新实例的会话观察之后推进健康流的保留边界，使上一实例的 X 的会话观察被新实例的基线取代而删去；以控制流位置在新采纳记录之前、健康流位置不低于边界的 `as_of` 读 `read_model(health, as_of)`：得 `BeyondRetention`，不给 `Unobserved`，也不给新实例的值；压缩之前以同一 `as_of` 读，会话值是上一实例的最近一条；独立 fold 同样两个前缀的消费方得出同一结论；控制流前缀含新采纳记录的 `as_of` 在压缩前后结果相等；
+    - 无关的较新非成员键：实例 i 的采纳只列 X；下一实例 k 的登记文件删去 X、加入 W，k 第 3 步只采纳 W，X 没有带 k 的会话观察；推进健康流的保留边界越过 k 的第 3 步，使 W 的会话键基线带 k；以控制流位置在 i 的采纳之后、k 的采纳记录之前，健康流位置不低于边界的 `as_of` 读 `read_model(health, as_of)`：成员只有 X，X 的会话值是它带 i 的最近一条会话观察，与压缩前相等，不得 `BeyondRetention`；独立 fold 同样两个前缀的消费方得出同一值；
     - 同一文件同时加入 Y、删去 Z：`restart_integration(Y)` 的 `Applied` 带文件 hash 与本实例的 `instance_id`，与 Y 的 `Connecting` 健康观察同一事务，之后 Y 被拉起、握手，`health()` 同时列出 Y 与 Z（只采纳 Y 的条目）；`restart_integration(Z)`：`Rejected(UnknownIntegration)`，Z 本实例的运行不受影响；
     - 历史切面：在两个实例之间做上述改动，对每个实例内、`restart_integration(Y)` 之前与之后的控制流位置各读一次 `read_model(health, as_of)`：列出的集成恰为该位置之前最近一条采纳记录的 id 加其后带同一 `instance_id` 的 `Applied` 的 id；上一实例的 `restart_integration` `Applied` 不进入下一实例的采纳集合；从起点订阅控制流、按同一规则自行 fold 的结果与之相等；
     - 下次启动后 Z 不被拉起，`health()` 不列 Z；Z 的流记录、声明历史与订阅仍可读，核心没有为 Z 新 append 任何记录；新的 `read` 与供给项对 Z 得“来源未登记”；以只投递项订 Z 历史上声明过的流、以执行事实 selector 订 Z 历史上声明过的作用域都被接纳，从 `from` 起收到已 append 的记录；订 Z 从未声明过的流或作用域被拒；

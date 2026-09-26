@@ -403,7 +403,7 @@ IO 壳不知道单据的存在。
 
 **目录之外的 guard 是下游的决定者。** 目录与 STS 参数（§6.3）之外的任何规则（按策略、按组合、按外部模型的判断）由下游代码实现：一个 principal 订阅待决单据并经 `decide` 作决定（§8.5），或程序在 `Emit` 之前自己把关。其边界：
 
-- 它只在策略要求人工审批的单据上起作用，并占用该 `current_version` 唯一的一条 Decision（§6.3）：它批准后同一版本不能再由另一审批人决定，它否决则单据关闭。要“自动 guard + 人工审批”，它只作否决或 `SendBack`（`SendBack` 不是 Decision，不占这一版的决定），批准留给人工审批人；或由人工审批人参考它的输出作决定。它想改判一个已批准的版本，只能经 `SendBack` 退回草稿、由负责人 `Revise` 出新版本。
+- 它只在策略要求人工审批的单据上起作用：当前规则对该单据的 `(principal, WriteLaneKey, OperationKind)` 不要求人工时，它的 `decide` 被拒、不 append 任何记录（§6.3 审批步），规则改为要求人工之后才被接受。它占用该 `current_version` 唯一的一条 Decision（§6.3）：它批准后同一版本不能再由另一审批人决定，它否决则单据关闭。要“自动 guard + 人工审批”，它只作否决或 `SendBack`（`SendBack` 不是 Decision，不占这一版的决定），批准留给人工审批人；或由人工审批人参考它的输出作决定。它想改判一个已批准的版本，只能经 `SendBack` 退回草稿、由负责人 `Revise` 出新版本。
 - 它的判断在作出时一次成立，不随世界推进重算；目录检查会重算。
 - 它不能越过核心的否决：放行时依据有效性门与必要项照常生效（§6.3）。
 - 程序在自己 `Emit` 之前的把关只管它自己发出的意图，不是对所有来源的 guard。
@@ -538,7 +538,9 @@ trait Rule {
 - 是否需人工由策略按 `(principal, WriteLaneKey, OperationKind)` 给出：总是、从不，或“名义超过阈值 N 时”。第三种下，意图带 `notional` 且 ≤ N 则不需人工；带 `notional` 且 > N、或以 `quantity` 定量（不带 `notional`）则需人工。STS 不读观察，不估算以数量定量的单子值多少钱；估算属于敞口检查（§6.2），而不能比较时一律走人工是 fail-closed 的一侧。`Cancel` 既不带 `notional` 也不带 `quantity`，第三种条件对它无从判定，只能给“总是”或“从不”；给它第三种条件，规则文件不合法（§7.6），理由同输入约束步的适用范围。
 - 决定者按 `(principal, 动作种类)` 授权。
 - 另一笔过期未决独立处理。
-- **一个 `current_version` 至多一条 Decision** [设计]：`decide` 的接受判据是“该 `(ticket, current_version)` 尚无 Decision 记录”（C11 的待决集合版本即此）；已有 → `Conflict(AlreadyDecided)`。不要求人工时审批步只写 `Outcome`、不写 Decision，所以之后规则改为要求人工时，人的 `decide` 照常被接受（见“规则版本变更”）。
+- **`decide` 只在要求人工时被接受** [设计]：当前规则对该单据的 `(principal, WriteLaneKey, OperationKind)` 要求人工审批时，`decide` 才被接受；否则它被拒，不 append 任何记录，错误名由实现定（§8.5 单据组的错误）。这包括审批步已以 `Outcome` 自动通过、仍停在 lane 步的单据。之后规则改为要求人工时，人的 `decide` 照常被接受（见“规则版本变更”）。
+  - 理由：不要求人工时放行的依据是审批步的 `Outcome`，放行门不读 Decision（下文“放行门”第 3 项）；这时接受 `decide`，批准不起任何作用，否决却关闭一张规则已放行的单据，决定者就借此越过了“不要求人工”这条规则。下游决定者本就只在要求人工的单据上起作用（§6.2 目录之外的 guard）。
+- **一个 `current_version` 至多一条 Decision** [设计]：被接受的 `decide` 另以“该 `(ticket, current_version)` 尚无 Decision 记录”为判据（C11 的待决集合版本即此）；已有 → `Conflict(AlreadyDecided)`。不要求人工时审批步只写 `Outcome`、不写 Decision，所以之后规则改为要求人工时，这一版还没有 Decision，人的 `decide` 不得 `Conflict(AlreadyDecided)`。
 - 理由：决定之后单据可能仍停在 lane 步而版本不变，靠 `Closed` 挡不住同版本的第二条决定。
 
 **lane 步。** 阻塞头集合的定义与语义见 §6.4。
