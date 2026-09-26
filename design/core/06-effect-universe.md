@@ -908,8 +908,9 @@ venue 对我方写的响应是执行事实：C13 原始负载完整保留，执�
 | `Undetermined`，等待 `Active` | `ResolutionEvidence{Inconclusive}` | 下一渠道；渠道穷尽 → 停等（§6.6） |
 | `Undetermined`，等待 `Active` | `Attributed`（任一时刻到达） | 与 `Found` 同效 |
 | `Undetermined`，等待 `Active` | `abandon` 在在途取证完成后结果仍未知 | `Abandoned`（等待结束，结果仍未知） |
-| `Undetermined`，等待 `Abandoned` | `Found`/`Absent`（`Attributed`，或 principal 发起的 `retry_reconciliation`） | 补上结果；等待仍是 `Abandoned` |
-| `Undetermined`，等待 `Abandoned` | `ResolutionEvidence{Inconclusive}`（principal 发起的 `retry_reconciliation` 那一轮） | 什么都不变：等待仍是 `Abandoned`，结果仍未知；本轮下一渠道，渠道穷尽即停（§6.6） |
+| `Undetermined`，等待 `Abandoned`，结果仍未知 | `Found`/`Absent`（`Attributed`，或 principal 发起的 `retry_reconciliation`） | 补上结果；等待仍是 `Abandoned` |
+| `Undetermined`，等待 `Abandoned`，结果仍未知 | `ResolutionEvidence{Inconclusive}`（principal 发起的 `retry_reconciliation` 那一轮） | 什么都不变：等待仍是 `Abandoned`，结果仍未知；本轮下一渠道，渠道穷尽即停（§6.6） |
+| `Undetermined`，结果已确立（等待 `Finished`，或等待 `Abandoned` 而结果已补上） | 结果确立之后才完成的取证调用的 `ResolutionEvidence`（任一结果） | 只 append 作审计：结果与等待都不变，不推进任何渠道 |
 
 ### 与集成操作集的关系
 

@@ -72,7 +72,7 @@ flowchart LR
     RM["读模型（只读 fold；含 sources：执行 J 声明版本的 fold）"]
     TK["单据（TicketAction）→ STS 链"]
     CTL["控制面（控制记录 Applied / Rejected）"]
-    IOR["控制面授权 → 该尝试的在途取证调用先完成 → IO 壳 append Abandoned{attempt, principal, note, rule_version}（lane 流）→ 尝试移出阻塞头集合（D9.3）"]
+    IOR["控制面授权 → 该尝试的在途取证调用先完成 → 一个事务里重查，结果仍未知才 append Abandoned{attempt, principal, note, rule_version}（否则不写，Rejected(NotUndetermined)）；Abandoned 在 lane 流 → 尝试移出阻塞头集合（D9.3）"]
     RRO["控制面 append ReconciliationReopened{Manual(principal)} → IO 壳重开一轮取证（D6.2）"]
     HL["健康读模型"]
   end
@@ -111,7 +111,9 @@ flowchart TB
   AB --> CHK{"授权 ∧ r 处于 Undetermined、等待 Active、结果未确立？"}
   CHK -->|"否"| RJ["Unauthorized（安全事件）/ Rejected(NotUndetermined)"]
   CHK -->|"是"| INF["r 的在途取证调用先完成（各自照常记 ResolutionEvidence 或 Gap{Channel}，照常计数）"]
-  INF --> AN["IO 壳 append Abandoned{r, principal, note, rule_version}（r 所在 lane 的执行事实流）<br/>此后不再自动询问：SessionRestored 不重开它"]
+  INF --> RCK{"一个事务里重查（与 append 同一事务）：r 的结果仍未知？"}
+  RCK -->|"否：在途调用已给出结果"| RJN["Rejected(NotUndetermined)（不写）"]
+  RCK -->|"是"| AN["IO 壳 append Abandoned{r, principal, note, rule_version}（r 所在 lane 的执行事实流）<br/>此后不再自动询问：SessionRestored 不重开它"]
   AN --> OUT["r 移出阻塞头集合，集合空才解除 lane；不再发起任何写<br/>r 的 basis 引用登记随之解除<br/>下游显示“已放弃跟踪，结果未知”"]
   AN -.->|"结果仍可补上，不是门"| LATE["被动的 Attributed 来源证据可随时到达并确立结果<br/>retry_reconciliation(r) 仍可再问一轮"]
 ```

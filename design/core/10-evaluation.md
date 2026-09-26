@@ -498,12 +498,13 @@
 
 **受控停止**（§7.2 受控停止、生命周期表）。已定（证伪 §10.4 #35；验收 §10.5 #81）。
 
-- 选中：OS 的停止请求按生命周期从内到外结束本实例：关闭新工作入口与消费方会话 → 程序 `Unload`（活动集合不变）→ 集成会话以“在途调用恰好完成一次”结束 → OS 确认全部子进程退出、清空进程表 → 写实例结束锚点 → 释放 fence。有进程得不到确认时不写结束锚点、不释放 fence。
-- Q 场景后果：Q20/Q21：受控停止后没有孤儿进程、没有无后继的 `SendBarrier`、每个在途调用都有结果；继任实例能区分上一实例是受控停止还是崩溃。
+- 选中：OS 的停止请求按生命周期从内到外结束本实例：关闭新工作入口与消费方会话 → 程序 `Unload`（活动集合不变）→ 集成会话以“在途调用恰好完成一次”结束 → OS 确认全部子进程退出、清空进程表 → 写实例结束锚点 → 释放 fence。有进程得不到确认，或其余各步都已完成时停止之前已发出的原生 op 交出仍没有子系统的回答，停止以失败报告：不写结束锚点、不释放 fence，后者也不因没有回答而 append `ProgramHalted`。
+- Q 场景后果：Q20/Q21：停止成功时没有孤儿进程、没有无后继的 `SendBarrier`、每个在途调用都有结果；继任实例能区分上一实例是受控停止还是崩溃。
 - 不选：
   - 停止即退出、交给继任者的崩溃恢复：外层结束时内层仍活着，每次停止都产生孤儿与 `Undetermined(CrashWindow)`；
   - 以控制动作触发停止：停止须在控制面也关闭之后完成，同一 OS 用户本就能终止核心（H7）；
   - 等在途调用自然返回：没有上界；
+  - 为没有回答的原生 op 交出设核心超时，记为联系不上：核心成了子系统结论的作者，还留下挡住自动装载的 `ProgramHalted`；
   - 停止时为每个集成另写会话健康观察：实例结束锚点已是各集成运行的结束，下一实例第 3 步写新的初始状态。
 - 证据：§0.1“权威源头与生命周期”；H10。
 
@@ -619,7 +620,7 @@
 
 **可选行情派生计算的接入**（§4.5、§8.7）。已定（验收 §10.5 #7；子系统验收其 §10）。
 
-- 选中：单一读侧组合子 `Pooled` + 注册表黑盒原生 op；子系统独立进程、独立文档。原生 op 由控制面 `install_native_op` / `remove_native_op` 安装与移除，`artifact` 是 Alice 写的原生计算制品目录里的文件，`Applied` 记下它的引用与内容 hash；已安装 op 集合是控制流上这些 `Applied` 的 fold，声明校验读它；活动成员引用的 op 不能移除，同名 op 不以安装覆盖；子系统在不在是实例的运行期事实（§8.7 原生 op 的安装）。每次拉起引用它的宿主之前，核心重读制品、核对 hash，只把核对过的内容交给子系统，不符即 `ProgramHalted{NativeArtifactUnavailable}`；这次交出只属于那次宿主执行，未被子系统接受即 `ProgramHalted{LoadRejected(NativeHandoverFailed)}`（§8.7 原生 op 的执行）。
+- 选中：单一读侧组合子 `Pooled` + 已安装 op 集合里的黑盒原生 op（不是新节点种类）；子系统独立进程、独立文档。原生 op 由控制面 `install_native_op` / `remove_native_op` 安装与移除，`artifact` 是 Alice 写的原生计算制品目录里的文件，`Applied` 记下它的引用与内容 hash；已安装 op 集合是控制流上这些 `Applied` 的 fold，声明校验读它；活动成员引用的 op 不能移除，同名 op 不以安装覆盖；子系统在不在是实例的运行期事实（§8.7 原生 op 的安装）。每次拉起引用它的宿主之前，核心重读制品、核对 hash，只把核对过的内容交给子系统，不符即 `ProgramHalted{NativeArtifactUnavailable}`；这次交出只属于那次宿主执行，未被子系统接受即 `ProgramHalted{LoadRejected(NativeHandoverFailed)}`（§8.7 原生 op 的执行）。
 - Q 场景后果：Q24/Q30：含 `Pooled` 的程序无子系统时装载期被拒，其余程序不受影响；op 的输出是普通节点值，经 `outputs` 导出后与普通节点导出的程序流同形。
 - 不选：
   - 把原生计算做成新节点种类：程序代数随算法膨胀（红线，§4.3）；
@@ -799,10 +800,11 @@
     - 在 `EffectRequest` 提交后、`EffectResponse` 持久化前崩溃，重启后每条请求恰得一条 `EffectResponse`，写请求至多一张 `Draft`；
     - 读结论记录被压缩后重启，不重派（§9.2 #21）；
     - 替换时新程序不接受旧 `state_version`：同一 `Applied` 事务显式记录 `ProgramReset{Replace}`，而非静默丢失；`Output` 交出不被本成员接受的 `state_version` 按 trap 处理（#86），`Load` 从不因版本 `Reset`。
-17. **取证记录矩阵**（§6.5、§6.6）：任一取证渠道的一次 venue 交互，按结果恰产生：（对应 Q3/Q27）
+17. **取证记录矩阵**（§6.5、§6.6）：任一取证渠道的一次 venue 交互，按结果恰产生（下列各项里的“一条 `ResolutionEvidence`”都是被问尝试自己这条渠道的证据）：（对应 Q3/Q27）
     - `Found` → 该回应的观察记录（观察 J：回应含订单状态时订单状态一条，及每笔可识别执行一条成交记录，§8.1；带 `provenance: Reconciliation{AttemptRef, channel}`，`attribution` 按各条自己的关联证据）+ 一条 `ResolutionEvidence{Found{observation, evidence}}`（执行 J，含 `Evidence`：契约载荷与原始负载），同一事务；
     - `Absent`/`Inconclusive` → 仅一条 `ResolutionEvidence`；
     - `Unavailable` → 仅一条 `Gap{Channel}`，不推进渠道；
+    - 同一回应里带 `attribution: FromAttempt(r)` 的记录归到别的、结果仍未知的尝试 r 时，r 的 `ResolutionEvidence{r, Attributed, Found}` 按 §6.6 被动渠道 `Attributed` 在同一事务 append，它是 r 的证据，不计入上面被问尝试的那一条；
     - 该回应的观察记录落到保留边界下后，执行 J 的 `Evidence` 仍可读。
 18. **读模型可重建**（§4.4、§8.5）：`orders`、`positions`、`lanes`、`health` 的任一 `Snapshot{value, as_of, gaps}` 与对同一原始记录集（≤ `as_of`，含保留边界之下按键保留的基线与覆盖检查点）的独立 fold 结果相等；`gaps` 只列 `Gap{origin: Source}`；`positions` 不含从成交推算的值；`tickets`、`subscriptions` 带历史 `as_of` 的请求被拒；`as_of` 与订阅 cursor 可比对；断连重连后重复只出现在未确认区间，且按 `LogPosition` 去重后与不断连时结果相同。（对应 Q29/Q31）
 19. **秒级负载不落后**（§4.3、§7.4、§7.1）：以 Q24 沟通场景规模（约 1500 流选 15、24 h 逐秒）构造 Q22 负载：（对应 Q22、B1）
@@ -1089,6 +1091,7 @@
     - 有在途写、在途读、在途 `Advance` 时停止：在途写恰得 `NoResponse`（→ `Undetermined`）、在途读恰得 `Unavailable`，各与计数同事务；程序最近的 `Checkpoint` 与 cursor 同事务；进程表清空、实例表本行有结束锚点；OS 进程列表中没有该实例拉起的进程；
     - 停止后启动新实例：第 1 步没有要回收的行，第 2 步没有无后继的 `SendBarrier`，活动集合与停止前相同，受控停止前处于 `Halted` 的集成仍 `Halted`；
     - 注入一个不响应退出请求且无法被终止的子进程：停止以失败报告，实例表没有结束锚点，fence 未释放；
+    - fixture 子系统对停止之前已发出的交出始终不回答：第 2–4 步照常完成，停止以失败报告，实例表没有结束锚点，fence 未释放，控制流上没有该程序新的 `ProgramHalted`；之后外力结束实例，继任实例第 1 步取得 fence，第 5 步照常判定装载该程序；
     - 停止开始之后到达的消费方连接被拒绝，已有消费方会话被关闭。
 82. **程序的活动集合与失败抑制**（§8.6、§8.5 `load_program`/`unload_program`；§8.6 程序流的 epoch）：（对应 Q25）
     - 超预算与 trap：同一事务 `ProgramHalted` + `ProgramFailed`（`ProgramHalted` 在控制流上），之后宿主被终止；核心重启后该程序不被装载；一条以位置引用该 `ProgramHalted` 的 `load_program` `Applied` 之后重新装载，从最近 `Checkpoint` `Load`；不引用它的控制记录不解除；

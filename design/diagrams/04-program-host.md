@@ -96,7 +96,7 @@ stateDiagram-v2
   Running --> Running : Advance 循环（D4.1）
   Running --> Halted : 超预算 / Output 的 checkpoint 版本不在本成员接受的集合内（视同 trap）/ trap（宿主异常退出）→ Output 不落，同事务 ProgramHalted + ProgramFailed，提交后终止宿主、OS 确认退出后清除登记
   Running --> Stopped : 受控停止第 2 步 → Unload；活动集合、cursor 与引用不变，下一实例第 5 步重新 Load
-  Loading --> Stopped : 受控停止第 1 步：不再开始新的装载步骤，已发出的步骤在实例结束锚点之前等到结论；交出已被接受（含停止之后才到的接受）而宿主还没有拉起的不再拉起，这次宿主执行就此结束（核心确认）；已发出的步骤成立而下一步尚未开始的不再往下走；受控停止本身不 append ProgramHalted（已发出的步骤得出失败的走 Loading → Halted），活动集合、cursor 与引用不变，下一实例第 5 步重新判定装载
+  Loading --> Stopped : 受控停止第 1 步：不再开始新的装载步骤，已发出的步骤在实例结束锚点之前等到结论（不挡第 2–4 步）；交出已被接受（含停止之后才到的接受）而宿主还没有拉起的不再拉起，这次宿主执行就此结束（核心确认）；已发出的步骤成立而下一步尚未开始的不再往下走；受控停止本身不 append ProgramHalted（已发出的步骤得出失败的走 Loading → Halted），活动集合、cursor 与引用不变，下一实例第 5 步重新判定装载。第 2–4 步都已完成时交出仍没有回答的不走本转移：停止以失败报告（不写结束锚点、不释放 fence、不因没有回答而 append ProgramHalted，核心不替子系统判定超时），实例被外力结束之后，下一实例第 5 步照常判定装载
   Running --> DRAIN : unload_program，或替换（对该 id 再 load_program）生效：停止调度 Advance，等在途输出事务提交或确知不提交，Unload，OS 确认退出、清除行；此时还没有 Applied
   DRAIN --> Unloaded : 然后 append unload_program 的 Applied：离开活动集合，程序订阅（全部 cursor 与观察输入的订阅项）结束，Checkpoint cursor 引用解除（Checkpoint 只作记录保留）；程序流不写记录，epoch 不结束
   DRAIN --> Loading : 然后 append 替换的 Applied（新程序值已通过结构校验）：同一条结束旧成员、开始新成员，以值记下新成员的输出契约；程序订阅留下，principal 换成新成员的装载 principal。沿用（非 cold_start、开始旧成员的 Applied 所记的输出契约与新成员的相同，且无旧 Checkpoint 或新程序接受其 state_version）：共有输入的 cursor 与引用原样沿用，订阅项只在主体集与用途也相同、且不是被拒的项时沿用、否则同事务结束旧项并建立与接纳新项（被拒的项从不沿用，任何替换都重新接纳它）；执行事实流按流：新旧 facts 都选中的流 cursor 沿用，只有新成员选中的按其 FactDecl 的起点建立，只有旧成员选中的结束；未确认的投递缺口随 cursor 沿用，Applied 记下沿用的 Checkpoint，程序流接着原 epoch；不沿用：同事务 ProgramReset{cold_start 为 Operator，否则 Replace}、新成员的每条程序流开新 epoch（Gap{Source, program_upgrade}）、项与 cursor 按起点重建（缺口随重建的 cursor 删除）、旧引用解除。新成员有最终被拒的项，或所引用的集成来源都已有声明版本
