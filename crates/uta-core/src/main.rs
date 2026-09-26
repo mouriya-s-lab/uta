@@ -96,19 +96,29 @@ fn run() -> Exit {
         }
     };
     let stopped = runtime.block_on(async {
+        // Listeners are installed before the core announces readiness: a stop
+        // request that arrives after "core ready" must reach the controlled
+        // stop, not the OS default action.
+        let mut signals = match StopSignals::install() {
+            Ok(signals) => signals,
+            Err(e) => {
+                error!("cannot listen for stop signals ({e}); stopping now");
+                return core.stop().await.map(|()| Exit::Failure);
+            }
+        };
         reclaim_orphans(&core).await;
         info!("core ready");
-        stop_requested().await;
+        signals.recv().await;
         info!("controlled stop");
-        core.stop().await
+        core.stop().await.map(|()| Exit::Stopped)
     });
     drop(runtime);
 
     match stopped {
-        Ok(()) => match lock.release() {
+        Ok(exit) => match lock.release() {
             Ok(()) => {
                 info!("instance ended; fence released");
-                Exit::Stopped
+                exit
             }
             Err(e) => {
                 error!("end anchor written but releasing the lock failed: {e}");
@@ -153,31 +163,43 @@ async fn reclaim_orphans(core: &CoreHandle) {
     }
 }
 
-/// Resolves when the OS asks the core to stop (terminal interrupt or
-/// service-manager termination).
-async fn stop_requested() {
+/// The OS stop requests the core honours: terminal interrupt, and on Unix the
+/// service manager's SIGTERM. Registered when constructed.
+#[derive(Debug)]
+struct StopSignals {
     #[cfg(unix)]
-    {
-        use tokio::signal::unix::{SignalKind, signal};
-        match signal(SignalKind::terminate()) {
-            Ok(mut term) => {
-                tokio::select! {
-                    _ = tokio::signal::ctrl_c() => {}
-                    _ = term.recv() => {}
-                }
-            }
-            Err(e) => {
-                warn!("cannot listen for SIGTERM ({e}); only SIGINT stops the core");
-                wait_ctrl_c().await;
-            }
-        }
-    }
-    #[cfg(not(unix))]
-    wait_ctrl_c().await;
+    interrupt: tokio::signal::unix::Signal,
+    #[cfg(unix)]
+    terminate: tokio::signal::unix::Signal,
+    #[cfg(windows)]
+    ctrl_c: tokio::signal::windows::CtrlC,
 }
 
-async fn wait_ctrl_c() {
-    if let Err(e) = tokio::signal::ctrl_c().await {
-        warn!("cannot listen for the interrupt signal ({e}); stopping now");
+impl StopSignals {
+    #[cfg(unix)]
+    fn install() -> std::io::Result<Self> {
+        use tokio::signal::unix::{SignalKind, signal};
+        Ok(Self {
+            interrupt: signal(SignalKind::interrupt())?,
+            terminate: signal(SignalKind::terminate())?,
+        })
+    }
+
+    #[cfg(windows)]
+    fn install() -> std::io::Result<Self> {
+        Ok(Self {
+            ctrl_c: tokio::signal::windows::ctrl_c()?,
+        })
+    }
+
+    /// Resolves at the first stop request.
+    async fn recv(&mut self) {
+        #[cfg(unix)]
+        tokio::select! {
+            _ = self.interrupt.recv() => {}
+            _ = self.terminate.recv() => {}
+        }
+        #[cfg(windows)]
+        self.ctrl_c.recv().await;
     }
 }
