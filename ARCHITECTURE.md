@@ -175,5 +175,5 @@ flowchart TB
 
 - `cargo test --workspace`：存储事务（回滚无痕、重开可见、格式拒绝）、peer 语义（恰好完成一次、协议违规、`Responder` 被丢弃时的回复）、真实子进程上的通道与凭据交付，以及孤儿回收。
 - `cargo xtask check-deps`：第 3 节的依赖方向。
-- CI（`.github/workflows/ci.yml`）在 Linux 和 Windows 上跑 build、test、clippy、check-deps，另有一个 job 用 1.89 检查 MSRV。
-- 守护进程的冒烟：两个实例竞争同一状态根、受控停止后再启动、格式版本拒绝。命令见本切片的 PR。
+- CI（`.github/workflows/ci.yml`）在 Linux 和 Windows 上跑 rustfmt、build、test、clippy、check-deps，另有一个 job 用 1.89 检查 MSRV。Windows 上的通道、句柄继承和进程终止只在 CI 的 Windows job 上实际运行。
+- 守护进程的运行期测试（`crates/uta-core/tests/daemon.rs`）直接起真实二进制，覆盖：两个实例竞争同一状态根、SIGTERM 受控停止后再启动、SIGKILL 之后留下没有结束锚点的实例、启动时回收孤儿、格式版本拒绝。真实子进程上的通道测试在 `crates/uta-testkit/tests/session_channel.rs`。

@@ -104,12 +104,15 @@ impl Daemon {
                 panic!("uta-core did not exit within {timeout:?}:\n{}", self.logs());
             }
 
-            match self.stderr_rx.recv_timeout(remaining.min(STDERR_POLL_INTERVAL)) {
+            match self
+                .stderr_rx
+                .recv_timeout(remaining.min(STDERR_POLL_INTERVAL))
+            {
                 Ok(line) => self.stderr_lines.push(line),
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
-                Err(mpsc::RecvTimeoutError::Disconnected) => thread::sleep(
-                    remaining.min(STDERR_POLL_INTERVAL),
-                ),
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    thread::sleep(remaining.min(STDERR_POLL_INTERVAL))
+                }
             }
         }
     }
@@ -203,12 +206,18 @@ fn second_instance_is_refused_while_first_holds_the_fence() {
         second.logs()
     );
     assert!(
-        second.logs().contains("another UTA core instance holds the lock"),
+        second
+            .logs()
+            .contains("another UTA core instance holds the lock"),
         "second instance should report the held fence:\n{}",
         second.logs()
     );
     assert!(
-        first.child.try_wait().expect("check first daemon").is_none(),
+        first
+            .child
+            .try_wait()
+            .expect("check first daemon")
+            .is_none(),
         "the first daemon must remain running when the second is refused"
     );
 
@@ -347,7 +356,10 @@ fn startup_reclaims_orphan_process_and_clears_its_row() {
             .expect("spawn live sleep child"),
     };
     let orphan_id = observe_until_running(orphan.child.id());
-    assert!(is_running(orphan_id), "sleep child should be live before startup");
+    assert!(
+        is_running(orphan_id),
+        "sleep child should be live before startup"
+    );
 
     let mut store = uta_store::Store::open(&db).expect("open store to seed crash state");
     let crashed_instance = store
@@ -362,7 +374,9 @@ fn startup_reclaims_orphan_process_and_clears_its_row() {
         .expect("register live child under the crashed instance")
         .into_inner();
     drop(crashed_instance);
-    store.close().expect("close seeded store without ending its instance");
+    store
+        .close()
+        .expect("close seeded store without ending its instance");
 
     let mut daemon = Daemon::spawn(home.path());
     daemon.wait_ready();
@@ -451,7 +465,10 @@ fn newer_database_format_is_refused_without_inserting_an_instance() {
     let db = db_path(home.path());
     let raw = Connection::open(&db).expect("open database to set future format");
     let before = instance_count(&raw);
-    assert_eq!(before, 1, "normal daemon run should create exactly one instance");
+    assert_eq!(
+        before, 1,
+        "normal daemon run should create exactly one instance"
+    );
     let changed = raw
         .execute(
             "UPDATE schema_meta SET format_version = 99 WHERE singleton = 1",

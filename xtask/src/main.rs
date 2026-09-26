@@ -112,7 +112,8 @@ fn check_dependencies() -> Result<(), String> {
 
             if let Some(target) = workspace_dependency_target(dependency, &packages)?
                 && target.name != package.name
-                && !allowed_dependencies.is_some_and(|allowed| allowed.contains(&target.name.as_str()))
+                && !allowed_dependencies
+                    .is_some_and(|allowed| allowed.contains(&target.name.as_str()))
             {
                 forbidden_edges.insert((package.name.clone(), target.name.clone()));
             }
@@ -123,10 +124,14 @@ fn check_dependencies() -> Result<(), String> {
     if !missing_allow_list.is_empty() || !forbidden_edges.is_empty() {
         let mut lines = vec!["dependency policy violations:".to_owned()];
         for package in missing_allow_list {
-            lines.push(format!("  workspace package `{package}` is missing from the allow-list"));
+            lines.push(format!(
+                "  workspace package `{package}` is missing from the allow-list"
+            ));
         }
         for (from, to) in forbidden_edges {
-            lines.push(format!("  forbidden workspace dependency edge: {from} -> {to}"));
+            lines.push(format!(
+                "  forbidden workspace dependency edge: {from} -> {to}"
+            ));
         }
         return Err(lines.join("\n"));
     }
@@ -194,10 +199,12 @@ fn workspace_dependency_target<'a>(
         }
         return Ok(None);
     };
-    let manifest_dir = package
-        .manifest_path
-        .parent()
-        .ok_or_else(|| format!("invalid cargo metadata: package `{}` has no manifest directory", package.name))?;
+    let manifest_dir = package.manifest_path.parent().ok_or_else(|| {
+        format!(
+            "invalid cargo metadata: package `{}` has no manifest directory",
+            package.name
+        )
+    })?;
 
     Ok((dependency_path == manifest_dir).then_some(package))
 }

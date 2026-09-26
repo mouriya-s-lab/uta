@@ -358,12 +358,7 @@ where
         messages: inbound_rx,
     };
     let task = PeerTask {
-        future: Box::pin(run_peer(
-            framed,
-            command_rx,
-            responder_commands,
-            messages,
-        )),
+        future: Box::pin(run_peer(framed, command_rx, responder_commands, messages)),
     };
     (handle, inbound, task)
 }
@@ -608,10 +603,18 @@ fn parse_frame(frame: &Bytes) -> Result<ParsedFrame, ProtocolViolation> {
     let message: RawMessage<'_> = serde_json::from_str(text)
         .map_err(|error| ProtocolViolation::new(format!("malformed JSON-RPC message: {error}")))?;
     if message.jsonrpc != Some("2.0") {
-        return Err(ProtocolViolation::new("message is missing JSON-RPC version 2.0"));
+        return Err(ProtocolViolation::new(
+            "message is missing JSON-RPC version 2.0",
+        ));
     }
 
-    match (message.method, message.id, message.params, message.result, message.error) {
+    match (
+        message.method,
+        message.id,
+        message.params,
+        message.result,
+        message.error,
+    ) {
         (Some(method), id, params, None, None) => {
             let id = id
                 .map(|id| {
@@ -712,11 +715,7 @@ fn encode_response(id: &Bytes, response: ResponseBody) -> Bytes {
             encoded.push(b'}');
         }
         ResponseBody::Error(error) => {
-            let error = if error
-                .data
-                .as_ref()
-                .is_some_and(|data| !is_raw_json(data))
-            {
+            let error = if error.data.as_ref().is_some_and(|data| !is_raw_json(data)) {
                 RpcError {
                     code: -32603,
                     message: "invalid JSON-RPC error data".to_owned(),

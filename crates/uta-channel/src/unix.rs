@@ -43,7 +43,10 @@ impl Channel {
                 .as_ref()
                 .expect("unregistered channel owns its stream")
                 .set_nonblocking(true)?;
-            let stream = self.stream.take().expect("unregistered channel owns its stream");
+            let stream = self
+                .stream
+                .take()
+                .expect("unregistered channel owns its stream");
             self.registered = Some(tokio::net::UnixStream::from_std(stream)?);
         }
         Ok(self.registered.as_mut().expect("channel is registered"))
@@ -275,6 +278,9 @@ mod tests {
     #[test]
     fn credential_read_preserves_bytes_across_buffer_growth() {
         let source: Vec<u8> = (0..10_000u32).map(|index| index as u8).collect();
-        assert_eq!(&read_credential(&source[..]).unwrap()[..], source.as_slice());
+        assert_eq!(
+            &read_credential(&source[..]).unwrap()[..],
+            source.as_slice()
+        );
     }
 }

@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use uta_base::{IntegrationId, ProcessRole};
-use uta_store::{InstanceEnd, OpenError, Store, TxError, UnixMillis, FORMAT_VERSION};
+use uta_store::{FORMAT_VERSION, InstanceEnd, OpenError, Store, TxError, UnixMillis};
 
 fn db(dir: &tempfile::TempDir) -> std::path::PathBuf {
     dir.path().join("uta.db")
@@ -13,7 +13,10 @@ fn db(dir: &tempfile::TempDir) -> std::path::PathBuf {
 #[tokio::test]
 async fn process_rows_of_an_earlier_instance_are_cleared_only_after_os_exit() {
     let dir = tempfile::tempdir().unwrap();
-    let mut child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+    let mut child = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .unwrap();
     let process = uta_proc::observe(child.id()).expect("live child is observable");
     let role = ProcessRole::Integration(IntegrationId::parse("fixture").unwrap());
 
@@ -27,7 +30,10 @@ async fn process_rows_of_an_earlier_instance_are_cleared_only_after_os_exit() {
         .unwrap()
         .into_inner();
     assert!(
-        store.processes_of_other_instances(&first).unwrap().is_empty(),
+        store
+            .processes_of_other_instances(&first)
+            .unwrap()
+            .is_empty(),
         "an instance's own rows are not orphans"
     );
     drop(first); // crash: no end anchor
@@ -43,14 +49,21 @@ async fn process_rows_of_an_earlier_instance_are_cleared_only_after_os_exit() {
     assert_eq!(orphans[0].process, process);
     assert_eq!(orphans[0].role, role);
 
-    let exited = uta_proc::reclaim(process, Duration::from_millis(200)).await.unwrap();
+    let exited = uta_proc::reclaim(process, Duration::from_millis(200))
+        .await
+        .unwrap();
     assert!(!uta_proc::is_running(process));
     let _ = child.wait();
     store
         .transact(|tx| tx.processes().clear(exited))
         .unwrap()
         .into_inner();
-    assert!(store.processes_of_other_instances(&second).unwrap().is_empty());
+    assert!(
+        store
+            .processes_of_other_instances(&second)
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[test]
@@ -111,7 +124,11 @@ fn an_aborted_transaction_leaves_no_trace() {
         .transact(|tx| tx.instances().begin(UnixMillis::now()))
         .unwrap()
         .into_inner();
-    assert_eq!(first.id().get(), 1, "the aborted instance row must not exist");
+    assert_eq!(
+        first.id().get(),
+        1,
+        "the aborted instance row must not exist"
+    );
     assert!(store.previous_instance(&first).unwrap().is_none());
 }
 

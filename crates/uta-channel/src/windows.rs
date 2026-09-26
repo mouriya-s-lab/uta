@@ -25,15 +25,15 @@ use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
     CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
     EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess, GetExitCodeProcess, INFINITE,
-    InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
-    PROCESS_INFORMATION, STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute,
-    WaitForSingleObject,
+    InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
+    PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROCESS_INFORMATION, STARTUPINFOEXW, TerminateProcess,
+    UpdateProcThreadAttribute, WaitForSingleObject,
 };
 use zeroize::Zeroizing;
 
 use crate::{
-    ChildProcess, ChildSpec, Credential, Inherited, SessionChannel, Spawned, CREDENTIAL_ENV,
-    SESSION_CHANNEL_ENV,
+    CREDENTIAL_ENV, ChildProcess, ChildSpec, Credential, Inherited, SESSION_CHANNEL_ENV,
+    SessionChannel, Spawned,
 };
 
 /// Capacity of each in-memory duplex and of each pump's transfer buffer.
@@ -45,7 +45,11 @@ static INHERITED_TAKEN: AtomicBool = AtomicBool::new(false);
 pub(super) fn spawn(spec: &ChildSpec, credential: Credential) -> io::Result<Spawned> {
     let application = wide_nul(spec.program.as_os_str())?;
     let mut command_line = command_line(spec.program.as_os_str(), &spec.args)?;
-    let current_dir = spec.current_dir.as_deref().map(|dir| wide_nul(dir.as_os_str())).transpose()?;
+    let current_dir = spec
+        .current_dir
+        .as_deref()
+        .map(|dir| wide_nul(dir.as_os_str()))
+        .transpose()?;
 
     let (child_read, core_write) = create_pipe(0)?;
     let (core_read, child_write) = create_pipe(0)?;
@@ -110,7 +114,10 @@ pub(super) fn spawn(spec: &ChildSpec, credential: Credential) -> io::Result<Spaw
     drop(child_write);
     drop(child_credential);
 
-    let process = Process { handle: process_handle, pid: info.dwProcessId };
+    let process = Process {
+        handle: process_handle,
+        pid: info.dwProcessId,
+    };
     let delivered = deliver_credential(core_credential, credential)
         .and_then(|()| Channel::new(File::from(core_read), File::from(core_write)));
     match delivered {
@@ -228,7 +235,12 @@ fn create_pipe(size: u32) -> io::Result<(OwnedHandle, OwnedHandle)> {
         return Err(io::Error::last_os_error());
     }
     // SAFETY: CreatePipe succeeded and returned two fresh handles we own.
-    Ok(unsafe { (OwnedHandle::from_raw_handle(read), OwnedHandle::from_raw_handle(write)) })
+    Ok(unsafe {
+        (
+            OwnedHandle::from_raw_handle(read),
+            OwnedHandle::from_raw_handle(write),
+        )
+    })
 }
 
 /// Replaces a non-inheritable handle with an inheritable duplicate.
@@ -316,7 +328,10 @@ fn wide_nul(value: &OsStr) -> io::Result<Vec<u16>> {
 }
 
 fn nul_error() -> io::Error {
-    io::Error::new(io::ErrorKind::InvalidInput, "value contains a NUL character")
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        "value contains a NUL character",
+    )
 }
 
 const QUOTE: u16 = b'"' as u16;
@@ -400,7 +415,9 @@ fn environment_block(
         .into_iter()
         .map(|(key, value)| (key.encode_wide().collect(), value.encode_wide().collect()))
         .filter(|(key, _): &(Vec<u16>, Vec<u16>)| {
-            !overrides.iter().any(|(name, _)| key_order(key).eq(key_order(name)))
+            !overrides
+                .iter()
+                .any(|(name, _)| key_order(key).eq(key_order(name)))
         })
         .collect();
     entries.extend(overrides);
@@ -462,7 +479,12 @@ impl Channel {
                 return Err(error);
             }
         };
-        Ok(Self { inbound, outbound, _reader: reader, _writer: writer })
+        Ok(Self {
+            inbound,
+            outbound,
+            _reader: reader,
+            _writer: writer,
+        })
     }
 }
 
@@ -625,7 +647,10 @@ mod tests {
 
     #[test]
     fn command_line_round_trips_msvc_quoting() {
-        assert_eq!(line(r"C:\Program Files\a.exe", &[]), r#""C:\Program Files\a.exe""#);
+        assert_eq!(
+            line(r"C:\Program Files\a.exe", &[]),
+            r#""C:\Program Files\a.exe""#
+        );
         assert_eq!(line("a", &["plain", ""]), r#""a" plain """#);
         assert_eq!(line("a", &["with space"]), r#""a" "with space""#);
         assert_eq!(line("a", &[r"dir\"]), r#""a" dir\"#);
@@ -644,7 +669,10 @@ mod tests {
     fn environment_block_replaces_channel_vars_case_insensitively() {
         let vars = vec![
             (OsString::from("zeta"), OsString::from("1")),
-            (OsString::from("uta_session_channel"), OsString::from("stale")),
+            (
+                OsString::from("uta_session_channel"),
+                OsString::from("stale"),
+            ),
             (OsString::from("Alpha"), OsString::from("2")),
         ];
         let block = environment_block(vars, "10,11", "12").unwrap();
@@ -653,7 +681,12 @@ mod tests {
         let entries: Vec<&str> = text.split('\0').collect();
         assert_eq!(
             entries,
-            ["Alpha=2", "UTA_CREDENTIAL=12", "UTA_SESSION_CHANNEL=10,11", "zeta=1"]
+            [
+                "Alpha=2",
+                "UTA_CREDENTIAL=12",
+                "UTA_SESSION_CHANNEL=10,11",
+                "zeta=1"
+            ]
         );
     }
 

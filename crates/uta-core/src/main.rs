@@ -145,7 +145,10 @@ async fn reclaim_orphans(core: &CoreHandle) {
         };
         match core.clear_process(exited).await {
             Ok(()) => info!(pid = row.process.pid(), instance = %row.instance, "orphan reclaimed"),
-            Err(e) => error!(pid = row.process.pid(), "clearing the process row failed: {e}"),
+            Err(e) => error!(
+                pid = row.process.pid(),
+                "clearing the process row failed: {e}"
+            ),
         }
     }
 }

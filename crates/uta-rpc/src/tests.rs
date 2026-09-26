@@ -11,14 +11,11 @@ use serde::{Serialize, Serializer};
 use tokio::io::{AsyncRead, AsyncWrite, DuplexStream, ReadBuf, duplex};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
-use crate::{
-    CallError, FrameConfig, InboundMessage, NotifyError, PeerEnd, RpcError, start,
-};
+use crate::{CallError, FrameConfig, InboundMessage, NotifyError, PeerEnd, RpcError, start};
 
 fn is_clean_end(end: PeerEnd) -> bool {
     matches!(end, PeerEnd::LocalClosed | PeerEnd::RemoteClosed)
 }
-
 
 fn expect_bytes(result: Result<Bytes, CallError>) -> Bytes {
     match result {
@@ -61,21 +58,14 @@ impl AsyncWrite for FailAfterWrite {
         result
     }
 
-    fn poll_flush(
-        self: Pin<&mut Self>,
-        context: &mut Context<'_>,
-    ) -> Poll<io::Result<()>> {
+    fn poll_flush(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
         Pin::new(&mut self.get_mut().inner).poll_flush(context)
     }
 
-    fn poll_shutdown(
-        self: Pin<&mut Self>,
-        context: &mut Context<'_>,
-    ) -> Poll<io::Result<()>> {
+    fn poll_shutdown(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<io::Result<()>> {
         Pin::new(&mut self.get_mut().inner).poll_shutdown(context)
     }
 }
-
 
 #[tokio::test(flavor = "current_thread")]
 async fn concurrent_calls_work_in_both_directions() {
@@ -109,14 +99,8 @@ async fn concurrent_calls_work_in_both_directions() {
 
     let a_result = serde_json::json!({"reply":"to-a"});
     let b_result = serde_json::json!({"reply":"to-b"});
-    request_at_a
-        .into_parts()
-        .2
-        .respond(Ok(&b_result));
-    request_at_b
-        .into_parts()
-        .2
-        .respond(Ok(&a_result));
+    request_at_a.into_parts().2.respond(Ok(&b_result));
+    request_at_b.into_parts().2.respond(Ok(&a_result));
 
     assert_eq!(
         expect_bytes(a_call.await.expect("a call task")),
@@ -157,12 +141,24 @@ async fn closing_completes_every_pending_call_once_and_new_operations_are_closed
     }
 
     a.close();
-    assert!(matches!(a_task.await.expect("a peer task"), PeerEnd::LocalClosed));
+    assert!(matches!(
+        a_task.await.expect("a peer task"),
+        PeerEnd::LocalClosed
+    ));
     for call in calls {
-        assert!(matches!(call.await.expect("call task"), Err(CallError::Closed)));
+        assert!(matches!(
+            call.await.expect("call task"),
+            Err(CallError::Closed)
+        ));
     }
-    assert!(matches!(a.call("after-close", &()).await, Err(CallError::Closed)));
-    assert!(matches!(a.notify("after-close", &()).await, Err(NotifyError::Closed)));
+    assert!(matches!(
+        a.call("after-close", &()).await,
+        Err(CallError::Closed)
+    ));
+    assert!(matches!(
+        a.notify("after-close", &()).await,
+        Err(NotifyError::Closed)
+    ));
     b.close();
     assert!(is_clean_end(b_task.await.expect("b peer task")));
     drop(held_requests);
@@ -178,11 +174,21 @@ async fn remote_close_completes_pending_call_closed() {
         let peer = peer.clone();
         tokio::spawn(async move { peer.call("pending", &()).await })
     };
-    let _outgoing = remote.next().await.expect("outgoing call").expect("valid frame");
+    let _outgoing = remote
+        .next()
+        .await
+        .expect("outgoing call")
+        .expect("valid frame");
     drop(remote);
 
-    assert!(matches!(call.await.expect("call task"), Err(CallError::Closed)));
-    assert!(matches!(peer_task.await.expect("peer task"), PeerEnd::RemoteClosed));
+    assert!(matches!(
+        call.await.expect("call task"),
+        Err(CallError::Closed)
+    ));
+    assert!(matches!(
+        peer_task.await.expect("peer task"),
+        PeerEnd::RemoteClosed
+    ));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -199,7 +205,10 @@ async fn io_error_completes_pending_call_closed() {
         tokio::spawn(async move { peer.call("pending", &()).await })
     };
 
-    assert!(matches!(call.await.expect("call task"), Err(CallError::Closed)));
+    assert!(matches!(
+        call.await.expect("call task"),
+        Err(CallError::Closed)
+    ));
     let PeerEnd::Io(error) = peer_task.await.expect("peer task") else {
         panic!("expected injected I/O error");
     };
@@ -248,11 +257,23 @@ async fn malformed_frame_ends_peer_and_closes_pending_call() {
         tokio::spawn(async move { peer.call("pending", &()).await })
     };
 
-    let outgoing = raw.next().await.expect("outgoing call").expect("valid frame");
-    assert_eq!(serde_json::from_slice::<serde_json::Value>(&outgoing).expect("call JSON")["id"], 1);
-    raw.send(Bytes::from_static(b"not JSON")).await.expect("send malformed frame");
+    let outgoing = raw
+        .next()
+        .await
+        .expect("outgoing call")
+        .expect("valid frame");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&outgoing).expect("call JSON")["id"],
+        1
+    );
+    raw.send(Bytes::from_static(b"not JSON"))
+        .await
+        .expect("send malformed frame");
 
-    assert!(matches!(call.await.expect("call task"), Err(CallError::Closed)));
+    assert!(matches!(
+        call.await.expect("call task"),
+        Err(CallError::Closed)
+    ));
     let end = peer_task.await.expect("peer task");
     assert!(matches!(end, PeerEnd::Protocol(_)));
 }
@@ -268,13 +289,23 @@ async fn oversize_frame_is_a_protocol_end_and_closes_pending_call() {
         let peer = peer.clone();
         tokio::spawn(async move { peer.call("pending", &()).await })
     };
-    let _outgoing = raw.next().await.expect("outgoing call").expect("valid frame");
+    let _outgoing = raw
+        .next()
+        .await
+        .expect("outgoing call")
+        .expect("valid frame");
     raw.send(Bytes::from(vec![b'x'; 65]))
         .await
         .expect("send oversized frame");
 
-    assert!(matches!(call.await.expect("call task"), Err(CallError::Closed)));
-    assert!(matches!(peer_task.await.expect("peer task"), PeerEnd::Protocol(_)));
+    assert!(matches!(
+        call.await.expect("call task"),
+        Err(CallError::Closed)
+    ));
+    assert!(matches!(
+        peer_task.await.expect("peer task"),
+        PeerEnd::Protocol(_)
+    ));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -319,7 +350,11 @@ async fn request_ids_echo_verbatim_and_missing_params_default_to_null() {
     assert_eq!(request.params().as_ref(), &b"null"[..]);
     request.into_parts().2.respond(Ok(&"ok"));
 
-    let response = raw.next().await.expect("response").expect("valid response frame");
+    let response = raw
+        .next()
+        .await
+        .expect("response")
+        .expect("valid response frame");
     let text = std::str::from_utf8(&response).expect("response is UTF-8");
     assert!(text.contains(r#""id":"x\u002fy""#), "response was {text}");
     assert!(text.contains(r#""result":"ok""#), "response was {text}");
@@ -334,23 +369,28 @@ async fn request_ids_echo_verbatim_and_missing_params_default_to_null() {
     };
     assert_eq!(request.params().as_ref(), &b"null"[..]);
     request.into_parts().2.respond(Ok(&true));
-    let response = raw.next().await.expect("numeric-id response").expect("valid response frame");
+    let response = raw
+        .next()
+        .await
+        .expect("numeric-id response")
+        .expect("valid response frame");
     let text = std::str::from_utf8(&response).expect("response is UTF-8");
     assert!(text.contains(r#""id":1.00"#), "response was {text}");
     assert!(text.contains(r#""result":true"#), "response was {text}");
 
-    raw.send(Bytes::from_static(
-        br#"{"jsonrpc":"2.0","method":"tick"}"#,
-    ))
-    .await
-    .expect("send notification without params");
+    raw.send(Bytes::from_static(br#"{"jsonrpc":"2.0","method":"tick"}"#))
+        .await
+        .expect("send notification without params");
     let Some(InboundMessage::Notification(notification)) = inbound.recv().await else {
         panic!("expected notification");
     };
     assert_eq!(notification.method(), "tick");
     assert_eq!(notification.params().as_ref(), &b"null"[..]);
     peer.close();
-    assert!(matches!(peer_task.await.expect("peer task"), PeerEnd::LocalClosed));
+    assert!(matches!(
+        peer_task.await.expect("peer task"),
+        PeerEnd::LocalClosed
+    ));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -367,12 +407,22 @@ async fn unknown_response_id_and_non_message_are_protocol_violations() {
             let peer = peer.clone();
             tokio::spawn(async move { peer.call("pending", &()).await })
         };
-        let _outgoing = raw.next().await.expect("outgoing call").expect("valid frame");
+        let _outgoing = raw
+            .next()
+            .await
+            .expect("outgoing call")
+            .expect("valid frame");
         raw.send(Bytes::copy_from_slice(input))
             .await
             .expect("send invalid message");
-        assert!(matches!(call.await.expect("call task"), Err(CallError::Closed)));
-        assert!(matches!(peer_task.await.expect("peer task"), PeerEnd::Protocol(_)));
+        assert!(matches!(
+            call.await.expect("call task"),
+            Err(CallError::Closed)
+        ));
+        assert!(matches!(
+            peer_task.await.expect("peer task"),
+            PeerEnd::Protocol(_)
+        ));
     }
 }
 
@@ -394,8 +444,14 @@ async fn serialization_failures_send_nothing_and_leave_peer_running() {
     let a_task = tokio::spawn(a_task);
     let b_task = tokio::spawn(b_task);
 
-    assert!(matches!(a.call("bad", &CannotSerialize).await, Err(CallError::Encode(_))));
-    assert!(matches!(a.notify("bad", &CannotSerialize).await, Err(NotifyError::Encode(_))));
+    assert!(matches!(
+        a.call("bad", &CannotSerialize).await,
+        Err(CallError::Encode(_))
+    ));
+    assert!(matches!(
+        a.notify("bad", &CannotSerialize).await,
+        Err(NotifyError::Encode(_))
+    ));
 
     let call = {
         let a = a.clone();
@@ -413,7 +469,10 @@ async fn serialization_failures_send_nothing_and_leave_peer_running() {
 
     a.close();
     b.close();
-    assert!(matches!(a_task.await.expect("a peer task"), PeerEnd::LocalClosed));
+    assert!(matches!(
+        a_task.await.expect("a peer task"),
+        PeerEnd::LocalClosed
+    ));
     assert!(is_clean_end(b_task.await.expect("b peer task")));
 }
 

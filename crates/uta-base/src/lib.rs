@@ -126,9 +126,14 @@ mod tests {
         let long = "a".repeat(MAX_ID_LEN + 1);
         assert_eq!(
             ProgramId::parse(&long),
-            Err(IdError::TooLong { len: MAX_ID_LEN + 1 })
+            Err(IdError::TooLong {
+                len: MAX_ID_LEN + 1
+            })
         );
-        assert_eq!(IntegrationId::parse("ibkr-main_1.0").unwrap().as_str(), "ibkr-main_1.0");
+        assert_eq!(
+            IntegrationId::parse("ibkr-main_1.0").unwrap().as_str(),
+            "ibkr-main_1.0"
+        );
     }
 
     #[test]

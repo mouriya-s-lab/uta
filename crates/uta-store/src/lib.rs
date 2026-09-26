@@ -34,7 +34,11 @@ pub enum OpenError {
     #[error("database file is format version {found}, newer than the supported {supported}")]
     FormatTooNew { found: u32, supported: u32 },
     #[error("migrating the database from format version {from} to {to} failed: {source}")]
-    Migration { from: u32, to: u32, source: rusqlite::Error },
+    Migration {
+        from: u32,
+        to: u32,
+        source: rusqlite::Error,
+    },
     #[error("SQLite refused WAL journal mode (got {0:?})")]
     NotWal(String),
     #[error(transparent)]
@@ -276,7 +280,8 @@ impl Instances<'_> {
             "INSERT INTO instances (instance_id, started_at_ms, ended_at_ms) VALUES (?1, ?2, NULL)",
             params![next, started_at.0],
         )?;
-        let id = u64::try_from(next).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, next))?;
+        let id =
+            u64::try_from(next).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, next))?;
         Ok(CurrentInstance { id: InstanceId(id) })
     }
 
