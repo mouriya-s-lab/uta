@@ -33,7 +33,7 @@ flowchart TB
 | `uta-proc` | OS | 进程身份 `OsProcessId{pid, start_time}` 与退出证明 `ExitConfirmed`，由 OS 确认 | — |
 | `uta-rpc` | 传输 | 对称 JSON-RPC 2.0 peer：长度前缀分帧，每个调用恰好完成一次 | — |
 | `uta-channel` | 传输 | 核心创建的会话通道与凭据句柄，只交给被拉起的子进程；子进程一侧用 `take_inherited` 取回 | — |
-| `uta-store` | 存储 | 单写者 SQLite：格式版本与迁移、实例表、进程表、`Store::transact` / `Committed` | `uta-base`、`uta-proc` |
+| `uta-store` | 存储 | 单写者 SQLite：格式版本与迁移、实例表、进程表、两侧 Journal 的存储原语（观察流 `StreamId`/epoch/`Seq` 的分配、按边界与按位置删除；执行事实流只 append）、`Store::transact` / `Committed` | `uta-base`、`uta-proc` |
 | `uta-core` | 进程 | 守护进程：fence、核心线程、孤儿回收、受控停止、退出码 | `uta-base`、`uta-proc`、`uta-store` |
 | `uta-testkit` | 测试 | fixture 子进程和跨 crate 的真实进程测试，不发布 | `uta-base`、`uta-proc`、`uta-rpc`、`uta-channel`、`uta-store` |
 | `xtask` | 工具 | `cargo xtask check-deps` | — |
@@ -46,7 +46,7 @@ flowchart TB
 |---|---|---|
 | `uta-contract` | 核心↔集成 IDL 的 DTO（§8.1–§8.4），用 schemars 导出 JSON Schema，随 release 发布 | 值层，依赖 `uta-base` |
 | `uta-session` | 集成会话（§7.2 第 3 步会话状态机、调用通道、声明的两种解释） | 不属任一侧，依赖 `uta-contract`、`uta-rpc`、`uta-channel`、`uta-store` |
-| `uta-observe` | 信封解析入口、观察 `Journal`、持久订阅、一次性读、投递调度、入站处理器注册表、派生 DAG | 观察侧，依赖 `uta-session` |
+| `uta-observe` | 信封解析入口、观察 `Journal` 元素（`RetractableDelta`、各类流的压缩规则与 `fold_state`，建在 `uta-store` 的存储原语之上）、持久订阅、一次性读、投递调度、入站处理器注册表、派生 DAG | 观察侧，依赖 `uta-session` |
 | `uta-program` | 程序宿主元素（§8.6 活动集合、装载期校验、`Advance` 编排） | 不属任一侧，依赖 `uta-observe` |
 | `uta-effect` | 单据、STS 规则链、lane 驱动、IO 壳、归因处理器、读模型、控制面、会话入口 | 效应侧，依赖 `uta-observe`、`uta-program`、`uta-session` |
 | `uta-api` | 核心↔解释层 IDL（§8.5），只在本仓库内部使用 | 值层 |
@@ -67,7 +67,7 @@ flowchart TB
 1. **标识定义在铸造它的 crate，构造器私有。**
    - `InstanceId` 只由 `uta-store` 的 fence 事务（`Instances::begin`）铸造。
    - `ExitConfirmed` 只由 `uta-proc` 在 OS 确认之后铸造。
-   - 将来的 `SessionEpoch` 只由 `uta-session` 在创建通道时铸造。`StreamId.epoch`、`Seq`、`LogPosition` 由存储在事务里分配（§2.3）。
+   - 将来的 `SessionEpoch` 只由 `uta-session` 在创建通道时铸造。`StreamId`（其中的 epoch）与 `Seq` 只由 `uta-store` 在事务里分配（`Observations::open_epoch`、`append`）；`Seq` 按流单调，用每流计数器分配，删除记录后也不会复用。执行事实流的身份 `ExecStream`（控制流、声明流、lane 流、请求流）是设计里已有的流的名字，不需要铸造，其上的位置同样由存储分配。
    - 集成交来的线缆输入里不存在这些字段，所以集成无从伪造。
 2. **证明是可移动、不可复制的值，由它授权的操作消费。**
    - `CurrentInstance` 只被 `Instances::end` 消费，所以一个实例至多结束一次，且只能结束自己。
@@ -75,7 +75,7 @@ flowchart TB
    - `Responder` 在 `respond` 时消费；被丢弃时自动回错误，因此每个请求恰好得到一个回复。
    - 将来的 `SendBarrier`（§6.5、§7.7）同理：私有构造器，在 durable append 提交之后才产生，由 `submit` / `cancel` 消费。
 3. **内存状态只从已提交的值推进。** `Store::transact` 只在 `COMMIT` 返回之后交出 `Committed<T>`；闭包失败时整个事务回滚，调用方拿不到 `Committed`。核心线程上的 fold、索引等内存副本只根据 `Committed` 更新，所以不存在"内存领先于磁盘"的状态。`RuleState` 这类由记录 fold 出来的值不单独存储（§6.3、§7.4），每次都从记录求出。
-4. **事务不外泄。** `Tx<'c>` 借用连接，只存在于 `transact` 的闭包里。表视图（`Instances`、`Processes`，将来还有两侧 Journal）只暴露设计允许的操作。执行事实表只有 append（§7.4），这一点由视图类型保证，不靠 SQL 权限。存储不提供执行任意 SQL 的入口。
+4. **事务不外泄。** `Tx<'c>` 借用连接，只存在于 `transact` 的闭包里。表视图（`Instances`、`Processes`、`Observations`、`Executions`）只暴露设计允许的操作：`Executions` 只有 `append`（§3.1、§7.4），这一点由视图类型保证，不靠 SQL 权限；`Observations` 另有两个压缩原语（按保留边界删、按位置删），但删哪些记录由观察 `Journal` 元素按流的规则决定（§2.4）。记录体是带 `RecordKind` 标签的不透明字节，存储不解析。存储不提供执行任意 SQL 的入口。
 5. **I/O 对象由单个任务独占，共享只靠消息。**
    - 一条通道由一个 peer 任务持有，同一个任务还持有该通道的在途调用表；其他任务只拿到 `PeerHandle`（mpsc 发送端）。
    - 不用 `Arc<Mutex<_>>` 包裹 I/O 或生命周期状态。
@@ -96,6 +96,8 @@ flowchart TB
 | 会话通道（核心端） | 持有它的 peer 任务 | `spawn` 创建 | peer 结束或句柄被丢弃时关闭；关闭后读不到该化身的任何消息（§7.1） | 不持久化 | `SessionChannel`：`AsyncRead + AsyncWrite` |
 | 凭据副本 | 核心：`spawn` 执行期间（写入后清零）；子进程：直到进程退出 | 写入继承句柄 | 核心关闭写端；子进程读到 EOF 后关闭读端 | 从不持久化 | `Credential`（zeroize）；不出现在 env 或参数里 |
 | 在途调用表、请求 id | peer 任务 | `call` 发出 | 收到响应，或 peer 结束时统一以 `Closed` 完成 | 不持久化 | 调用方持有的 future |
+| 观察流的 epoch 与 `Seq` | 核心线程（经 `Observations`） | `open_epoch` / `append` 在事务里分配 | 流的 epoch 由下一个 `open_epoch` 结束；`Seq` 不回收 | `obs_streams`（含每流计数器）、`obs_records` | `StreamId`、`LogPosition`：`Clone`，私有构造 |
+| 执行事实记录 | 核心线程（经 `Executions`） | `append` 提交 | 不结束：只追加，没有删除入口 | `exec_streams`、`exec_records` | `ExecPosition`：私有构造 |
 | 核心自有的内存副本（将来：各尝试的 fold、订阅表缓存、活动集合） | 核心线程 | 启动时从记录 fold 出 | 实例结束 | 由记录派生，不是源头 | 只从 `Committed` 推进 |
 
 ## 6 类型派生规则

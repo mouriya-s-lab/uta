@@ -29,7 +29,38 @@ const MIGRATIONS: [&str; FORMAT_VERSION as usize] = [
          role_kind   TEXT NOT NULL CHECK (role_kind IN ('integration', 'program_host')),
          role_id     TEXT NOT NULL,
          PRIMARY KEY (pid, start_time)
-     );",
+     );
+     CREATE TABLE obs_streams (
+         stream_key  INTEGER PRIMARY KEY,
+         source_kind TEXT NOT NULL CHECK (source_kind IN ('integration', 'program')),
+         source_id   TEXT NOT NULL,
+         name        TEXT NOT NULL,
+         epoch       INTEGER NOT NULL CHECK (epoch > 0),
+         next_seq    INTEGER NOT NULL CHECK (next_seq > 0),
+         UNIQUE (source_kind, source_id, name, epoch)
+     );
+     CREATE TABLE obs_records (
+         stream_key INTEGER NOT NULL REFERENCES obs_streams (stream_key),
+         seq        INTEGER NOT NULL CHECK (seq > 0),
+         kind       TEXT NOT NULL,
+         body       BLOB NOT NULL,
+         PRIMARY KEY (stream_key, seq)
+     ) WITHOUT ROWID;
+     CREATE TABLE exec_streams (
+         stream_key INTEGER PRIMARY KEY,
+         kind       TEXT NOT NULL CHECK (kind IN ('control', 'declaration', 'lane', 'requests')),
+         owner_id   TEXT NOT NULL,
+         lane       TEXT NOT NULL,
+         next_seq   INTEGER NOT NULL CHECK (next_seq > 0),
+         UNIQUE (kind, owner_id, lane)
+     );
+     CREATE TABLE exec_records (
+         stream_key INTEGER NOT NULL REFERENCES exec_streams (stream_key),
+         seq        INTEGER NOT NULL CHECK (seq > 0),
+         kind       TEXT NOT NULL,
+         body       BLOB NOT NULL,
+         PRIMARY KEY (stream_key, seq)
+     ) WITHOUT ROWID;",
 ];
 
 /// The version recorded in the file; `None` for a file without the meta table.

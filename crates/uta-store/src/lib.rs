@@ -15,7 +15,13 @@
 //! - Durability: WAL with `synchronous=FULL`, so a returned commit has been
 //!   synced to the WAL (design §7.4, §6.5 "durable append").
 
+mod journal;
 mod schema;
+
+pub use journal::{
+    Epoch, ExecPosition, ExecStream, Executions, LogPosition, Observations, RecordKind, Seq,
+    StoredRecord, StreamId,
+};
 
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -238,6 +244,28 @@ impl Store {
         rows.map(|row| row?).collect()
     }
 
+    /// Committed records of an observation stream after `after` (from the
+    /// start when `None`), in `Seq` order, at most `limit`.
+    pub fn read_observations(
+        &self,
+        stream: &StreamId,
+        after: Option<Seq>,
+        limit: usize,
+    ) -> Result<Vec<StoredRecord>, ReadError> {
+        journal::read_observations(&self.conn, stream, after, limit)
+    }
+
+    /// Committed records of an execution-fact stream after `after`, in `Seq`
+    /// order, at most `limit`.
+    pub fn read_executions(
+        &self,
+        stream: &ExecStream,
+        after: Option<Seq>,
+        limit: usize,
+    ) -> Result<Vec<StoredRecord>, ReadError> {
+        journal::read_executions(&self.conn, stream, after, limit)
+    }
+
     /// Closes the connection on the calling (owning) thread.
     pub fn close(self) -> Result<(), rusqlite::Error> {
         self.conn.close().map_err(|(_, e)| e)
@@ -257,6 +285,15 @@ impl Tx<'_> {
 
     pub fn processes(&mut self) -> Processes<'_> {
         Processes { tx: &self.tx }
+    }
+
+    pub fn observations(&mut self) -> Observations<'_> {
+        Observations { tx: &self.tx }
+    }
+
+    /// The execution-fact journal: append only (§3.1, §7.4).
+    pub fn executions(&mut self) -> Executions<'_> {
+        Executions { tx: &self.tx }
     }
 }
 

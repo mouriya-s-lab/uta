@@ -1,14 +1,15 @@
 //! Identifiers whose source is outside the core.
 //!
 //! Integration ids and program ids are written by Alice into the shared
-//! configuration files (design §7.6); the core never mints them. They enter
-//! the core exactly once, through [`IntegrationId::parse`] / [`ProgramId::parse`]
+//! configuration files (design §7.6); stream names and write lane keys come
+//! from integration declarations and program values (§2.2, §4.3). The core
+//! never mints them. They enter the core exactly once, through `parse`
 //! (or serde, which is routed through the same parser), and are passed around
 //! as cheap `Arc<str>` clones afterwards.
 //!
 //! Identifiers minted by the core itself (instance ids, stream epochs,
-//! session epochs, log positions) are defined in the crate that mints them, with
-//! private constructors, so that no other crate can fabricate one.
+//! sequence numbers, session epochs) are defined in the crate that mints them,
+//! with private constructors, so that no other crate can fabricate one.
 
 use std::fmt;
 use std::sync::Arc;
@@ -101,6 +102,26 @@ config_id! {
 config_id! {
     /// A program id from the program load manifest (design §8.6).
     ProgramId
+}
+
+config_id! {
+    /// A stream name: declared by an integration (`StreamDecl`, §2.2) or taken
+    /// from a program value's `outputs` (§4.3).
+    StreamName
+}
+
+config_id! {
+    /// A write lane key (`WriteScope.key`, §2.2): declared by the integration,
+    /// compared by the core as an opaque value.
+    WriteLaneKey
+}
+
+/// The source of an observation stream (§2.3): integration ids and program ids
+/// are separate namespaces, so the source carries the tag.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Source {
+    Integration(IntegrationId),
+    Program(ProgramId),
 }
 
 /// What a child process of the core is, as recorded in the process table
