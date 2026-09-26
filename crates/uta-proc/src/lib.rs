@@ -7,7 +7,14 @@
 //! reported that no process with that `(pid, start_time)` exists.
 
 use std::io;
+#[cfg(windows)]
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::time::Duration;
+
+#[cfg(unix)]
+use rustix::io::Errno;
+#[cfg(unix)]
+use rustix::process::{Pid, Signal, kill_process};
 
 /// Identity of one OS process: the pid together with an opaque, platform-precise
 /// OS start token. Persist the token unchanged and compare it only for equality;
@@ -159,38 +166,45 @@ fn live_start_token(pid: u32) -> io::Result<Option<u64>> {
 }
 
 #[cfg(windows)]
-fn open_process(pid: u32, access: u32) -> io::Result<Option<ProcessHandle>> {
+fn open_process(pid: u32, access: u32) -> io::Result<Option<OwnedHandle>> {
     use windows_sys::Win32::Foundation::ERROR_INVALID_PARAMETER;
     use windows_sys::Win32::System::Threading::OpenProcess;
 
-    // SAFETY: OpenProcess accepts scalar parameters and returns an owned handle.
-    let raw = unsafe { OpenProcess(access, 0, pid) };
-    if raw.is_null() {
-        let error = io::Error::last_os_error();
-        return if error.raw_os_error() == Some(ERROR_INVALID_PARAMETER as i32) {
-            Ok(None)
-        } else {
-            Err(error)
-        };
+    // SAFETY: OpenProcess takes scalar parameters; a non-null return is a
+    // fresh handle owned by this process and adopted exactly once.
+    let handle = unsafe {
+        let raw = OpenProcess(access, 0, pid);
+        (!raw.is_null()).then(|| OwnedHandle::from_raw_handle(raw))
+    };
+    match handle {
+        Some(handle) => Ok(Some(handle)),
+        None => {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(ERROR_INVALID_PARAMETER as i32) {
+                Ok(None)
+            } else {
+                Err(error)
+            }
+        }
     }
-    Ok(Some(ProcessHandle(raw)))
 }
 
 #[cfg(windows)]
-fn handle_start_token(handle: &ProcessHandle) -> io::Result<Option<u64>> {
+fn handle_start_token(handle: &OwnedHandle) -> io::Result<Option<u64>> {
     use windows_sys::Win32::Foundation::{FILETIME, WAIT_OBJECT_0, WAIT_TIMEOUT};
     use windows_sys::Win32::System::Threading::{GetProcessTimes, WaitForSingleObject};
 
+    let raw = handle.as_raw_handle();
     let mut creation = FILETIME::default();
     let mut exit = FILETIME::default();
     let mut kernel = FILETIME::default();
     let mut user = FILETIME::default();
     // SAFETY: This owned handle is open; each output points to a valid FILETIME.
-    if unsafe { GetProcessTimes(handle.0, &mut creation, &mut exit, &mut kernel, &mut user) } == 0 {
+    if unsafe { GetProcessTimes(raw, &mut creation, &mut exit, &mut kernel, &mut user) } == 0 {
         return Err(io::Error::last_os_error());
     }
     // SAFETY: This owned handle has PROCESS_SYNCHRONIZE access.
-    match unsafe { WaitForSingleObject(handle.0, 0) } {
+    match unsafe { WaitForSingleObject(raw, 0) } {
         WAIT_OBJECT_0 => Ok(None),
         WAIT_TIMEOUT => Ok(Some(
             (u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime),
@@ -234,28 +248,27 @@ pub fn is_running(id: OsProcessId) -> bool {
 }
 
 #[cfg(unix)]
-fn signal_if_running(id: OsProcessId, signal: libc::c_int) -> io::Result<()> {
+fn signal_if_running(id: OsProcessId, signal: Signal) -> io::Result<()> {
     match liveness(id) {
         Liveness::Gone => return Ok(()),
         Liveness::Unknown(error) => return Err(error),
         Liveness::Alive => {}
     }
-    let pid = libc::pid_t::try_from(id.pid).map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "pid is outside the OS pid range",
-        )
-    })?;
+    let pid = i32::try_from(id.pid)
+        .ok()
+        .and_then(Pid::from_raw)
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "pid is outside the OS pid range",
+            )
+        })?;
     // Unix kill is addressed by PID; a PID reuse between the probe and this
     // syscall cannot be ruled out without a handle-based OS signaling API.
-    // SAFETY: Only the matching, currently live positive PID is signaled.
-    if unsafe { libc::kill(pid, signal) } == -1 {
-        let error = io::Error::last_os_error();
-        if error.raw_os_error() != Some(libc::ESRCH) {
-            return Err(error);
-        }
+    match kill_process(pid, signal) {
+        Ok(()) | Err(Errno::SRCH) => Ok(()),
+        Err(error) => Err(error.into()),
     }
-    Ok(())
 }
 
 /// Requests graceful exit from the identified process.
@@ -266,7 +279,7 @@ fn signal_if_running(id: OsProcessId, signal: libc::c_int) -> io::Result<()> {
 /// channel.
 #[cfg(unix)]
 pub fn request_exit(id: OsProcessId) -> io::Result<()> {
-    signal_if_running(id, libc::SIGTERM)
+    signal_if_running(id, Signal::TERM)
 }
 
 /// On Windows, arbitrary processes have no graceful termination signal. The
@@ -287,7 +300,7 @@ pub fn request_exit(_id: OsProcessId) -> io::Result<()> {
 /// Immediately terminates the identified process if it is still running.
 #[cfg(unix)]
 pub fn terminate(id: OsProcessId) -> io::Result<()> {
-    signal_if_running(id, libc::SIGKILL)
+    signal_if_running(id, Signal::KILL)
 }
 
 /// Immediately terminates the identified process if it is still running.
@@ -325,21 +338,10 @@ fn terminate_windows(id: OsProcessId) -> io::Result<()> {
         Liveness::Unknown(error) => return Err(error),
     }
     // SAFETY: The open handle is the matching process and has PROCESS_TERMINATE access.
-    if unsafe { TerminateProcess(handle.0, 1) } == 0 {
+    if unsafe { TerminateProcess(handle.as_raw_handle(), 1) } == 0 {
         return Err(io::Error::last_os_error());
     }
     Ok(())
-}
-
-#[cfg(windows)]
-struct ProcessHandle(windows_sys::Win32::Foundation::HANDLE);
-
-#[cfg(windows)]
-impl Drop for ProcessHandle {
-    fn drop(&mut self) {
-        // SAFETY: This wrapper owns the handle returned by OpenProcess.
-        let _ = unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0) };
-    }
 }
 
 /// Waits until the OS positively reports this indexed process has exited.

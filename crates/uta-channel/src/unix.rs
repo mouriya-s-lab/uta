@@ -1,13 +1,15 @@
 use std::ffi::OsStr;
+use std::fs::File;
 use std::io::{self, Read, Write};
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use std::os::unix::net::UnixStream;
-use std::os::unix::process::CommandExt;
 use std::pin::Pin;
 use std::process::{Child, Command, ExitStatus};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 
+use command_fds::{CommandFdExt, FdMapping};
+use rustix::process::{Pid, Signal, kill_process};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use zeroize::Zeroizing;
 
@@ -15,7 +17,6 @@ use crate::{ChildProcess, ChildSpec, Credential, Inherited, SessionChannel, Spaw
 
 const CHANNEL_FD: RawFd = 3;
 const CREDENTIAL_FD: RawFd = 4;
-const FIRST_SOURCE_FD: RawFd = 5;
 
 // from_raw_fd transfers ownership; only one invocation may claim the inherited descriptors.
 static INHERITED_CLAIMED: AtomicBool = AtomicBool::new(false);
@@ -101,21 +102,17 @@ impl Process {
         self.0.id()
     }
 
-    fn signal(&self, signal: libc::c_int) -> io::Result<()> {
-        // The OS owns the child's PID until it is reaped by wait.
-        if unsafe { libc::kill(self.0.id() as libc::pid_t, signal) } == -1 {
-            Err(io::Error::last_os_error())
-        } else {
-            Ok(())
-        }
+    fn signal(&self, signal: Signal) -> io::Result<()> {
+        // The OS keeps the child's PID reserved until it is reaped by wait.
+        kill_process(Pid::from_child(&self.0), signal).map_err(io::Error::from)
     }
 
     pub(super) fn request_exit(&self) -> io::Result<()> {
-        self.signal(libc::SIGTERM)
+        self.signal(Signal::TERM)
     }
 
     pub(super) fn terminate(&self) -> io::Result<()> {
-        self.signal(libc::SIGKILL)
+        self.signal(Signal::KILL)
     }
 
     pub(super) async fn wait(mut self) -> io::Result<ExitStatus> {
@@ -125,23 +122,9 @@ impl Process {
     }
 }
 
-fn duplicate_source(fd: RawFd) -> io::Result<OwnedFd> {
-    // dup2(…, 3) must not overwrite the source used by dup2(…, 4), or vice versa.
-    let duplicated = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, FIRST_SOURCE_FD) };
-    if duplicated == -1 {
-        return Err(io::Error::last_os_error());
-    }
-    // fcntl returned a newly owned descriptor.
-    Ok(unsafe { OwnedFd::from_raw_fd(duplicated) })
-}
-
 pub(super) fn spawn(spec: &ChildSpec, credential: Credential) -> io::Result<Spawned> {
     let (parent_stream, child_stream) = UnixStream::pair()?;
     let (credential_read, mut credential_write) = io::pipe()?;
-    let child_channel = duplicate_source(child_stream.as_raw_fd())?;
-    let child_credential = duplicate_source(credential_read.as_raw_fd())?;
-    drop(child_stream);
-    drop(credential_read);
 
     let mut command = Command::new(&spec.program);
     command.args(&spec.args);
@@ -150,23 +133,26 @@ pub(super) fn spawn(spec: &ChildSpec, credential: Credential) -> io::Result<Spaw
     }
     command.env(crate::SESSION_CHANNEL_ENV, CHANNEL_FD.to_string());
     command.env(crate::CREDENTIAL_ENV, CREDENTIAL_FD.to_string());
-    // The duplicated sources are CLOEXEC; dup2 creates the only channel and
-    // credential descriptors retained across exec at fd 3 and fd 4.
-    unsafe {
-        command.pre_exec(move || {
-            if libc::dup2(child_channel.as_raw_fd(), CHANNEL_FD) == -1 {
-                return Err(io::Error::last_os_error());
-            }
-            if libc::dup2(child_credential.as_raw_fd(), CREDENTIAL_FD) == -1 {
-                return Err(io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
+    // Both sources are CLOEXEC. The mappings are given in one call so the
+    // library can move a source that sits on the other target out of the way;
+    // fd 3 and fd 4 are then the only channel and credential descriptors that
+    // survive exec.
+    command
+        .fd_mappings(vec![
+            FdMapping {
+                parent_fd: OwnedFd::from(child_stream),
+                child_fd: CHANNEL_FD,
+            },
+            FdMapping {
+                parent_fd: OwnedFd::from(credential_read),
+                child_fd: CREDENTIAL_FD,
+            },
+        ])
+        .map_err(io::Error::other)?;
     let mut child = command.spawn()?;
-    // Command's pre_exec closure still owns the parent's copies of the read
-    // descriptors. Close those before writing so a failed child cannot keep
-    // the pipe artificially readable in the parent.
+    // The Command still owns the parent's copies of the mapped descriptors.
+    // Close those before writing so a failed child cannot keep the pipe
+    // artificially readable in the parent.
     drop(command);
 
     let result = credential_write.write_all(credential.expose());
@@ -196,14 +182,6 @@ fn expected_fd(value: Option<&OsStr>, expected: &str) -> io::Result<()> {
     }
 }
 
-fn check_open(fd: RawFd) -> io::Result<()> {
-    if unsafe { libc::fcntl(fd, libc::F_GETFD) } == -1 {
-        Err(io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
-}
-
 fn read_credential(mut reader: impl Read) -> io::Result<Zeroizing<Vec<u8>>> {
     let mut bytes = Zeroizing::new(Vec::new());
     let mut chunk = Zeroizing::new([0u8; 4096]);
@@ -227,11 +205,9 @@ fn read_credential(mut reader: impl Read) -> io::Result<Zeroizing<Vec<u8>>> {
 pub(super) fn take_inherited() -> io::Result<Inherited> {
     let channel_env = std::env::var_os(crate::SESSION_CHANNEL_ENV);
     let credential_env = std::env::var_os(crate::CREDENTIAL_ENV);
-    // Reject both malformed/missing variables before taking ownership of any fd.
+    // Reject both malformed/missing variables before claiming any fd.
     expected_fd(channel_env.as_deref(), "3")?;
     expected_fd(credential_env.as_deref(), "4")?;
-    check_open(CHANNEL_FD)?;
-    check_open(CREDENTIAL_FD)?;
     if INHERITED_CLAIMED
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
@@ -241,16 +217,33 @@ pub(super) fn take_inherited() -> io::Result<Inherited> {
             "inherited descriptors already claimed",
         ));
     }
-
-    // Both descriptors have been validated and exclusively claimed. Each is
-    // wrapped exactly once; dropping the reader closes fd 4 after EOF.
-    let stream = unsafe { UnixStream::from_raw_fd(CHANNEL_FD) };
-    let reader = unsafe { std::fs::File::from_raw_fd(CREDENTIAL_FD) };
+    let (stream, reader) = adopt_inherited()?;
     let mut bytes = read_credential(reader)?;
     Ok(Inherited {
         channel: SessionChannel(Channel::new(stream)),
         credential: Credential::from(std::mem::take(&mut *bytes)),
     })
+}
+
+/// The only place a raw descriptor number is asserted to be owned. Called
+/// once, after the claim; a failure leaves the descriptors unclaimable.
+fn adopt_inherited() -> io::Result<(UnixStream, File)> {
+    // SAFETY: the claim guarantees this runs at most once per process, so
+    // nothing else in the process owns fd 3 or fd 4. F_GETFD on a raw number
+    // takes no ownership; both descriptors are proven open before either is
+    // wrapped, and each is wrapped exactly once. Dropping the reader closes
+    // fd 4 after EOF.
+    unsafe {
+        for fd in [CHANNEL_FD, CREDENTIAL_FD] {
+            if libc::fcntl(fd, libc::F_GETFD) == -1 {
+                return Err(io::Error::last_os_error());
+            }
+        }
+        Ok((
+            UnixStream::from_raw_fd(CHANNEL_FD),
+            File::from_raw_fd(CREDENTIAL_FD),
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -263,16 +256,6 @@ mod tests {
         assert!(expected_fd(Some(OsStr::new("04")), "4").is_err());
         assert!(expected_fd(Some(OsStr::new("5")), "4").is_err());
         assert!(expected_fd(None, "4").is_err());
-    }
-
-    #[test]
-    fn duplicated_child_source_cannot_collide_with_targets_and_is_cloexec() {
-        let (reader, _) = io::pipe().unwrap();
-        let source = duplicate_source(reader.as_raw_fd()).unwrap();
-        assert!(source.as_raw_fd() >= FIRST_SOURCE_FD);
-        let flags = unsafe { libc::fcntl(source.as_raw_fd(), libc::F_GETFD) };
-        assert_ne!(flags, -1);
-        assert_ne!(flags & libc::FD_CLOEXEC, 0);
     }
 
     #[test]

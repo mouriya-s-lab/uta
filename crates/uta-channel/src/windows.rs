@@ -21,7 +21,6 @@ use windows_sys::Win32::Foundation::{
     DUPLICATE_SAME_ACCESS, DuplicateHandle, HANDLE, TRUE, WAIT_FAILED, WAIT_OBJECT_0,
 };
 use windows_sys::Win32::System::IO::CancelSynchronousIo;
-use windows_sys::Win32::System::Pipes::CreatePipe;
 use windows_sys::Win32::System::Threading::{
     CREATE_UNICODE_ENVIRONMENT, CreateProcessW, DeleteProcThreadAttributeList,
     EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess, GetExitCodeProcess, INFINITE,
@@ -51,9 +50,9 @@ pub(super) fn spawn(spec: &ChildSpec, credential: Credential) -> io::Result<Spaw
         .map(|dir| wide_nul(dir.as_os_str()))
         .transpose()?;
 
-    let (child_read, core_write) = create_pipe(0)?;
-    let (core_read, child_write) = create_pipe(0)?;
-    let (child_credential, core_credential) = create_pipe(0)?;
+    let (child_read, core_write) = create_pipe()?;
+    let (core_read, child_write) = create_pipe()?;
+    let (child_credential, core_credential) = create_pipe()?;
 
     // Only these duplicates are inheritable; the originals close here.
     let child_read = inheritable(child_read)?;
@@ -226,21 +225,11 @@ fn parse_handle(value: &str) -> io::Result<RawHandle> {
     }
 }
 
-fn create_pipe(size: u32) -> io::Result<(OwnedHandle, OwnedHandle)> {
-    let mut read: HANDLE = ptr::null_mut();
-    let mut write: HANDLE = ptr::null_mut();
-    // SAFETY: out-pointers are valid; null security attributes make both ends
-    // non-inheritable.
-    if unsafe { CreatePipe(&mut read, &mut write, ptr::null(), size) } == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: CreatePipe succeeded and returned two fresh handles we own.
-    Ok(unsafe {
-        (
-            OwnedHandle::from_raw_handle(read),
-            OwnedHandle::from_raw_handle(write),
-        )
-    })
+/// std's anonymous pipe is `CreatePipe` with null security attributes, so
+/// both ends are non-inheritable.
+fn create_pipe() -> io::Result<(OwnedHandle, OwnedHandle)> {
+    let (read, write) = io::pipe()?;
+    Ok((OwnedHandle::from(read), OwnedHandle::from(write)))
 }
 
 /// Replaces a non-inheritable handle with an inheritable duplicate.

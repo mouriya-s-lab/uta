@@ -9,6 +9,8 @@ use rusqlite::Connection;
 use tempfile::TempDir;
 
 #[cfg(unix)]
+use rustix::process::{Pid, Signal, kill_process};
+#[cfg(unix)]
 use uta_base::{IntegrationId, ProcessRole};
 #[cfg(unix)]
 use uta_store::{InstanceEnd, UnixMillis};
@@ -123,16 +125,11 @@ impl Daemon {
     }
 
     #[cfg(unix)]
-    fn send_signal(&mut self, signal: libc::c_int) {
-        let pid = libc::pid_t::try_from(self.child.id()).expect("daemon PID fits pid_t");
-        // SAFETY: `pid` is the live child process spawned by this test.
-        let result = unsafe { libc::kill(pid, signal) };
-        assert_eq!(
-            result,
-            0,
-            "send signal {signal} to daemon PID {pid}: {}",
-            std::io::Error::last_os_error()
-        );
+    fn send_signal(&mut self, signal: Signal) {
+        let pid = Pid::from_child(&self.child);
+        if let Err(error) = kill_process(pid, signal) {
+            panic!("send signal {signal:?} to daemon PID {pid:?}: {error}");
+        }
     }
 
     fn logs(&self) -> String {
@@ -230,7 +227,7 @@ fn sigterm_stops_cleanly_restarts_and_persists_the_end_anchor() {
     let home = TempDir::new().expect("create isolated state root");
     let mut first = Daemon::spawn(home.path());
     first.wait_ready();
-    first.send_signal(libc::SIGTERM);
+    first.send_signal(Signal::TERM);
     let first_status = first.wait_for_exit(EXIT_TIMEOUT);
     assert_eq!(
         first_status.code(),
@@ -246,7 +243,7 @@ fn sigterm_stops_cleanly_restarts_and_persists_the_end_anchor() {
         "restart should observe instance 1's stopped anchor:\n{}",
         second.logs()
     );
-    second.send_signal(libc::SIGTERM);
+    second.send_signal(Signal::TERM);
     let second_status = second.wait_for_exit(EXIT_TIMEOUT);
     assert_eq!(
         second_status.code(),
@@ -298,9 +295,9 @@ fn sigkill_leaves_no_end_anchor_and_restart_reports_the_crash() {
     let home = TempDir::new().expect("create isolated state root");
     let mut first = Daemon::spawn(home.path());
     first.wait_ready();
-    first.send_signal(libc::SIGKILL);
+    first.send_signal(Signal::KILL);
     let killed_status = first.wait_for_exit(EXIT_TIMEOUT);
-    assert_eq!(killed_status.signal(), Some(libc::SIGKILL));
+    assert_eq!(killed_status.signal(), Some(Signal::KILL.as_raw()));
 
     let mut restart = Daemon::spawn(home.path());
     restart.wait_ready();
@@ -311,7 +308,7 @@ fn sigkill_leaves_no_end_anchor_and_restart_reports_the_crash() {
         "restart should report the prior crash:\n{}",
         restart.logs()
     );
-    restart.send_signal(libc::SIGTERM);
+    restart.send_signal(Signal::TERM);
     let restart_status = restart.wait_for_exit(EXIT_TIMEOUT);
     assert_eq!(
         restart_status.code(),
@@ -340,7 +337,7 @@ fn malformed_prior_process_row_fails_closed_and_stops_current_instance() {
     let home = TempDir::new().expect("create isolated state root");
     let mut first = Daemon::spawn(home.path());
     first.wait_ready();
-    first.send_signal(libc::SIGTERM);
+    first.send_signal(Signal::TERM);
     let first_status = first.wait_for_exit(EXIT_TIMEOUT);
     assert_eq!(
         first_status.code(),
@@ -472,7 +469,7 @@ fn startup_reclaims_orphan_process_and_clears_its_row() {
         "the reclaimed sleep child should be waitable"
     );
 
-    daemon.send_signal(libc::SIGTERM);
+    daemon.send_signal(Signal::TERM);
     let status = daemon.wait_for_exit(EXIT_TIMEOUT);
     assert_eq!(
         status.code(),
@@ -520,7 +517,7 @@ fn newer_database_format_is_refused_without_inserting_an_instance() {
     normal.wait_ready();
     #[cfg(unix)]
     {
-        normal.send_signal(libc::SIGTERM);
+        normal.send_signal(Signal::TERM);
         let status = normal.wait_for_exit(EXIT_TIMEOUT);
         assert_eq!(
             status.code(),

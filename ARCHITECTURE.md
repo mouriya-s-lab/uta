@@ -114,7 +114,7 @@ flowchart TB
 ## 7 线缆约定
 
 - **信道**：核心拉起集成进程时创建通道（§7.1）。
-  - Unix 上是 `socketpair`，子进程端放在 fd 3，凭据管道的读端放在 fd 4，都经 `pre_exec` 中的 `dup2` 放置；其余描述符一律 `CLOEXEC`。
+  - Unix 上是 `socketpair`，子进程端放在 fd 3，凭据管道的读端放在 fd 4，由 `command-fds` 在同一次映射里放置；其余描述符一律 `CLOEXEC`。
   - Windows 上是两条匿名管道加一条凭据管道，经 `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` 只交给该子进程。
   - 子进程从环境变量 `UTA_SESSION_CHANNEL`、`UTA_CREDENTIAL` 读句柄号。句柄号不是秘密；凭据字节只经过句柄传递。
 - **分帧**：4 字节大端长度前缀，后接 UTF-8 JSON；单帧上限默认 16 MiB，超限视为协议违规，关闭通道。
@@ -159,6 +159,7 @@ flowchart TB
 | 存储 | rusqlite（`bundled`） | 同步事务，直接对应"事务即函数"（§7.7）；只在核心线程上使用 |
 | 单实例锁 | std `File::try_lock`（Rust 1.89 起） | Unix 用 `flock`，Windows 用 `LockFileEx`；锁随句柄释放 |
 | 进程身份 | 各平台 OS 接口（Linux `/proc/<pid>/stat` 的 starttime，macOS `proc_pidinfo`，Windows `GetProcessTimes` 与 `WaitForSingleObject`） | 启动标记精确到 OS 能给出的粒度，pid 复用不会被当成同一进程；存活判断分"存活 / 已不存在 / 查不到"三种，只有"已不存在"才铸造退出证明 |
+| 系统调用 | Unix 用 `rustix`（发信号），`command-fds`（子进程 fd 3/4 放置）；Windows 建管道用 std `io::pipe`；其余直接调 `libc`（仅 macOS `proc_pidinfo`、子进程收养 fd 前的 `F_GETFD`）与 `windows-sys` | `unsafe` 只留在没有安全替代的地方：把句柄号认作己有（子进程收养 fd 3/4 与继承句柄）；Windows 的可继承句柄复制、`PROC_THREAD_ATTRIBUTE_HANDLE_LIST` 与 `CreateProcessW`（std 对应能力 `spawn_with_attributes` 未稳定，rust-lang/rust#114854）；同一进程句柄上先核对身份再终止。`sysinfo` 按 PID 终止、`libproc` 接受短读并把错误变成字符串，都会削弱三值存活判断，不用 |
 | 分帧 | tokio-util `LengthDelimitedCodec` | 直接产出 `BytesMut`，可以零拷贝切片 |
 | JSON-RPC | 自写对称 peer（`uta-rpc`） | jsonrpsee 的服务端只支持 HTTP/WS，自定义传输只有客户端可用，且是非对称的；会话语义要求同一连接双向调用、恰好完成一次 |
 | 集成出站 HTTP / WS（写集成时） | reqwest、tokio-tungstenite | reqwest 默认会重试协议层 NACK，写路径必须设 `retry::never()` 并关闭重定向（`design/integration/design.md` 2.1 "每次写至多一次上游写"） |
