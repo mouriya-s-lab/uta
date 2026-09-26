@@ -34,9 +34,9 @@ sequenceDiagram
   L->>C: subscribe(selector, mode, from?)（观察流：一组 (来源, 流, 主体集?, 用途) 项，可跨来源；或执行事实；新订阅 from 缺省 = 各流当前流末）
   C-->>L: 未确认的投递缺口先交出，再交 cursor 之后记录（未确认区间可能重复，按 LogPosition 去重）
   L-->>D: 推送；附续传令牌；投递缺口翻成缺失通知
-  opt 一次性读（D9.2）得 Pending{from, instance_id}
+  opt 一次性读（D9.2）得 Pending{from, request, instance_id}
     L->>C: subscribe 该流的只投递项，from = Pending.from（主体集取所问的主体或整条流）
-    C-->>L: 调用结束后照常 append 的读结论记录或 Gap{Channel}
+    C-->>L: 调用结束后照常 append 的读结论记录或 Gap{Channel}（都带 OneShot{origins, request} 与 dispatch_end）；该流上别的读的结论与 gap 也会投来，解释层只认 request = Pending.request、origins ∋ Session(本 principal)、dispatch_end = Pending.from 的那一条
   end
   Note over D,L: 下游或解释层崩溃 / 重启：核心不变（订阅、程序、lane、日志 owner 是核心）；解释层无状态可丢
   D->>L: 重连，交回续传令牌
@@ -68,7 +68,7 @@ flowchart LR
   end
   subgraph EL["核心元素"]
     SUB["持久订阅 / 投递调度"]
-    RDP["一次性读元素（§7.3）→ 判定 → 同一集成会话 epoch 内同一 identity 的在途调用并入 → 集成 read（经集成会话）→ item 观察记录 + 读结论记录（均带 dispatch_end）或 Gap{Channel} + 计数观察，OneShot{origins ∋ Session(principal), request}"]
+    RDP["一次性读元素（§7.3）→ 判定 → 同一集成会话 epoch 内同一 identity 的在途调用并入 → 集成 read（经集成会话）→ item 观察记录 + 读结论记录，或 Gap{Channel}（都带 OneShot{origins ∋ Session(principal), request} 与 dispatch_end）+ 计数观察"]
     RM["读模型（只读 fold；含 sources：执行 J 声明版本的 fold）"]
     TK["单据（TicketAction）→ STS 链"]
     CTL["控制面（控制记录 Applied / Rejected）"]
@@ -84,7 +84,7 @@ flowchart LR
   S6 --> IOR
   S6b --> RRO
   S7 --> HL
-  S2 -.->|"逐 target，按序判定：UnknownTarget（来源未登记，或来源是 Program(_)）/ Unavailable{source_state}（从未有声明）/ Unavailable{source_state}（此刻无已建立会话；以上都不调用、不记 gap）→ 按会话有效声明：Unsupported（流不在其中，或 read 为 Unsupported）/ Unconfirmed（read 为 Unknown）/ InvalidRequest{reason} → 调用之后：Answered{conclusion, items} / Refused{conclusion, reason} / Unavailable{gap}（渠道失败，已记 Gap{Channel}）/ Pending{from, instance_id}（deadline 到而调用在途；之后照常记结论或 gap，从 from 订阅只投递项可收到；核心实例已换则不再保证）"| S2
+  S2 -.->|"逐 target，按序判定：UnknownTarget（来源未登记，或来源是 Program(_)）/ Unavailable{source_state}（从未有声明）/ Unavailable{source_state}（此刻无已建立会话；以上都不调用、不记 gap）→ 按会话有效声明：Unsupported（流不在其中，或 read 为 Unsupported）/ Unconfirmed（read 为 Unknown）/ InvalidRequest{reason} → 调用之后：Answered{conclusion, items} / Refused{conclusion, reason} / Unavailable{gap}（渠道失败，已记 Gap{Channel}）/ Pending{from, request, instance_id}（deadline 到而调用在途；之后照常记结论或 gap，从 from 订阅只投递项可收到，按 request、origins 与 dispatch_end 认出自己的那一条；核心实例已换则不再保证）"| S2
   S1 -.->|"逐项判定，没有任何一项被接纳或待接纳 → Rejected{items}：集成来源：来源不在采纳集合且从未有声明 → 该项拒绝；在采纳集合而从未有声明 → 该项待接纳；供给项：来源不在采纳集合 → 拒绝（来源未登记）；流不在最近声明里 / 配额池流上不带主体集 → 拒绝，放不下 → QuotaExceeded{quota, limit}；只投递项（不看采纳集合与会话）：流在任何一个声明版本里出现过 → 接纳（不进需求、不占配额），从未声明过 → 拒绝；程序来源 Program(p)（按 p 历代开始成员的 Applied 所记输出契约）：没有这种 Applied → 拒绝（来源未登记）；供给项 → 拒绝（ProgramStreamNotRouted）；带主体集 → 拒绝；整条流的只投递项：流在任一条输出契约里出现过 → 接纳，否则拒绝；from < 保留边界 → BeyondRetention；执行事实（不看采纳集合）：非 ordered、来源是 Program(_)，或 WriteScope.key 不在任何声明版本里 → 拒绝；控制：非 ordered → 拒绝"| S1
   S3 -.->|"kind 未定义 → 拒绝；as_of 有位置尚未提交 → NotYetAvailable{positions}（各流已提交的流末）；tickets / subscriptions 带历史 as_of → 拒绝"| S3
   S4 -.->|"expected_version ≠ current_version → Conflict；同版本已有 Decision → Conflict(AlreadyDecided)"| S4

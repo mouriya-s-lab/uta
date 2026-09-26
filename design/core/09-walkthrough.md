@@ -263,12 +263,12 @@
    - 旧在途 `submit` 的命运与 W2 脑裂变体相同：由 `SendBarrier` 记录 + 新实例对账收敛，不依赖旧实例。
    - 对外可见：接管不产生双写（§7.1 单实例、§7.4 单写者，fence 与 H10）；进程表中无旧 `instance_id` 名下的存活进程。
 4. **受控停止变体。** 原持有者收到 OS 的停止请求，按 §7.2“受控停止”从内到外结束：
-   - 第 1 步关闭会话入口与全部消费方会话，核心不再发起新的集成调用；解释层看到连接关闭（`design/downstream/design.md` 第 5 节“服务已停止”）。
-   - 第 2 步每个程序等在途 `Advance` 的事务提交（或确知不提交）后 `Unload`；受控停止本身不改变成员，停止之前已在执行的控制动作照常完成（`unload_program` 或替换的 `Applied`、`abandon` 的 `Abandoned`，都在实例结束锚点之前，§7.2 受控停止“停止之前已在执行的控制动作”）。
-   - 第 3 步每个集成会话以“在途调用恰好完成一次”结束：在途写得 `NoResponse`（→ `Undetermined`），在途读得 `Unavailable`（一次性读的 `Gap{origin: Channel}` 与计数同事务提交，`Pending` 的等待者重连后从 `from` 收到它）。
+   - 第 1 步关闭会话入口与全部消费方会话，核心不再发起新的集成调用，也不再拉起集成进程；解释层看到连接关闭（`design/downstream/design.md` 第 5 节“服务已停止”）。
+   - 第 2 步每个程序等在途 `Advance` 的事务提交（或确知不提交）后 `Unload`；受控停止本身不改变成员，停止之前已在执行的控制动作照常完成（`unload_program` 或替换的 `Applied`、`abandon` 的 `Abandoned`、等旧集成进程退出的 `restart_integration` / `rotate_credential` 的 `Applied`，都在实例结束锚点之前；后两者的 `Applied` 不带 `Connecting` 健康观察、不开始运行，§7.2 受控停止“停止之前已在执行的控制动作”）。
+   - 第 3 步每个集成会话以“在途调用恰好完成一次”结束：在途写得 `NoResponse`（→ `Undetermined`），在途读得 `Unavailable`（一次性读的 `Gap{origin: Channel}` 带这次调用的出处与 `dispatch_end`，与计数同事务提交，`Pending` 的等待者重连后从 `from` 收到它，按请求身份、`origins` 与 `dispatch_end` 认出它）。
    - 第 4 步 OS 确认全部集成与宿主进程退出，进程表清空；第 5 步写实例结束锚点；第 6 步释放 fence。
-   - 新实例启动：第 1 步没有要回收的行，第 2 步没有无后继的 `SendBarrier`；第 3 步为每个采纳的集成开始新的运行，第 5 步照常判定装载活动集合：受控停止本身不改变成员，与停止之前相比，只差停止前已在执行、在结束锚点之前完成的控制动作所记下的变化。
-   - 有进程得不到 OS 确认退出，或第 2–4 步都已完成时停止之前已发出的原生 op 交出仍没有子系统的回答，原持有者不写结束锚点、不释放 fence，停止以失败报告（后者不因没有回答而 append `ProgramHalted`，核心不替子系统判定超时；等这次交出的 `unload_program` 或替换没有 `Applied`，随实例结束、不生效）；之后它被外力结束，按变体 2 接管。
+   - 新实例启动：第 1 步没有要回收的行，第 2 步没有无后继的 `SendBarrier`；第 3 步为每个采纳的集成开始新的运行（停止中被解除 `Halted` 的集成也在其中），第 5 步照常判定装载活动集合：受控停止本身不改变成员，与停止之前相比，只差停止前已在执行、在结束锚点之前完成的控制动作所记下的变化；停止中 `rotate_credential` 的 `Applied` 之后该集成的第一次握手使各流开新 epoch（`credential_rotated`）。
+   - 有进程得不到 OS 确认退出，或第 2–4 步都已完成时停止之前已发出的原生 op 交出仍没有子系统的回答，原持有者不写结束锚点、不释放 fence，停止以失败报告（后者不因没有回答而 append `ProgramHalted`，核心不替子系统判定超时；等这次交出的 `unload_program` 或替换、等那个进程退出的 `restart_integration` / `rotate_credential` 都没有 `Applied`，随实例结束、不生效）；之后它被外力结束，按变体 2 接管。
    - 对外可见：停止成功时没有孤儿进程；每个在途调用都有结果；实例表显示上一实例有结束锚点。
 
 **走通**（验收 §10.5 #78、#81）。
@@ -497,7 +497,7 @@
    - P 有会话、报价流 `read` 为 `Supported`：集成作答，同一事务 append 报价记录（`one_shot`，带 `dispatch_end`）与读结论记录，target 得 `Answered{conclusion, items}`。
    - 若 P 的会话有效声明里某条历史 bar 流 `read` 为 `Unknown`：该 target 得 `Unconfirmed`，不调用；为 `Unsupported` 则得 `Unsupported`。
    - 上游对某 instrument 明确拒绝（未开通该行情）：得 `Refused{conclusion, reason}`，该流上只有读结论记录，流的能力不变。
-   - P 对另一个 instrument 迟迟不答，`deadline` 先到：该 target 得 `Pending{from, instance_id}`，没有结论也没有 gap。解释层以 `from` 订阅该报价流的一个只投递项（主体集为这个 instrument，§8.5 按主体投递）：它不进入 `route` 需求、不占配额池的用量，只要该流曾被声明就被接受，与 P 此刻有没有会话、重新握手后的声明里还有没有这条流无关。稍后上游作答，该流上照常 append item 记录与结论记录（同一请求身份，`origins` 含该会话），这一项由此收到结果；这次调用在途时会话结束，则该流上出现 `Gap{origin: Channel}`，同样经这一项送到。若核心在作答之前重启，解释层重连时握手得到新的 `instance_id`，与 `Pending` 所带的不同，就知道这次读的结果不再有保证：从 `from` 起没收到结论的，报为需要重新读，不让下游一直等。
+   - P 对另一个 instrument 迟迟不答，`deadline` 先到：该 target 得 `Pending{from, request, instance_id}`，没有结论也没有 gap。解释层以 `from` 订阅该报价流的一个只投递项（主体集为这个 instrument，§8.5 按主体投递）：它不进入 `route` 需求、不占配额池的用量，只要该流曾被声明就被接受，与 P 此刻有没有会话、重新握手后的声明里还有没有这条流无关。稍后上游作答，该流上照常 append item 记录与结论记录（`OneShot.request` 即 `Pending.request`，`origins` 含该会话的 principal，`dispatch_end` 即 `from`），这一项由此收到结果；这次调用在途时会话结束，则该流上出现带同样出处与 `dispatch_end` 的 `Gap{origin: Channel}`，同样经这一项送到。同一流上以同一 `from` 在途的另一次读（请求身份不同）的结论或 gap 也投给这一项，解释层按三项不全相符认出它不是这次读的结果。若核心在作答之前重启，解释层重连时握手得到新的 `instance_id`，与 `Pending` 所带的不同，就知道这次读的结果不再有保证：从 `from` 起没收到结论的，报为需要重新读，不让下游一直等。
    - 对外可见：各 target 独立；“来源重连中”“不支持”“能力未确认”“来源拒绝”“尚未作答”“空结果”彼此可区分，没有看似成功的空数组。
 4. 下游在一个订阅里选 P 的报价流（属配额池，带主体集）、P 最近声明里没有的一条流、X 某账户的持仓流三项：第二项被拒，第一项的主体集并入后超过配额池上限得 `QuotaExceeded{quota, limit}`，第三项为“活”；订阅照常建立，逐项结果交给下游，集成不收到超限主体（§8.5 订阅组）。
    - X 会话建立后，核心对该持仓流 `route` 一次全集（`All`，§8.2 `route`）；此后 X 的持仓推送才到达该订阅。

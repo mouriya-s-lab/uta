@@ -89,7 +89,7 @@ fn compact_below_retention<Record, D: RetractableDelta>(journal: &mut Journal<Re
 **`Gap{origin: Channel, channel}`：读渠道不可用。** `channel` 为返回 `Unavailable` 的那个渠道：对账取证渠道（§6.6）、回填操作（§8.4）或一次性读 `read`（§8.2）。它是核心自己那次调用的结果（UTA 自有事实），不是流的断代：它不说来源少了什么记录，所以不计入读模型的 `gaps`（§8.5）。落点随发起者：
 
 - 取证渠道的 gap 记在执行事实侧，属该 Attempt（§6.5）。
-- 回填与一次性读的 gap 记在观察侧该流上，作为流上的控制记录，让等这次读的人看得到结论（§8.5 一次性读）。
+- 回填与一次性读的 gap 记在观察侧该流上，作为流上的控制记录，让等这次读的人看得到结论（§8.5 一次性读）。一次性读的 gap 带这次调用的 `provenance: OneShot{origins, request}` 与 `dispatch_end`，与它的结论记录会带的相同，等待者凭它们从同一流上的多次读里认出自己的那一次（§8.2 `read`）。
 
 **集成崩溃的观察流面。** 集成在**观察流侧**崩溃（订阅 / 推送进程掉线）时，仅波及其负责的流，记录为 `Gap{origin: Source}`，核心不受影响。这是集成崩溃两个故障面之一；另一面与两面的判别边界见 §6.7。
 

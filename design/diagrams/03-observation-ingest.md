@@ -210,7 +210,7 @@ sequenceDiagram
 - 程序是同一种订阅者：它经自己的程序订阅消费，cursor 在订阅表里，由提交的 `Advance` 确认（第一次提交即使 `Start` 成为 `At`），与 `Checkpoint` 同事务持久化（D4.1），所以程序永远不会看到已折入状态的记录；消费方会话不挂接、不确认程序订阅（§8.6 程序的输入）。
 - 需求按流的全集下发：多个订阅对同一主体只路由一次，配额在核心计量。序号覆盖只看记录：推送只在该流 epoch 上同会话、确认供给 `All` 且 `refused` 为空的路由结论记录之后才计入；之后一条不确认这一点的路由结论记录使计入停住，直到下一条确认的记录（§8.4）。订阅表与核心自己的需求都不是它的输入。
 - `route` 跨过会话内流 epoch 更替只有一个判定者，就是集成。`generation` 由集成创建，随 `Gap{Source}` 送来；核心只带上它最后接受的那个，不另按发出 epoch 过滤 `Routed`。集成→核心按发送顺序处理，所以更替之前送出的 `Routed` 先于 gap 到达，落在它确认的那个 epoch 里。集成在 gap 之前以 `Unavailable` 完成已收到的 `route`，这个 `Unavailable` 先于 gap 到达，核心在接受 gap 之前按 pacing 再发的仍带旧 `generation`，同样得 `Unavailable`，无害；更替之后才到集成的旧 `generation` 调用得 `Unavailable`、供给不变。每条流至多一项未了的 `route` 义务，嵌在集成会话里：按 pacing 的重试与接受 gap 触发的重发是同一项，gap 并入它而不另起，第一次 `Routed` 了结它，所以新 epoch 的第一条路由结论记录来自一次带新 `generation` 的 `route`；会话结束时未了的义务丢弃，不带进下一个会话（§8.2 `route`“谁调、何时调”）。
-- 投递按主体：数据记录只看信封上的 `subject`，不论来自推送、回填、一次性读还是回执；控制记录投给该流每一项。只投递项不改变需求与配额，一次性读得 `Pending{from, instance_id}` 后从 `from` 订阅一个只投递项，即收到那条结论或 gap（同一核心实例内）。
+- 投递按主体：数据记录只看信封上的 `subject`，不论来自推送、回填、一次性读还是回执；控制记录投给该流每一项。只投递项不改变需求与配额，一次性读得 `Pending{from, request, instance_id}` 后从 `from` 订阅一个只投递项，即收到那条结论或 gap（同一核心实例内）；同一流上别的读的结论与 gap 也投给这一项，等待者按记录所带的 `OneShot.request`、`origins` 与 `dispatch_end` 认出自己的那一条（§8.5 一次性读）。
 - 投递缺口是订阅的状态，不是流上的记录：投递调度要跳过时先请持久订阅写进订阅表，写下之后才跳过；每次投递与重新挂接都先交出它；确认不低于 `to` 的 cursor 时与 cursor 推进同一次写删除。它属于（订阅，流）的 cursor，不属于某一项：只在 cursor 确认它、该流离开订阅（取消订阅，或该流的项与 cursor 一起结束）、`Reset` 重建该流的 cursor，或 `rewind_cursor` 把 cursor 退到低于它的 `from` 时删除（`At{to}` 把 `to` 算作已确认；此后重新跳过时照常再记），项的挂起、重建或重新接纳失败都不动它。`compacted` 只覆盖压缩删去、且不在同一（订阅，流）上未确认缺口里的位置，每一段连续的这种位置一项；健康流与程序流在各段之间留下的基线照常按位置投递，原样不改（§2.4）。`subscriptions` 读模型在该流的各项下列出消费方订阅未确认的缺口（按（订阅，流）记，不按项存）；其他订阅者看不到它。程序订阅的缺口在 `Advance` 的投递事件里交给程序，由覆盖它的 `Advance` 提交删除（§8.6）。
 - 执行事实订阅走同一套 cursor 与 ack，但只能 `ordered`：执行事实不压缩、不合并，所以慢消费者只背压自己，没有投递缺口；投递经存储按位置读出已提交的记录、原样搬运，不经读模型、不解析，所以观察侧的订阅与投递元素不依赖效应侧类型（§7.3 uses 图）。它不经 `route`，不受声明与会话影响。
 
@@ -243,7 +243,7 @@ flowchart TB
   Q{"缺口出在哪一段？"}
   Q -->|"来源流本身有缺口：断代，或 epoch 内未补齐的区间<br/>断线 / 配额 / 溢出 / 换凭据 / 载荷换版 / 程序装载 / 程序升级 / 回填穷尽"| S["Gap{origin: Source, reason}<br/>观察 J 该流上：新 epoch 首条（开 epoch）或 epoch 内记录（backfill_incomplete，不开 epoch）<br/>写者：集成推送入口（会话内上报的断代）/ 集成会话（握手开新 epoch）/ 持久订阅（backfill_incomplete）/ 控制面（程序流新 epoch，在开始不沿用旧状态之成员的 Applied 事务里、该成员的每条程序流上）"]
   Q -->|"核心到某个订阅的投递<br/>latest 订阅缓冲耗尽被停投 / 订阅位置被压缩 / latest 合并"| D["Gap{origin: Delivery, reason}<br/>订阅的状态：订阅表里按（订阅, 流）记 {流, from, to, reason}，不在任何流上<br/>写者：持久订阅（应投递调度请求，先写后跳）；订阅者确认不低于 to 的 cursor 即删除"]
-  Q -->|"核心发起的读渠道不可用<br/>取证 / 回填 / 一次性读 返回 Unavailable"| C["Gap{origin: Channel, channel}<br/>该次调用的结果，可再发<br/>写者：IO 壳（取证，执行事实侧属该 Attempt）/ 持久订阅（回填）/ 一次性读元素（观察侧该流）"]
+  Q -->|"核心发起的读渠道不可用<br/>取证 / 回填 / 一次性读 返回 Unavailable"| C["Gap{origin: Channel, channel}<br/>该次调用的结果，可再发；一次性读的带该次调用的 OneShot{origins, request} 与 dispatch_end<br/>写者：IO 壳（取证，执行事实侧属该 Attempt）/ 持久订阅（回填）/ 一次性读元素（观察侧该流）"]
   Q -->|"submit 无业务回执"| U["不是 gap：Undetermined<br/>写边界 in-doubt（D6.1）"]
 ```
 

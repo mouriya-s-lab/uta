@@ -498,7 +498,7 @@
 
 **受控停止**（§7.2 受控停止、生命周期表）。已定（证伪 §10.4 #35；验收 §10.5 #81）。
 
-- 选中：OS 的停止请求按生命周期从内到外结束本实例：关闭新工作入口与消费方会话、不再接受新的控制动作 → 程序 `Unload`（受控停止本身不改变成员）→ 集成会话以“在途调用恰好完成一次”结束 → OS 确认全部子进程退出、清空进程表 → 写实例结束锚点 → 释放 fence。停止之前已在执行的控制动作照常完成，结论在结束锚点之前（`unload_program`、替换的 `Applied`，`abandon` 的 `Abandoned` 或 `Rejected(NotUndetermined)`）。有进程得不到确认，或其余各步都已完成时停止之前已发出的原生 op 交出仍没有子系统的回答，停止以失败报告：不写结束锚点、不释放 fence，后者也不因没有回答而 append `ProgramHalted`，等这次交出的控制动作没有结论记录，随实例结束、不生效。
+- 选中：OS 的停止请求按生命周期从内到外结束本实例：关闭新工作入口与消费方会话、不再接受新的控制动作、不再拉起集成进程 → 程序 `Unload`（受控停止本身不改变成员）→ 集成会话以“在途调用恰好完成一次”结束 → OS 确认全部子进程退出、清空进程表 → 写实例结束锚点 → 释放 fence。停止之前已在执行的控制动作照常完成，结论在结束锚点之前（`unload_program`、替换的 `Applied`，`abandon` 的 `Abandoned` 或 `Rejected(NotUndetermined)`，等旧集成进程退出的 `restart_integration` / `rotate_credential` 的 `Applied`：不带 `Connecting` 健康观察、不开始运行，解除的 `Halted` 由下一实例第 3 步开始新的运行）。有进程得不到确认，或其余各步都已完成时停止之前已发出的原生 op 交出仍没有子系统的回答，停止以失败报告：不写结束锚点、不释放 fence，后者也不因没有回答而 append `ProgramHalted`，等这次交出或那个进程退出的控制动作没有结论记录，随实例结束、不生效。
 - Q 场景后果：Q20/Q21：停止成功时没有孤儿进程、没有无后继的 `SendBarrier`、每个在途调用都有结果；继任实例能区分上一实例是受控停止还是崩溃。
 - 不选：
   - 停止即退出、交给继任者的崩溃恢复：外层结束时内层仍活着，每次停止都产生孤儿与 `Undetermined(CrashWindow)`；
@@ -632,7 +632,7 @@
 
 **按主体投递与只投递项**（§8.5 按主体投递、配额、一次性读）。已定（验收 §10.5 #54）。
 
-- 选中：观察记录信封带注册字段 `subject`，数据记录不论出处一律按 `subject ∈ 项的主体集` 投递，控制记录（`Gap`、读结论、路由结论）投给该流每一项；订阅项分供给项（进入 `route` 需求、计入配额）与只投递项（不进需求、不占配额）；一次性读的 `Pending{from, instance_id}` 以只投递项从 `from` 订阅即可收到结论或 gap，保证限于发出调用的核心实例。
+- 选中：观察记录信封带注册字段 `subject`，数据记录不论出处一律按 `subject ∈ 项的主体集` 投递，控制记录（`Gap`、读结论、路由结论）投给该流每一项；订阅项分供给项（进入 `route` 需求、计入配额）与只投递项（不进需求、不占配额）；一次性读的 `Pending{from, request, instance_id}` 以只投递项从 `from` 订阅即可收到结论或 gap，等待者按记录所带的请求身份、`origins` 与 `dispatch_end` 认出自己的那一条（一次性读的 `Gap{origin: Channel}` 与结论记录同样带这三项），保证限于发出调用的核心实例。
 - Q 场景后果：Q13：接着等一次读不占配额，也不向上游多要推送；Q15/Q16：订 A 的项收不到对 B 的读结果，“尚未作答”之后一定可见结论或 gap；核心重启后下游凭 `instance_id` 得知等待保证已失效，没收到结论的重新读，不无限等待。
 - 不选：投递整条流、只让路由按主体（主体集只约束上游，消费方自己按载荷筛）；只过滤推送与回填（同形记录按出处分流）；以空主体集表示只投递（与撤回需求同值）；配额池流上的只投递项只准带主体集或只收控制记录（配额守的是上游供给，只投递项不增加需求，读又不按 principal 授权，多一种项的形状没有要守的范围）；以供给项等一次读的结果（多要推送、占配额）；新实例逐个通知失去保证的 `Pending`（在途调用只在旧实例内存里）。
 - 证据：§2.5（`Pred<Envelope>`）；§8.1 字段注册表；§8.2 `route`；域 Q13、Q15、Q16。
@@ -854,7 +854,8 @@
     - 参数不合流的 `request_schema`、所依据的 schema 身份与会话有效声明不符、`range` 用在无事件时间的流上：得 `InvalidRequest`，集成未被调用；
     - 空回答得 `Answered` 且只有一条读结论记录；非空回答的 item 记录与读结论记录同一事务 append，结论引用的恰是本次 item 的位置；另一个订阅该流的消费者在 cursor 流里看到同一条结论；
     - 分别触发来源未登记、从未有声明、无已建立会话、流不在会话有效声明里、`read` 为 `Unsupported`、为 `Unknown`、上游明确拒绝、调用后渠道失败：结果依次为 `UnknownTarget`、`Unavailable{source_state}`、`Unavailable{source_state}`、`Unsupported`、`Unsupported`、`Unconfirmed`、`Refused`、`Unavailable{gap}`（`gap` 指向该流上刚记的 `Gap{origin: Channel}`），不同结果之间可区分；前六种都不调用集成、不 append 观察记录，“无会话”不计入健康的连续失败；来源离线而上一次声明里该流 `read` 为 `Unsupported` 或 `Unknown` 时，结果仍是 `Unavailable{source_state}`；
-    - fixture 上游拖过 `deadline` 才作答：该 target 得 `Pending{from, instance_id}`，此时该流上没有结论也没有 gap，健康计数不变；之后该流上出现一条结论记录（与本次同一请求身份，`origins` 含该会话）并计一次健康结果；拖过 `deadline` 后失败则出现一条 `Gap{origin: Channel}`；在结论 append 之后才以 `from` 订阅该流的一个只投递项，仍收到这条结论；同一集成会话 epoch 内在调用结束前以同一 identity 再读，fixture 只收到一次调用；
+    - fixture 上游拖过 `deadline` 才作答：该 target 得 `Pending{from, request, instance_id}`，此时该流上没有结论也没有 gap，健康计数不变；之后该流上出现一条结论记录（`OneShot.request` 等于 `Pending.request`，`origins` 含该会话，`dispatch_end` 等于 `from`）并计一次健康结果；拖过 `deadline` 后失败则出现一条 `Gap{origin: Channel}`，带同样的 `provenance` 与 `dispatch_end`；在结论 append 之后才以 `from` 订阅该流的一个只投递项，仍收到这条结论；同一集成会话 epoch 内在调用结束前以同一 identity 再读，fixture 只收到一次调用；
+    - 同一会话在同一流上发出两次请求身份不同的读，二者发出时该流流末相同（两个 `Pending` 的 `from` 相同），都拖过 `deadline`；fixture 让其中一次失败、另一次作答：该流上恰有一条 `Gap{origin: Channel}` 与一条结论记录，各带自己那次调用的 `OneShot.request` 与相同的 `dispatch_end`；两个等待者各以 `from` 订阅只投递项，都收到这两条记录，按三项匹配各自恰认出一条：失败的那次得到 gap，作答的那次得到结论，没有一方把另一方的结果当作自己的；
     - 无作用域的公共来源可按流读取与订阅，不出现在账户列表里；
     - 同一集成会话 epoch 内同一 identity 的两个在途请求（发起方不同亦然）必然并为一次集成调用，读结论的 `origins` 含两者，健康只计一次，较短的 `deadline` 照常到期；调用完成之后的同一请求是新调用；跨会话 epoch 的请求不合并。
 28. **读侧声明：配额、回填、数据等级**（§2.2、§8.2、§8.4、§8.5）：（对应 Q13/Q14）
@@ -986,7 +987,7 @@
     - 一个订阅以主体集 {A} 订该流：推送、回填、一次性读与回执写在该流上的 B 的记录都不投给它，A 的记录都投给它；该流上的 `Gap`、读结论记录与路由结论记录都投给它；同一订阅在该流上另有主体集 {A, B} 的项时每条记录只投递一次；
     - fixture 集成推送一条缺 `subject` 的数据记录：它不投给任何带主体集的项，只投给整条流的项；集成一致性测试把它判为违约；
     - 只投递项：在配额池已满的流上以整条流或 {B} 订一个只投递项：被接纳，`route` 全集不变，配额用量不变，fixture 未收到新的推送需求；它收到因别的需求已有的记录；
-    - 一次性读得 `Pending{from, instance_id}` 后，以 `from` 订阅一个只投递项，无论订阅建在结论 append 之前还是之后，都恰收到一条结论或 `Gap{origin: Channel}`；fixture 在作答前重启核心：新会话握手得到的 `instance_id` 与之不同，该流上此后没有这次读的结论或 gap，下游显示需重新读取，不显示为仍在等待；在结论 append 之后、订阅之前重启核心：以 `from` 订阅仍收到这条结论。
+    - 一次性读得 `Pending{from, request, instance_id}` 后，以 `from` 订阅一个只投递项，无论订阅建在结论 append 之前还是之后，都恰收到一条与 `Pending.request`、`from` 及本会话 principal 相符的结论或 `Gap{origin: Channel}`；同一流上另一次请求身份不同、`from` 相同的读的结论或 gap 也投给这一项，但不与这次读相符；fixture 在作答前注入核心崩溃（非受控停止）后重启：新会话握手得到的 `instance_id` 与之不同，该流上此后没有这次读的结论或 gap，下游显示需重新读取，不显示为仍在等待；在结论 append 之后、订阅之前重启核心：以 `from` 订阅仍收到这条结论。
 55. **回填起点与完整界**（§2.2、§8.1 精确重建的前提、§8.2 `backfill`、§8.4 回填进度、§8.5 `orders`）：（对应 Q14/Q31）
     - 回填深度为 N 时，新 epoch 的任务从 `live_from − N` 起请求（N 的单位随该流坐标）；任务在 `live_from` 声明时判定，之后改深度、能力或需求只影响下一 epoch 的任务；深度为 0、该流需求为空、或深度为 `Origin` 而该流会话有效声明没有 `backfill_from_origin` 时，不建任务、不调用 `backfill`，健康里没有该 epoch 的回填进度；
     - 新 epoch 的任务起点从不取上一 epoch 的覆盖上界；
@@ -1088,11 +1089,13 @@
     - 历史切面：在两个实例之间做上述改动，对每个实例内、`restart_integration(Y)` 之前与之后的控制流位置各读一次 `read_model(health, as_of)`：列出的集成恰为该位置之前最近一条采纳记录的 id 加其后带同一 `instance_id` 的 `Applied` 的 id；上一实例的 `restart_integration` `Applied` 不进入下一实例的采纳集合；从起点订阅控制流、按同一规则自行 fold 的结果与之相等；
     - 下次启动后 Z 不被拉起，`health()` 不列 Z；Z 的流记录、声明历史与订阅仍可读，核心没有为 Z 新 append 任何记录；新的 `read` 与供给项对 Z 得“来源未登记”；以只投递项订 Z 历史上声明过的流、以执行事实 selector 订 Z 历史上声明过的作用域都被接纳，从 `from` 起收到已 append 的记录；订 Z 从未声明过的流或作用域被拒；
     - 统一路径下没有核心写的文件。
-81. **受控停止**（§7.2 受控停止、生命周期表；§8.6 卸载与替换；§6.6 放弃跟踪）：在各目标 OS 上以服务管理器与终端中断发出停止请求：（对应 Q20/Q21）
+81. **受控停止**（§7.2 受控停止、生命周期表；§8.6 卸载与替换；§6.6 放弃跟踪；§8.5 控制组 `restart_integration` / `rotate_credential`）：在各目标 OS 上以服务管理器与终端中断发出停止请求：（对应 Q20/Q21）
     - 有在途写、在途读、在途 `Advance` 时停止：在途写恰得 `NoResponse`（→ `Undetermined`）、在途读恰得 `Unavailable`，各与计数同事务；程序最近的 `Checkpoint` 与 cursor 同事务；进程表清空、实例表本行有结束锚点；OS 进程列表中没有该实例拉起的进程；
-    - 停止后启动新实例：第 1 步没有要回收的行，第 2 步没有无后继的 `SendBarrier`；受控停止本身不改变成员，停止前已在执行的控制动作照常完成（见下两条），新实例的活动集合与停止之前只差这些动作的 `Applied` 所记下的变化；受控停止前处于 `Halted` 的集成仍 `Halted`；
+    - 停止后启动新实例：第 1 步没有要回收的行，第 2 步没有无后继的 `SendBarrier`；受控停止本身不改变成员，停止前已在执行的控制动作照常完成（见下四条），新实例的活动集合与停止之前只差这些动作的 `Applied` 所记下的变化；受控停止前处于 `Halted`、没有被停止之前已在执行的动作解除的集成仍 `Halted`；停止期间 fixture 观测不到任何新拉起的集成进程（`Connecting` 按 pacing 的重拉也没有）；
     - 在 `unload_program` 处于“结束宿主执行中”时停止（宿主正在 `Advance`，或 fixture 子系统对它的交出尚未回答、在停止第 2–4 步完成之前作答）：该 `unload_program` 的 `Applied` 出现在实例结束锚点之前，新实例的活动集合里没有该程序；替换同样如此：替换的 `Applied` 在结束锚点之前，停止期间新成员没有任何装载步骤（fixture 子系统没有收到它的交出，没有宿主被拉起），新实例第 5 步照常判定装载新成员；
     - 在 `abandon` 等在途取证调用时停止：在途调用在停止第 3 步得 `Unavailable`（fixture 不作答时）或照常作答，之后在实例结束锚点之前要么有 `Abandoned`（结果仍未知），要么没有 `Abandoned` 而结果已由在途调用的证据确立（返回 `Rejected(NotUndetermined)`）；新实例里该尝试的等待与这一结论一致；
+    - 在解除 `Halted` 的 `restart_integration` 等旧进程 OS 确认退出时停止：该 `restart_integration` 的 `Applied`（以位置引用被解除的 `IntegrationHalted`）出现在实例结束锚点之前，同一事务里没有 `Connecting` 健康观察，停止期间没有为该集成拉起进程、没有握手；新实例第 3 步该集成不再 `Halted`，写 `Connecting` 并拉起、握手；
+    - 在 `rotate_credential` 等旧进程 OS 确认退出时停止：它的 `Applied` 出现在实例结束锚点之前，停止期间没有拉起新进程；新实例里该集成的第一次握手使各流开新 epoch，`Gap{origin: Source}` 的原因是 `credential_rotated`，不续接；
     - fixture 子系统对 `unload_program` 所等的交出始终不回答时停止：停止以失败报告，控制流上没有这次 `unload_program` 的 `Applied` 或 `Rejected`；外力结束之后继任实例的活动集合仍含该程序，第 5 步照常判定装载；
     - 注入一个不响应退出请求且无法被终止的子进程：停止以失败报告，实例表没有结束锚点，fence 未释放；
     - fixture 子系统对停止之前已发出的交出始终不回答：第 2–4 步照常完成，停止以失败报告，实例表没有结束锚点，fence 未释放，控制流上没有该程序新的 `ProgramHalted`；之后外力结束实例，继任实例第 1 步取得 fence，第 5 步照常判定装载该程序；
@@ -1150,7 +1153,7 @@
 87. **流上的调用跨过会话内的流 epoch 更替**（§8.2 `read`、`backfill` 的“错误”与 `route` 的 `generation`、谁调、何时调，§8.1 来源顺序第 1 条与 `dispatch_end`，§8.3 上报 gap 之前先完成已收到的调用、按 `generation` 划分流 epoch，§8.4 会话内开的新流 epoch 与计入）：fixture 集成在一个已建立的会话里，某条声明 `joinable_venue_seq` 的订单状态流处于 epoch e1（`generation` g），e1 的回填任务有一个窗口在途、一次一次性读在途、一次 `route`（`All`，带 g）在途，三者都已到达集成，另有一笔 `submit` 在途；fixture 上游推送通道断开重连：（对应 Q1/Q11/Q14/Q15）
     - 合格集成：fixture 观测到三次读侧调用（`read`、`backfill`、`route`）的 `Unavailable` 都先于 `Gap{origin: Source}` 送出，这条 gap 带 g + 1；`read` 与 `backfill` 各一条 `Gap{origin: Channel}` 落在 e1 里，`route` 没有记录；每次调用恰计一次失败；核心若在接受 gap 之前按 pacing 再发，那次 `route` 带 g、得 `Unavailable`、计一次失败；接受之后再发的都带 g + 1。fixture 此后不改变需求、不再开新 epoch，并让第一次带 g + 1 的 `route` 返回 `Routed`：带 g + 1 的 `route` 恰一次，核心不再因这条 gap 另发（重试与 gap 触发的重发是同一项义务）；
     - 跨越的 `route`：同一场景里，该流的需求在集成送出 gap 之后、核心接受它之前变了，核心发出一次带 g 的 `route`（此前的 `route` 已返回）：集成答 `Unavailable`，供给不变，fixture 上游没有收到新的订阅请求，e2 在带 g + 1 的 `route` 之前没有推送；核心不 append 路由结论记录，这次计一次失败；随后核心发出带 g + 1、全集为最新需求的 `route`，fixture 让它返回 `Routed`：这样的 `route` 恰一次，它的 `Routed` 在 e2 上 append 路由结论记录，e2 的推送在它之后才计入序号覆盖；
-    - fixture 集成违约（已收到 `read`、`backfill` 之后先送出 `Gap{origin: Source}` 开 e2，再对二者分别返回 `Answered`、`Covered`）：二者各在 e2 上恰一条 `Gap{origin: Channel}`，没有它们的 item 记录、结果记录与读结论记录；e1 回填任务的进度不再变化，e2 的回填进度与 `covered_to` 里没有这次 `Covered` 的内容；每次调用恰计一次失败；该读此前得 `Pending{from}` 的发起方以只投递项从 `from` 订阅，越过 `Gap{origin: Source}` 恰收到 e2 上的那条 `Gap{origin: Channel}`；
+    - fixture 集成违约（已收到 `read`、`backfill` 之后先送出 `Gap{origin: Source}` 开 e2，再对二者分别返回 `Answered`、`Covered`）：二者各在 e2 上恰一条 `Gap{origin: Channel}`，没有它们的 item 记录、结果记录与读结论记录；`read` 的那条带这次调用的 `OneShot{origins, request}` 与 e1 里的 `dispatch_end`；e1 回填任务的进度不再变化，e2 的回填进度与 `covered_to` 里没有这次 `Covered` 的内容；每次调用恰计一次失败；该读此前得 `Pending{from, request, instance_id}` 的发起方以只投递项从 `from` 订阅，越过 `Gap{origin: Source}` 恰收到 e2 上的那条 `Gap{origin: Channel}`，按请求身份、`origins` 与 `dispatch_end` 认出它；
     - 合规的竞态：同一场景的变体里，核心在 e1 里发出的 `read` 与回填窗口由 fixture 在集成送出 gap 之后才交给集成，集成分别返回 `Answered`、`Covered`：核心的处置与上一条相同，一致性测试不判它们不合格；
     - `submit` 的回执在 e2 开始之后到达，含订单状态与一笔成交：两条观察记录照常分别 append 在该作用域的订单状态流与成交流上并进 `Evidence`，`provenance` 相同，各带自己那条流在调用发出时的 `dispatch_end`；订单状态记录的 `dispatch_end` 在 e1 里，结果照常确立；它带的 venue 序号不与 e2 的推送定序、不计入序号覆盖：e2 上一条带序号的推送与它内容不同时，流不声明 `order_revision` 的，`orders` 并列二者并标出顺序未确立（声明 `query_not_lagging` 时回执也只取代它 `dispatch_end` 及之前 append 的记录，不取代 e2 上的这条推送）；成交流没有更替，成交记录的序号照常作来源顺序证据；取证调用（`list_open`）的回答跨过更替时同样如此；
     - 集成一致性：已收到的 `read`、`backfill` 在 gap 之后才作答（上文违约一条）被一致性测试判为不合格，gap 之后才收到的照常作答（上文合规的竞态）不判；集成对带旧 `generation` 的 `route` 答 `Routed`、或在收到带新 `generation` 的 `route` 之前推送 e2，被一致性测试判为不合格（核心不另判，§8.2 `route`）。

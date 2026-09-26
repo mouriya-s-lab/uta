@@ -140,11 +140,14 @@ stateDiagram-v2
     ACT --> ABW : abandon：①停发新取证 ②在途取证各自完成并 append ③一个事务里重查结果仍未知 → append Abandoned{principal, note}
   }
   state "结果（上游事实的副本，从不作为门）" as O {
-    state "Unknown（Undetermined）" as UNK
+    state "Unknown（尚无回执或证据结论）" as UNK
+    state "Undetermined（结果未知）" as UND
     state "Accepted / Rejected / NotSent / Found / Absent" as KNOWN
     [*] --> UNK
-    UNK --> KNOWN : 回执 / NotSent / 第一条 Found 或 Absent（Active 或 Abandoned 时都可以补上）
-    UNK --> UNK : Abandoned 后 retry_reconciliation 那一轮得 Inconclusive → 什么都不变（等待仍 Abandoned，结果仍未知；渠道穷尽即停）
+    UNK --> KNOWN : 回执 / NotSent（只在 Undetermined 之前）
+    UNK --> UND : Undetermined（NoResponse / CrashWindow）
+    UND --> KNOWN : 第一条 Found 或 Absent（Active 或 Abandoned 时都可以补上）；这是 Undetermined 的唯一出口
+    UND --> UND : Abandoned 后 retry_reconciliation 那一轮得 Inconclusive → 什么都不变（等待仍 Abandoned，结果仍未知；渠道穷尽即停）
   }
   note right of O
     Abandoned 之后：
