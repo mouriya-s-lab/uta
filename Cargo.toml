@@ -7,6 +7,7 @@ members = [
     "crates/uta-channel",
     "crates/uta-store",
     "crates/uta-core",
+    "crates/uta-testkit",
     "xtask",
 ]
 
