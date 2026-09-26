@@ -250,7 +250,7 @@ flowchart LR
 | 写调用（`submit` / `cancel`）的 `Ack`：`VenueAccepted`（含 `Evidence`）+ 该回应的观察记录（订单状态；每笔可识别执行一条成交记录）+ 该调用的计数健康观察 | §6.5 记录模型、§8.4 | #5：视为无后继 → `Undetermined` → by-key 取证重得同一状态 |
 | 写调用返回 `NotSent`：`NotSent` 记录 + 该调用的计数健康观察 | §6.5、§8.4 | 视为无后继 → `Undetermined(CrashWindow)`（保守） |
 | 一次取证命中：`ResolutionEvidence{Found}`（含 `Evidence`）+ `provenance: Reconciliation` 的该回应观察记录 | §6.5 | #7：该次取证不存在；fold 显示本轮该渠道未取证，重做（读可重试） |
-| 推送归因命中：观察记录 + `ResolutionEvidence{Attributed}` | §6.6、§8.1 | 推送未 append：核心崩溃即集成成孤儿被回收，重启握手后该流续接（集成以 venue 游标证明）或新 epoch + `Gap{Source}`；续接则记录重到，仍处 `Undetermined` 且结果未知的尝试照常归因 |
+| 归因命中：带 `FromAttempt` 的观察记录 + `ResolutionEvidence{Attributed}`（记录来自回执、取证响应或一次性读时，与该回应的其余记录同一事务） | §6.6、§8.1 | 推送带来的未 append：核心崩溃即集成成孤儿被回收，重启握手后该流续接（集成以 venue 游标证明）或新 epoch + `Gap{Source}`；续接则记录重到，仍处 `Undetermined` 且结果未知的尝试照常归因。来自回执、取证响应或一次性读的，随该回应一起未落，按上面对应的行恢复 |
 | `Undetermined` append + 回查已到达的归因观察 | §6.6 | 二者同事务，不存在"归因已到但未匹配"的持久态 |
 | `Advance` 输出：`EffectRequest` 记录 + 派生记录 + `Checkpoint` + 程序订阅上的程序 cursor（持久订阅元素写）+ 新 cursor 覆盖的 `Gap{Delivery}` 的删除 | §8.6 | #16：整批不存在，从同一组已提交 cursor 重新推进，未确认的缺口仍在 |
 | fence 取得 + 实例表新一行（`instance_id += 1`） | §7.2 第 1 步 | 未提交则旧 `instance_id` 仍有效，重来 |
@@ -261,8 +261,8 @@ flowchart LR
 | `IntegrationHalted` + `Halted` 健康观察（进程的终止在提交之后，另由 OS 确认） | §7.2 第 3 步 | 二者皆无：仍在上一状态，重启按执行事实重判；已提交而进程未确认退出：继任实例第 1 步回收 |
 | 解除 `Halted` 的控制记录 `Applied`（引用 `IntegrationHalted`）+ `Connecting` 健康观察；只在上一次集成运行结束（进程 OS 确认退出、行已清除）之后提交 | §7.2 第 3 步 | 二者皆无：仍 `Halted`，没有握手发生 |
 | `restart_integration` 采纳本实例尚未运行的 id：`Applied`（带文件 hash 与 `instance_id`）+ `Connecting` 健康观察 | §7.2 第 3 步、§8.5 | 二者皆无：该 id 不在采纳集合里，没有运行、没有进程 |
-| `load_program` 的 `Applied`（钉内容 hash、以值记下输出契约、记下沿用的 `Checkpoint`）+ 程序订阅上全部输入的 cursor 与观察输入的订阅项；让 id 进入活动集合的（首次装载、卸载之后再装载）另加程序订阅本身的建立与新成员每条程序流新 epoch 的 `Gap{Source, start}`；替换保留程序订阅，共有输入的项只在主体集与用途也相同、且不是被拒的项时沿用，否则同事务结束旧项、建立并接纳新项；替换不沿用旧状态时（`cold_start`、不接受旧 `state_version`，或开始旧成员的 `Applied` 所记的输出契约与新成员的不同）另加 `ProgramReset`、新成员每条程序流新 epoch 的 `Gap{Source, program_upgrade}`、项与 cursor 的重建（重建的 cursor 上的投递缺口随之删除）、旧保留引用的解除；新成员不声明的流不写记录。结构校验不成立的程序值只有控制记录 `Rejected`，不在这个集合里 | §8.5、§8.6 卸载与替换、程序流的 epoch、装载期校验 | 二者皆无：id 不在活动集合里的，程序仍不在集合里，没有程序订阅，程序流没有新 epoch；替换的，旧成员照旧（替换时旧宿主已结束，重启照常装载旧成员）；已提交：按 `Applied` 所记沿用或不携带装载，不重复 `Reset`，不再开 epoch |
-| `unload_program` 的 `Applied` + 程序订阅（cursor 与观察输入订阅项）的结束 + 保留引用的解除（宿主已 OS 确认退出之后）；程序流上不写记录，它的 epoch 不结束 | §8.6 卸载与替换 | 二者皆无：程序仍在活动集合里，重启照常装载 |
+| `load_program` 的 `Applied`（钉内容 hash、以值记下输出契约、记下沿用的 `Checkpoint`）+ 程序订阅上全部输入的 cursor 与观察输入的订阅项；让 id 进入活动集合的（首次装载、卸载之后再装载）另加程序订阅本身的建立与新成员每条程序流新 epoch 的 `Gap{Source, start}`；替换保留程序订阅，共有输入的项只在主体集与用途也相同、且不是被拒的项时沿用，否则同事务结束旧项、建立并接纳新项；替换不沿用旧状态时（`cold_start`、不接受旧 `state_version`，或开始旧成员的 `Applied` 所记的输出契约与新成员的不同）另加 `ProgramReset`、新成员每条程序流新 epoch 的 `Gap{Source, program_upgrade}`、项与 cursor 的重建（重建的 cursor 上的投递缺口随之删除）、旧保留引用的解除；新成员不声明的流不写记录。结构校验不成立的程序值只有控制记录 `Rejected`，不在这个集合里 | §8.5、§8.6 卸载与替换、程序流的 epoch、装载期校验 | 二者皆无：id 不在活动集合里的，程序仍不在集合里，没有程序订阅，程序流没有新 epoch；替换的，旧成员照旧（替换时旧宿主已结束，重启照常判定装载旧成员，失败抑制中的仍被抑制）；已提交：按 `Applied` 所记沿用或不携带装载，不重复 `Reset`，不再开 epoch |
+| `unload_program` 的 `Applied` + 程序订阅（cursor 与观察输入订阅项）的结束 + 保留引用的解除（宿主已 OS 确认退出、已发出的装载步骤都已得出结论之后）；程序流上不写记录，它的 epoch 不结束 | §8.6 卸载与替换 | 二者皆无：程序仍在活动集合里，重启照常判定装载（等待中得出装载失败、已在它之前提交 `ProgramHalted` 的，仍在失败抑制里） |
 | `ProgramHalted` + `ProgramFailed` 观察（宿主的终止在提交之后） | §8.6 | 二者皆无：重启时程序仍在活动集合里且未被抑制，按 `Checkpoint` 重新装载；超预算或 trap 若再发生，再记一次 |
 
 读法：`SendBarrier` 不在任何集合里——它单独 durable append（fsync）后才允许该尝试的写调用，这正是把崩溃窗口二分的屏障（D6.1）。
@@ -289,11 +289,11 @@ flowchart TB
         end
       end
     end
-    subgraph HEXEC["程序宿主执行：成员引用原生 op 时子系统接受为它交出的内容开始，然后拉起 + 行 + Load（不引用的从拉起开始）· Unload 或终止后 OS 确认退出结束；拉起未成（OS 没有给出进程）即结束，成员同事务 ProgramHalted{LoadRejected(HostSpawnFailed)} + ProgramFailed；交出已被接受而宿主还没有拉起时：受控停止不再拉起即结束（核心确认），崩溃随实例结束"]
+    subgraph HEXEC["程序宿主执行：成员引用原生 op 时子系统接受为它交出的内容开始，然后拉起 + 行 + Load（不引用的从拉起开始）· Unload 或终止后 OS 确认退出结束；拉起未成（OS 没有给出进程）即结束，成员同事务 ProgramHalted{LoadRejected(HostSpawnFailed)} + ProgramFailed；交出已被接受而宿主还没有拉起时：成员被 unload_program 或替换结束、或受控停止，都不再拉起即结束（核心确认），崩溃随实例结束"]
       HOVER["交给子系统的原生 op 内容：每次宿主执行一次交出、只属于这次执行，每份以 (op 名, 内容 hash) 标识 · 子系统接受即开始，未被接受则这次执行不开始、不拉起宿主（LoadRejected(NativeHandoverFailed)）· 随这次执行结束；子系统对这次执行只运行为它交出的，(op 名, 内容 hash) 相同的执行可共用一份已载入的"]
     end
   end
-  subgraph MEMBER["程序成员（跨实例）：load_program Applied 开始（钉内容 hash，以值记下输出契约）· unload_program 或替换的 Applied 结束，只在宿主执行结束之后 append；替换的同一个 Applied 开始新成员，沿用判定比较开始旧成员的 Applied 所记输出契约"]
+  subgraph MEMBER["程序成员（跨实例）：load_program Applied 开始（钉内容 hash，以值记下输出契约）· unload_program 或替换的 Applied 结束，只在宿主执行结束之后 append；装载步骤已发出的成员先等每个已发出步骤的结论（被接受而未拉起的不再拉起；装载失败的 ProgramHalted + ProgramFailed 在 Applied 之前），不设超时；替换的同一个 Applied 开始新成员，沿用判定比较开始旧成员的 Applied 所记输出契约"]
     CKREF0["程序订阅的项在本成员内的部分：开始成员的 Applied 同事务建立或沿用 · 替换的 Applied 里，新程序不再声明的输入：项与 cursor 都结束；共有输入里主体集或用途变了的项，以及被拒的项（从不沿用）：项结束、同事务建立新项并重新接纳，cursor 接着走；不沿用时全部重建"]
     CKREF["Checkpoint 的保留引用：进入活动集合后第一个 Checkpoint 登记 · unload_program 或不沿用旧状态的替换 Applied 解除；Unload 与失败抑制不解除"]
   end
@@ -351,7 +351,7 @@ sequenceDiagram
 - 每层都在外层之内开始、在外层之前结束；每个锚点都有确认者。持久事实（`Halted`、失败抑制、采纳、订阅、单据）不嵌在实例里，由记录的 fold 跨实例恢复；前三者都在控制流上，按这条流上的位置 fold。已安装的原生 op 同样在控制流上、跨实例；它与程序成员不是嵌套：成员可以在 op 安装之前得到 `Applied`（之后声明校验不成立），而移除在有活动成员的 `Applied` 列出该名时被拒（`InUse`），所以 op 不先于引用它的成员结束（§7.2 生命周期表、§8.7 原生 op 的安装）。
 - 流 epoch 也不嵌在实例或会话里：集成来源的流，握手以游标续接时它跨会话、跨实例延续，只由下一条开 epoch 的 `Gap{Source}` 结束，`backfill_incomplete` 不结束它；程序产出的派生流，由开始不沿用旧状态之成员的 `Applied` 在该成员的每条程序流上开出（让 id 进入活动集合的 `load_program` 带 `start`，不沿用旧状态的替换带 `program_upgrade`），到该流下一条开 epoch 的 `Gap{Source}` 为止，即同一 id 此后第一个声明该流、不沿用旧状态的成员开始时；`unload_program`、不声明该流的成员开始、沿用旧状态的替换（输出契约相同）与实例更替都不结束它。读侧调用与写、取证调用一样只嵌在会话里，会话结束时强制完成。`route` 义务也嵌在会话里：它跨过多次 `route` 调用（`Unavailable` 按 pacing 再发，gap 与需求变化并入），第一次 `Routed` 了结；会话结束时，在途调用完成之后、关闭通道之前丢弃，不带进下一个会话，下一个会话建立时按那时的需求重新起；会话结束只丢弃义务，不结束流 epoch。发出 epoch 是读侧调用的属性，不是外层：流 epoch 何时结束由集成决定，送出 `Gap{Source}` 时仍在通道上的调用只能在它之后结束，所以 CALLR 到 EPOCH 的虚线是“问的是、结果按它准入”，不是嵌套。集成在上报 `Gap{Source}` 之前以 `Unavailable` 作答它已收到的调用；`read`、`backfill` 的结果在发出 epoch 结束之后才到核心的，由核心完成为 `Unavailable`；带旧 `generation` 的 `route` 由集成答 `Unavailable`、供给不变，核心不另判。写与取证按作用域寻址，同样只嵌在会话里。
 - 集成运行在 `Halted` 路径上的结束锚点是最后一个进程 OS 确认退出、清除进程表的行，不是 `IntegrationHalted`：后者先提交（§7.2 第 3 步“进入 `Halted`”），只开始 `Halted` 抑制，会话与进程在它之后才结束。`Connecting` 中换进程不结束运行。解除 `Halted` 的 `Applied` 只在上一次运行结束之后提交，所以同一集成的两次运行不重叠。
-- 程序成员跨实例，宿主执行是成员与实例的共同内层；受控停止结束宿主执行而不改变成员。`unload_program` 与替换先结束宿主执行（停调度、等在途输出事务、OS 确认退出），再 append 结束成员的 `Applied`，cursor 与保留引用随之结束或转给新成员（§8.6 卸载与替换）。成员引用原生 op 时，宿主执行从子系统接受这次交出开始，交出只属于这次执行、随它结束，所以移除之后以另一份内容重新安装的同名 op，下一次执行运行的是新交出的那一份；交出未被接受，这次执行就不开始，宿主不被拉起（§7.2 生命周期表、§8.7 原生 op 的执行）。交出已被接受之后 OS 没有给出宿主进程，这次执行就此结束，成员同事务 `ProgramHalted{LoadRejected(HostSpawnFailed)}` + `ProgramFailed`，不是 trap（§8.6 失败抑制）。受控停止第 1 步不再开始新的装载步骤，并在实例结束锚点之前等到已发出步骤的结论，这一等待不挡第 2–4 步：交出已被接受（含停止之后才到的接受）而宿主还没有拉起的不再拉起，这次执行由核心确认结束，停止本身不 append `ProgramHalted`；已发出的步骤得出核对不符、声明校验不成立或交出未被接受的，照常同事务 `ProgramHalted` + `ProgramFailed`（§7.2 受控停止、§8.7 失败语义）；第 2–4 步都已完成时交出仍没有回答的，停止以失败报告，不写结束锚点、不释放 fence，也不因没有回答而 append `ProgramHalted`：这次交出的结论只有子系统是源头，核心不替它判定超时；实例之后被外力结束即崩溃路径，由继任者的 fence 结束。
+- 程序成员跨实例，宿主执行是成员与实例的共同内层；受控停止结束宿主执行而不改变成员。`unload_program` 与替换先结束宿主执行（停调度、等在途输出事务、OS 确认退出），再 append 结束成员的 `Applied`，cursor 与保留引用随之结束或转给新成员（§8.6 卸载与替换）。成员还在装载、已有装载步骤发出时，卸载与替换同样不开始新的装载步骤，在结束成员的 `Applied` 之前等每个已发出步骤的结论，核心不设超时：交出已被接受而宿主还没有拉起的不再拉起，这次执行由核心确认结束；交出未被接受或别的装载失败照常同事务 `ProgramHalted` + `ProgramFailed`，都在 `Applied` 之前，替换的 `Applied` 以位置引用这条 `ProgramHalted`（§8.6 装载中的成员）。成员引用原生 op 时，宿主执行从子系统接受这次交出开始，交出只属于这次执行、随它结束，所以移除之后以另一份内容重新安装的同名 op，下一次执行运行的是新交出的那一份；交出未被接受，这次执行就不开始，宿主不被拉起（§7.2 生命周期表、§8.7 原生 op 的执行）。交出已被接受之后 OS 没有给出宿主进程，这次执行就此结束，成员同事务 `ProgramHalted{LoadRejected(HostSpawnFailed)}` + `ProgramFailed`，不是 trap（§8.6 失败抑制）。受控停止第 1 步不再开始新的装载步骤，并在实例结束锚点之前等到已发出步骤的结论，这一等待不挡第 2–4 步：交出已被接受（含停止之后才到的接受）而宿主还没有拉起的不再拉起，这次执行由核心确认结束，停止本身不 append `ProgramHalted`；已发出的步骤得出核对不符、声明校验不成立或交出未被接受的，照常同事务 `ProgramHalted` + `ProgramFailed`（§7.2 受控停止、§8.7 失败语义）；第 2–4 步都已完成时交出仍没有回答的，停止以失败报告，不写结束锚点、不释放 fence，也不因没有回答而 append `ProgramHalted`：这次交出的结论只有子系统是源头，核心不替它判定超时；实例之后被外力结束即崩溃路径，由继任者的 fence 结束。
 - 受控停止不为集成另写会话健康观察：实例结束锚点就是本实例各集成运行的结束；下一实例第 3 步写新的初始状态。
 
 核出：无。

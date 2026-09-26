@@ -89,7 +89,7 @@ sequenceDiagram
   NEW->>J: SendBarrier(p) 无后继 → Undetermined(p, CrashWindow)（第 2 步，不接触集成）
   Note over NEW: 第 3 步：拉起 B 时核心为它的通道分配 SessionEpoch (n+1, 1)（核心内部，集成不知道也不回填）
   NEW->>IB: 拉起并 handshake()
-  par 两条并入路径（各自 append 前检查 p 仍 Undetermined；先到者确立结果，后到者不改结果）
+  par 两条并入路径（先到者确立结果；后到的取证结果只 append 作审计、不改结果，后到的归因记录不再 append ResolutionEvidence）
     NEW->>IB: query_by_key(K(p), key_role, scope, barrier_at) → Found → ResolutionEvidence{p, ByKey, Found}
   and
     V-->>IB: 订单状态推送（集成在声明的键作用域与唯一期内填 attribution FromAttempt(p)）

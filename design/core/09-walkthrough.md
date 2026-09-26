@@ -339,7 +339,7 @@
 5. 两张单据各有自己的 `deadline`，各自到期、各自关闭；没有跨单据的“第二步”由核心等待或放行。
    - 对外可见：两张单据、两次尝试（各一条 `SendBarrier`），关联由下单单据的 `basis` 追溯；核心里没有把二者连成一条的状态。
 
-**扩展路径（取证记录模型）。** 撤单尝试或改单尝试的每次命中取证，同一事务落该回应的观察记录（同 §10.5 #17：回应含订单状态时订单状态一条，及每笔可识别执行一条成交记录，各带 `provenance: Reconciliation{AttemptRef, channel}`）与一条 `ResolutionEvidence{Found}`（含 `Evidence`）；`Absent`/`Inconclusive` 只有 `ResolutionEvidence`（§6.5）。`provenance` 只记下记录从哪里来，不决定归因：每条记录按它自己的关联证据归因（§6.6 撤单尝试的取证）。撤单尝试自己的 `VenueAccepted`/`Found` 从不决议另一次尝试；回应里目标订单的记录若按它自己的证据归因为 `FromAttempt(目标订单所属的尝试)`，就经 `Attributed` 决议那次尝试（§6.6 被动渠道 `Attributed`）。
+**扩展路径（取证记录模型）。** 撤单尝试或改单尝试的每次命中取证，同一事务落该回应的观察记录（同 §10.5 #17：回应含订单状态时订单状态一条，及每笔可识别执行一条成交记录，各带 `provenance: Reconciliation{AttemptRef, channel}`）与一条 `ResolutionEvidence{Found}`（含 `Evidence`）；`Absent`/`Inconclusive` 只有 `ResolutionEvidence`（§6.5）。`provenance` 只记下记录从哪里来，不决定归因：每条记录按它自己的关联证据归因（§6.6 撤单尝试的取证）。撤单尝试自己的 `VenueAccepted`/`Found` 从不决议另一次尝试；回应里目标订单的记录若按它自己的证据归因为 `FromAttempt(目标订单所属的尝试)`，就（结果仍未知时）经 `Attributed` 决议那次尝试（§6.6 被动渠道 `Attributed`）。
 
 **走通**（验收 §10.5 #17/#41/#51/#66）。
 

@@ -71,7 +71,7 @@ flowchart TB
   NEXT -->|"否：渠道穷尽"| WAIT["停等：等待仍 Active，留在阻塞头集合<br/>IO 壳永不 heuristic；保留钉仍在"]
   WAIT -->|"ReconciliationReopened{p, cause}（append 前重查结果仍未知）<br/>cause = SessionRestored（集成会话重建，只对等待 Active 者）/ Manual（retry_reconciliation）"| CH0
   WAIT -->|"abandon（principal）：见 D6.4"| AB[("Abandoned：等待结束，结果未知")]
-  ATTR["被动渠道：推送观察 attribution FromAttempt(p)（集成在声明的键作用域与唯一期内填写；核心不按键字节归因），且 p 处于 Undetermined、结果未知"] -->|"同事务"| ATT["ResolutionEvidence{p, Attributed, Found{observation: 该记录, evidence: 该记录的载荷 + 原始负载}}"]
+  ATTR["被动渠道：带 attribution FromAttempt(p) 的观察记录，不论来源（推送、回执、取证响应、一次性读的结果项；集成在声明的键作用域与唯一期内填写；核心不按键字节归因），且 p 处于 Undetermined、结果未知"] -->|"同事务"| ATT["ResolutionEvidence{p, Attributed, Found{observation: 该记录, evidence: 该记录的载荷 + 原始负载}}"]
   FOUND --> RS[("结果确立")]
   ABS --> RS
   ATT --> RS
@@ -100,7 +100,7 @@ flowchart TB
 | ByKey 否定 | `ResolutionEvidence{p, ByKey, Absent}` | 无 | — |
 | 未命中 | `ResolutionEvidence{p, channel, Inconclusive}` | 无 | — |
 | 渠道不可用 | `Gap{origin: Channel, channel}`（属 p） | 无 | — |
-| 推送归因命中 | `ResolutionEvidence{p, Attributed, round, Found{observation, evidence: 该推送的载荷 + 原始负载}}` | 该推送记录本身 | 是 |
+| 归因命中（带 `FromAttempt(p)` 的观察记录，不论来自推送、回执、取证响应还是一次性读） | `ResolutionEvidence{p, Attributed, round, Found{observation, evidence: 该记录的载荷 + 原始负载}}` | 该记录本身 | 是（与带来它的推送、回执或响应同一事务） |
 | 放弃跟踪 | `Abandoned{p, principal, note, rule_version}`（在途取证全部完成、结果仍未知之后） | 无 | — |
 
 ```mermaid

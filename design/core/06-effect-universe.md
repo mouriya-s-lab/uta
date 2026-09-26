@@ -297,7 +297,7 @@ IO 壳不知道单据的存在。
 | 变的是 | 单据（意图）变了，世界没变 | 世界变了，单据没变 |
 | 来源 | `TicketAction::Revise`（负责人主动） | 观察侧推进 → `basis_validity`/`alignment` 重算 |
 | 类型 | `Revision<Intent>`：两版意图的结构差（价格改了 / 数量改了 / 目标换了） | `IntentAlignment` 的变化：`Aligned → Diverged` |
-| 触发 | 变更通知（审批人看到“改了什么”）、守卫字段变更 → `AwaitingDecision` 自动 `SendBack`、限额差额校验、审计记录 | 偏离警告、自动 `SendBack`、fail-closed |
+| 触发 | 变更通知（审批人看到“改了什么”；`Revise` 只在 `Drafting` 里成立，守卫字段的变更随下一次 `SubmitForDecision` 以 `Revision` 呈给审批人）、限额差额校验、审计记录 | 偏离警告（审批人可 `SendBack`，§6.3 放行门）、放行门 fail-closed |
 
 - `Revision<Intent>` 是派生字段：`revision(versions[n], versions[n+1])` 由意图类型定义（[交易协议] 提供 `Revision<PlaceOrder>`）。核心不解释，与 `IntentAlignment` 同为单据 fold 的派生结果。
 - 编辑 diff 的处理器是字段处理器（§2.1）。它属效应抽象但**不进入 IO 壳**：发生在 `Prepared` 之前，与两阶段无关。它触发的对外写（通知）自己作为新请求走完整路径。
@@ -780,11 +780,11 @@ venue 对我方写的响应是执行事实：C13 原始负载完整保留，执�
 **`channel ∈ {ByKey, Listing, Fills, Replay, Attributed}`：**
 
 - 前四种是 IO 壳依序取证的渠道（§6.6）。
-- `Attributed`：集成推送的、归因到处于 `Undetermined` 的尝试的观察，由效应侧归因处理器 append（§6.6、§8.1）。
+- `Attributed`：带 `attribution: FromAttempt(r)`、r 处于 `Undetermined` 且结果未知的观察记录，不论它从哪里来：推送、回执、取证响应或一次性读的结果项；由效应侧归因处理器 append（§6.6 被动渠道 `Attributed`、§8.1）。
 
 **`outcome ∈ {Found{observation, evidence}, Absent, Inconclusive}`。**
 
-**每条 `Found` 都带 `evidence`**，C13 对五种渠道一视同仁：主动取证取集成返回的该次响应；`Attributed` 取该推送记录的载荷与原始负载（这类流必须保留原文，§8.1）。
+**每条 `Found` 都带 `evidence`**，C13 对五种渠道一视同仁：主动取证取集成返回的该次响应；`Attributed` 取那条带 `FromAttempt(r)` 的观察记录的载荷与原始负载（可带 `attribution` 的流必须保留原文，§8.1）。
 
 **`round`** 是该次取证**发起时**所属的轮次：最近一条 `ReconciliationReopened` 的位置，首轮为空。`Attributed` 取 append 时的当前轮。
 
@@ -905,11 +905,12 @@ venue 对我方写的响应是执行事实：C13 原始负载完整保留，执�
 | `SendBarrier` | 写调用返回 `NotSent` | `NotSent`（等待结束，未交出） |
 | `SendBarrier` | 写调用返回 `NoResponse` | `Undetermined` |
 | `Undetermined`，等待 `Active` | `ResolutionEvidence{Found}` / `{Absent}` | 结果确立，等待结束 |
-| `Undetermined`，等待 `Active` | `ResolutionEvidence{Inconclusive}` | 下一渠道；渠道穷尽 → 停等（§6.6） |
+| `Undetermined`，等待 `Active` | `ResolutionEvidence{Inconclusive}` | 当前轮的下一渠道（只推进当前轮的进度：旧轮在途读迟到的结果不计入本轮，§6.6 重开与轮次）；渠道穷尽 → 停等（§6.6） |
 | `Undetermined`，等待 `Active` | `Attributed`（任一时刻到达） | 与 `Found` 同效 |
 | `Undetermined`，等待 `Active` | `abandon` 在在途取证完成后结果仍未知 | `Abandoned`（等待结束，结果仍未知） |
 | `Undetermined`，等待 `Abandoned`，结果仍未知 | `Found`/`Absent`（`Attributed`，或 principal 发起的 `retry_reconciliation`） | 补上结果；等待仍是 `Abandoned` |
 | `Undetermined`，等待 `Abandoned`，结果仍未知 | `ResolutionEvidence{Inconclusive}`（principal 发起的 `retry_reconciliation` 那一轮） | 什么都不变：等待仍是 `Abandoned`，结果仍未知；本轮下一渠道，渠道穷尽即停（§6.6） |
+| `Undetermined`，结果仍未知（等待 `Active`；`Manual` 重开时也可以是等待 `Abandoned`） | `ReconciliationReopened{cause}`（`SessionRestored` 只对渠道穷尽而停等、等待 `Active` 的；`Manual` 对任一结果仍未知的） | 新一轮：已取证渠道集从空开始，按渠道顺序重新取证；等待与结果都不变（§6.6 重开与轮次） |
 | `Undetermined`，结果已确立（等待 `Finished`，或等待 `Abandoned` 而结果已补上） | 结果确立之后才完成的取证调用的 `ResolutionEvidence`（任一结果） | 只 append 作审计：结果与等待都不变，不推进任何渠道 |
 
 ### 与集成操作集的关系
