@@ -1,6 +1,3 @@
-use std::time::Duration;
-
-use uta_base::{IntegrationId, ProcessRole};
 use uta_store::{FORMAT_VERSION, InstanceEnd, OpenError, Store, TxError, UnixMillis};
 
 fn db(dir: &tempfile::TempDir) -> std::path::PathBuf {
@@ -12,6 +9,9 @@ fn db(dir: &tempfile::TempDir) -> std::path::PathBuf {
 #[cfg(unix)]
 #[tokio::test]
 async fn process_rows_of_an_earlier_instance_are_cleared_only_after_os_exit() {
+    use std::time::Duration;
+    use uta_base::{IntegrationId, ProcessRole};
+
     let dir = tempfile::tempdir().unwrap();
     let mut child = std::process::Command::new("sleep")
         .arg("30")
