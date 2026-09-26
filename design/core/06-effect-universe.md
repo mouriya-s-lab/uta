@@ -1002,7 +1002,7 @@ IO 壳**永不 heuristic**。取证是读副作用，可以重试；写调用是
 `abandon(attempt, note)` 是带 principal 的控制动作（§8.5）。它回答的是 UTA 自己的问题：**还要不要为这次尝试等下去**；它不回答“这次写发生没有”。
 
 - **资格**：该尝试处于 `Undetermined`、等待是 `Active`、结果未知。否则返回 `Rejected(NotUndetermined)`，不写记录。
-- **次序**（在途的取证调用是集成会话的内层，§7.2 生命周期表；`abandon` 等已发出的调用完成，`Abandoned` 记下的才是“每个已发出的调用之后结果仍未知”，见下文不选的“取消在途的取证调用”；等待结束之后才完成的调用只 append 审计证据）：
+- **次序**（在途的取证调用是集成会话的内层，§7.2 生命周期表；`abandon` 等已发出的调用完成，`Abandoned` 记下的才是“每个已发出的调用之后结果仍未知”，见下文不选的“取消在途的取证调用”；结果确立而等待结束之后才完成的调用只 append 审计证据；`Abandoned` 之后 principal 重开的一轮照常可补上结果（§6.6 重开与轮次））：
   1. IO 壳不再为该尝试发起新的取证调用；
   2. 已在途的取证调用照常完成，各自按上表 append 自己的结果；
   3. 然后 IO 壳在一个事务里重查：结果仍未知则 append `Abandoned{attempt, principal, note, rule_version}` 并返回 `Abandoned(position)`；在途调用已给出结果则不写，返回 `Rejected(NotUndetermined)`。

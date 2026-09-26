@@ -776,7 +776,7 @@
    - `advance_retention` 越过某流已登记引用或留存窗口下界时，分别得 `ReferencedBelow`/`InsideWindow`，且无流被推进；
    - 执行事实侧无记录被删。
 5. **provider 正交性**（§2.2、§8.3）：新 provider 接入不改核心 crate；新 `OperationKind` 必然改实现该协议的全部 provider；新 IDL 操作必然改全部集成。（对应 Q18）
-6. **窗口追溯**（§4.2）：`latest` 消费者的每次合并，都可追溯到它声明的等待窗口或该订阅上的 `conflated` 投递缺口；声明等待窗口的消费者，其输出的 `basis` / `as_of` 记下实际用到的位置，窗口之后到达的记录照常 append 与投递。（对应 Q31）
+6. **窗口追溯**（§4.2）：`latest` 消费者的每次合并，都可追溯到它声明的等待窗口或该订阅上的 `conflated` 投递缺口；它的投递缓冲耗尽而被停投时，跳过的区间是该订阅上的 `slow_consumer` 投递缺口；`ordered` 消费者慢时只背压，不出现这两种缺口；声明等待窗口的消费者，其输出的 `basis` / `as_of` 记下实际用到的位置，窗口之后到达的记录照常 append 与投递。（对应 Q31）
 7. **核心层最小验收**（§8.7）：含 `Pooled` 的程序在无可选子系统时被拒，且其余程序不受影响；导出原生 op 输出的程序在无子系统时 `load_program` 仍得 `Applied`，它记下的输出契约里该输出的值类型就是值树里 op 引用所带的声明结果类型，之后在声明校验时被拒（`ProgramHalted{LoadRejected}`）；有子系统而 op 引用所指名的 op 不在已安装 op 集合里、或所声明的签名与 `install_native_op` 的 `Applied` 记下的不符时，同样在声明校验时被拒，错误指出该引用；`install_native_op` 的 `Applied` 在控制流上记下 op 名、签名、`artifact` 引用、内容 hash 与 principal，引用的制品文件读不到或不合法时得 `Rejected`、没有 `Applied`，同名再安装得 `Rejected(AlreadyInstalled)`；安装之后改写或删去该制品文件，引用它的程序下一次装载（核心重启、或以位置引用 `ProgramHalted` 重新装载）在拉起宿主之前得 `ProgramHalted{NativeArtifactUnavailable}` + `ProgramFailed`，不是 `Trap`，宿主未被拉起、子系统没有收到任何内容；文件未改时子系统收到的内容的 hash 等于安装 `Applied` 所记的，子系统没有读取制品目录；制品相符而 fixture 子系统拒绝接收交出（或在声明校验之后、交出之前退出）时得 `ProgramHalted{LoadRejected(NativeHandoverFailed)}` + `ProgramFailed`，不是 `Trap`，宿主未被拉起；引用 op X（内容 hash h1）的程序卸载之后移除 X、以内容 hash 为 h2 的另一份制品重新安装 X，再装载引用 X 的程序：子系统为这次宿主执行收到的是 h2，新宿主里 X 的输出按 h2 的内容算出，不是 h1；活动集合里（含失败抑制中与等待中的）有成员的 `Applied` 所记原生 op 名集合含它时，`remove_native_op` 得 `Rejected(InUse)`，该成员 `unload_program` 之后移除得 `Applied`；核心重启之后已安装 op 集合由控制流 fold 出、不变；子系统 op 的输出经 `outputs` 导出时，程序流上的记录与普通节点导出的同形（订阅者与下游节点无需知道它由原生 op 产出）。（对应 Q24/Q30）
 8. **崩溃矩阵可测项**（§9.2 #1–#3、#9）：`Prepared`/`SendBarrier`/`submit` 各窗口 fsync 崩溃注入后重启，观测：（对应 Q2/Q4/Q17）
    - (a) 无 `SendBarrier` 的 `Prepared` 确未发出；
@@ -807,7 +807,7 @@
 18. **读模型可重建**（§4.4、§8.5）：`orders`、`positions`、`lanes`、`health` 的任一 `Snapshot{value, as_of, gaps}` 与对同一原始记录集（≤ `as_of`，含保留边界之下按键保留的基线与覆盖检查点）的独立 fold 结果相等；`gaps` 只列 `Gap{origin: Source}`；`positions` 不含从成交推算的值；`tickets`、`subscriptions` 带历史 `as_of` 的请求被拒；`as_of` 与订阅 cursor 可比对；断连重连后重复只出现在未确认区间，且按 `LogPosition` 去重后与不断连时结果相同。（对应 Q29/Q31）
 19. **秒级负载不落后**（§4.3、§7.4、§7.1）：以 Q24 沟通场景规模（约 1500 流选 15、24 h 逐秒）构造 Q22 负载：（对应 Q22、B1）
     - 秒级 bar 的清洗 + 增量指标在下一根 bar 到达前完成，积压不随时间增长，分发不阻塞清洗；
-    - 推送流的文本 JSON-RPC 在同一负载下不丢记录、不触发 `slow_consumer`；否则启用同一 IDL 的二进制编码（§7.1）后须达标。
+    - 推送流的文本 JSON-RPC 在同一负载下不丢记录、`latest` 订阅不触发 `slow_consumer`（`ordered` 订阅只背压）；否则启用同一 IDL 的二进制编码（§7.1）后须达标。
 20. **格式升级**（§7.4、§7.6、C14）：（对应 Q21）
     - 版本 N+1 的核心读版本 N 的 SQLite 文件与配置文件后，`fold_state` 与读模型和升级前等价；
     - 版本 N 的核心读 N+1 文件，以专用退出码拒绝启动并报告版本；
@@ -828,7 +828,7 @@
     - 泄露检查：以核心概念词表（`design/downstream/design.md` 第 7 节）检查全部命令帮助、结构化输出、长连接消息与错误，不出现任何核心概念名；
     - 注入 `NoResponse` 后，下游看到“结果未知”，输出中没有“失败”也没有重新下单的提示；随后取证确立结果时，下游收到“已确认发生 / 未发生”；
     - 放弃跟踪：principal `abandon` 之后，下游看到“已放弃跟踪，结果未知”，输出中没有“已发生 / 未发生”、没有“失败”、也没有重新下单的提示；之后 fixture 给出归因到该尝试的推送时，下游看到补上的结果并注明曾放弃跟踪；撤单请求被受理时，下游看到“撤单请求已送达”，原单是否已结束以原单的状态为准，输出中没有“原单已撤 / 已结束”（除非原单自己的状态如此）；`NotSent` 时下游看到“未发送”，不是“结果未知”；
-    - `design/downstream/design.md` 第 5 节翻译表的每一行（含订阅挂起的每种原因、一次性读的每个结果、跨流冲突的订单与持仓）都有 fixture 触发，下游得到该行的对外含义，不出现核心概念名；
+    - `design/downstream/design.md` 第 5 节翻译表的每一行（含订阅挂起的每种原因、一次性读的每个结果、跨流冲突的订单与持仓、策略程序的每种停止原因）都有 fixture 触发，下游得到该行的对外含义，不出现核心概念名；策略程序停止时下游看到的是“已停止、服务重启后也不会自行恢复、排除原因后重新装载”，等待所需来源的策略程序显示为“已登记、未启动”而不是失败；
     - 长连接存续期间重启解释层：客户凭续传令牌重连，收到的记录与不重启时相同（未确认区间可能重复），断连期间的损失以缺失通知给出；
     - 完整界对外只以不透明的完整性令牌出现：输出里读不出 epoch 或 venue 序号；同一成交流 epoch 内两次回答的令牌周期部分相等；fixture 让该成交流开新 epoch 后，回答的周期部分与之前的不等，旧周期的令牌不再出现，新 epoch 的 `Origin` 回填 `Closed` 之前回答只带新周期的标记、没有界；订阅选项里没有“等齐再给”；
     - 能力 `Unsupported` 与 `Unknown` 对外分别得到明确的“不支持”与“未确认”，不返回空结果；
@@ -972,7 +972,7 @@
     - 撤单声明 listing 或成交 / 持仓对账渠道：投影不合法，集成 `Halted{ProjectionInvalid}`；
     - 带请求键的撤单尝试 `Undetermined`，目标订单此后经推送或一次性读显示为终态、或在其他尝试的 listing 上不见：撤单尝试仍 `Undetermined`、没有它的 `Found`；`query_by_key` 以它的请求键得到上游关联到这次撤单的记录：撤单尝试 `Found`，该记录归因 `FromAttempt(撤单尝试)`；
     - 不带键的撤单尝试 `Undetermined`：IO 壳不调用任何取证渠道，尝试停等，直到一条上游以请求关联到它的记录（`Attributed`），或 principal `abandon`；
-    - 撤单的回执 `Ack`：撤单尝试 `VenueAccepted`，回执里的目标订单状态是目标订单的记录、归因按它自己的关联证据；阻塞头的等待不变，不出现阻塞头的 `ReconciliationReopened`。
+    - 撤单的回执 `Ack`，撤单的目标是结果未知的阻塞头的订单：撤单尝试 `VenueAccepted`，回执里的目标订单状态是目标订单的记录、归因按它自己的关联证据；该记录没有归因到阻塞头时，阻塞头的等待不变；该记录按它自己的证据归因 `FromAttempt(阻塞头)` 时，这是一条 `Attributed` 的 `Found`：同一事务 append `ResolutionEvidence{阻塞头, Attributed, Found}`，阻塞头的结果确立、等待结束（§6.6 被动渠道 `Attributed`）；两种情形都不出现阻塞头的 `ReconciliationReopened`。
 52. **写调用的参数**（§8.2 `submit`、`cancel`）：以 fixture 集成记录每次写调用收到的全部参数：（对应 Q8/Q27）
     - `Place`、`Close`、`Replace`、`Cancel`，每种调用都带 `AttemptRef`、`WriteLaneKey`、`OperationKind`，键角色不是 `None` 时带核心铸造、`SendBarrier` 所记的键；`Place` 没有 `target`，`Close` 的 `PositionRef` 等于意图所带的持仓身份与 instrument，`Replace` 与 `Cancel` 的 `target` 等于意图的 `target`；每种调用都带意图参数与参数 schema 身份，参数与意图逐字段相同；
     - fixture 集成不读任何核心状态即可完成每种调用。
@@ -1052,11 +1052,12 @@
     - 流声明 `push_ordered`：同一会话 epoch、同一流 epoch 内两条不带序号的推送按送达次序，后送达者取代先送达者；跨会话 epoch 或跨流 epoch 的两条推送不可比，会话内集成上报 `Gap{origin: Source}` 之前与之后的两条推送也如此；流不声明 `push_ordered` 时，同一会话 epoch 内两条不带序号也不带 `order_revision`、内容不同的推送并列并标出顺序未确立，不论到达先后；
     - 之后到达一条按证据比两者都新的记录，最近观察重新确立；
     - 集成一致性：声明 `order_revision` 的集成，fixture 上同一订单跨推送与查询的值单调；声明 `query_not_lagging` 的集成，fixture 先推送终态再被查询时，回答不早于该终态；fixture 上推送来自多路 feed 合并或由轮询合成时，集成不声明 `push_ordered`；声明了 `push_ordered` 的集成，fixture 上的上游推送通道重连时先上报 `Gap{origin: Source}` 再送出重连后的推送，同一流 epoch 内后送出的推送反映更早状态、或重连而未上报 gap 的，判为声明不实（§10.4 #30/#31/#37）。
-70. **投递缺口的生命周期**（§4.2、§7.5 订阅表）：一个 `ordered` 以外的订阅因慢消费被跳过一段：（对应 Q12/Q29）
+70. **投递缺口的生命周期**（§4.2、§7.5 订阅表）：一个 `latest` 订阅的投递缓冲耗尽，被停投、跳过一段：（对应 Q12/Q29）
     - 在持久订阅写下缺口 `{流, from, to, reason}` 之前注入崩溃：重启后没有被跳过的记录，投递从原 cursor 续；写下之后崩溃：缺口仍在订阅表里，重新挂接时先于 `to` 之后的记录交出；
     - 观察 `Journal` 上没有任何投递缺口记录，同一流的其他订阅者与 `read_model` 的 `gaps` 都看不到它；`subscriptions` 对该（订阅，流）列出它；
-    - 订阅者确认一个低于 `to` 的 cursor，缺口仍在；确认不低于 `to` 的 cursor，缺口在同一次写里删除，之后重连不再交出；取消订阅或移除该流时缺口随之删除。
-71. **`gaps` 只列来源缺口**（§4.2、§8.5）：同一段时间内注入来源断代、一次性读 `Unavailable`、回填 `Unavailable` 与一个订阅的慢消费跳过：`read_model(orders | positions | health)` 的 `gaps` 只含 `Gap{origin: Source}`；`Gap{origin: Channel}` 只作为该次调用的结果与该流上的控制记录可见；投递缺口只在该订阅的投递与 `subscriptions` 里可见。（对应 Q11/Q12/Q15）
+    - 订阅者确认一个低于 `to` 的 cursor，缺口仍在；确认不低于 `to` 的 cursor，缺口在同一次写里删除，之后重连不再交出；取消订阅或移除该流时缺口随之删除；
+    - 同一场景里以 `ordered` 订阅的慢者（其间保留边界不推进）：不写投递缺口、不被停投，只有它自己的 cursor 落后，其他订阅者的投递不受影响。
+71. **`gaps` 只列来源缺口**（§4.2、§8.5）：同一段时间内注入来源断代、一次性读 `Unavailable`、回填 `Unavailable` 与一个 `latest` 订阅的慢消费跳过：`read_model(orders | positions | health)` 的 `gaps` 只含 `Gap{origin: Source}`；`Gap{origin: Channel}` 只作为该次调用的结果与该流上的控制记录可见；投递缺口只在该订阅的投递与 `subscriptions` 里可见。（对应 Q11/Q12/Q15）
 72. **readiness 随会话**（§8.4 readiness）：集成在会话 s1 里报某流 `Live`，断线后以 s2 重建：（对应 Q32）
     - s2 已建立而该流尚未在 s2 里报 readiness：`health` 给 `Starting`，不给 s1 的 `Live`；
     - s1 的通道已关闭：s1 此后送出的 readiness 不被读入、不 append，不改变 `health`；

@@ -89,7 +89,7 @@ flowchart LR
   S3 -.->|"kind 未定义 → 拒绝；as_of 有位置尚未提交 → NotYetAvailable{positions}（各流已提交的流末）；tickets / subscriptions 带历史 as_of → 拒绝"| S3
   S4 -.->|"expected_version ≠ current_version → Conflict；同版本已有 Decision → Conflict(AlreadyDecided)"| S4
   S5 -.->|"越权 → Unauthorized；配置不合法 → Rejected 并保留上一有效版本；advance_retention 逐流判定 → NotForward / ReferencedBelow / InsideWindow"| S5
-  S6 -.->|"越权 → Unauthorized（安全事件）；尝试不处于 Undetermined → Rejected(NotUndetermined)"| S6
+  S6 -.->|"越权 → Unauthorized（安全事件）；尝试不处于 Undetermined、等待已不是 Active 或结果已确立 → Rejected(NotUndetermined)"| S6
 ```
 
 读法：写类按 `(principal, WriteLaneKey, OperationKind)` 授权，控制动作与放弃等待按 `(principal, 动作种类)` 授权，同一规则族；三组都留下带 principal 的记录。一次性读先判 UTA 自己记录里的事实（登记、有无声明），再看来源此刻有没有会话，最后才按会话有效声明判能力：离线时不拿上一次会话的声明报“不支持”。
@@ -108,7 +108,7 @@ flowchart TB
   R1 -->|"venue 当时不可达 / 想再自动查一轮"| RT["retry_reconciliation(r) → ReconciliationReopened{r, Manual(principal)}（D6.2）"]
   R1 -->|"仍等"| KEEP["不动作：r 留在阻塞头集合；新到的来源证据照常确立结果"]
   R1 -->|"不再等"| AB["abandon(r, note)"]
-  AB --> CHK{"授权 ∧ r 处于 Undetermined、结果未确立？"}
+  AB --> CHK{"授权 ∧ r 处于 Undetermined、等待 Active、结果未确立？"}
   CHK -->|"否"| RJ["Unauthorized（安全事件）/ Rejected(NotUndetermined)"]
   CHK -->|"是"| INF["r 的在途取证调用先完成（各自照常记 ResolutionEvidence 或 Gap{Channel}，照常计数）"]
   INF --> AN["IO 壳 append Abandoned{r, principal, note, rule_version}（r 所在 lane 的执行事实流）<br/>此后不再自动询问：SessionRestored 不重开它"]

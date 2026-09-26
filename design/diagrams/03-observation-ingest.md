@@ -178,7 +178,7 @@ sequenceDiagram
     C->>SUB: ack(subscription, cursor = pos)（确认 = 已处理）
     SUB->>SUB: cursor 推进（单写者，串行化）
   end
-  alt 慢消费者：缓冲耗尽
+  alt latest 订阅的慢消费者：投递缓冲耗尽（ordered 只背压，从不走这一支）
     DL->>SUB: 请求写下投递缺口
     SUB->>SUB: 订阅表该（订阅, 流）写下 Gap{Delivery} {流, from, to = 被跳过的最后一个位置, slow_consumer}；写下之后才跳过
     DL->>C: 停投；先交出这条缺口（需显式确认），再交 to 之后的记录
@@ -222,9 +222,9 @@ sequenceDiagram
 
 | 方式 | 触发依据 | 是否跳过 | 损失记法 |
 |---|---|---|---|
-| await-all | 所有指定输入都达到要求点：核心日志位置（核心自己可判定，不说任何完备），或来源证据证明的覆盖在它自己坐标上的一点（今天只有序号覆盖：当前流 epoch 的一个 venue 序号，`through` 越过即满足） | 否（等待；无完备证据的输入上覆盖要求永不满足） | — |
-| ordered | 单流顺序；多条流各自有序，流与流之间不定序 | 否（背压） | — |
-| latest / conflated | 最新值 | 是 | 订阅上的投递缺口 `Gap{Delivery, conflated}`，或消费者声明的等待窗口 |
+| await-all | 所有指定输入都达到要求点：核心日志位置（核心自己可判定，不说任何完备），或来源证据证明的覆盖在它自己坐标上的一点（今天只有序号覆盖：当前流 epoch 的一个 venue 序号，`through` 越过即满足） | 否（等待；无完备证据的输入上覆盖要求永不满足；慢时只背压，从不停投） | — |
+| ordered | 单流顺序；多条流各自有序，流与流之间不定序 | 否（背压；慢时从不停投） | — |
+| latest / conflated | 最新值 | 是 | 通常的合并：订阅上的投递缺口 `Gap{Delivery, conflated}`，或消费者声明的等待窗口；投递缓冲耗尽：停投，跳过的区间为 `Gap{Delivery, slow_consumer}` |
 
 读法：
 
@@ -242,7 +242,7 @@ sequenceDiagram
 flowchart TB
   Q{"缺口出在哪一段？"}
   Q -->|"来源流本身有缺口：断代，或 epoch 内未补齐的区间<br/>断线 / 配额 / 溢出 / 换凭据 / 载荷换版 / 程序装载 / 程序升级 / 回填穷尽"| S["Gap{origin: Source, reason}<br/>观察 J 该流上：新 epoch 首条（开 epoch）或 epoch 内记录（backfill_incomplete，不开 epoch）<br/>写者：集成推送入口（会话内上报的断代）/ 集成会话（握手开新 epoch）/ 持久订阅（backfill_incomplete）/ 控制面（程序流新 epoch，在开始不沿用旧状态之成员的 Applied 事务里、该成员的每条程序流上）"]
-  Q -->|"核心到某个订阅的投递<br/>慢消费者 / 订阅位置被压缩 / conflated"| D["Gap{origin: Delivery, reason}<br/>订阅的状态：订阅表里按（订阅, 流）记 {流, from, to, reason}，不在任何流上<br/>写者：持久订阅（应投递调度请求，先写后跳）；订阅者确认不低于 to 的 cursor 即删除"]
+  Q -->|"核心到某个订阅的投递<br/>latest 订阅缓冲耗尽被停投 / 订阅位置被压缩 / latest 合并"| D["Gap{origin: Delivery, reason}<br/>订阅的状态：订阅表里按（订阅, 流）记 {流, from, to, reason}，不在任何流上<br/>写者：持久订阅（应投递调度请求，先写后跳）；订阅者确认不低于 to 的 cursor 即删除"]
   Q -->|"核心发起的读渠道不可用<br/>取证 / 回填 / 一次性读 返回 Unavailable"| C["Gap{origin: Channel, channel}<br/>该次调用的结果，可再发<br/>写者：IO 壳（取证，执行事实侧属该 Attempt）/ 持久订阅（回填）/ 一次性读元素（观察侧该流）"]
   Q -->|"submit 无业务回执"| U["不是 gap：Undetermined<br/>写边界 in-doubt（D6.1）"]
 ```

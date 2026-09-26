@@ -285,8 +285,8 @@ sequenceDiagram
   S->>S: T3 授权 ✓ 输入约束 ✓（来源接受 IdemKey 目标；否则 TargetNotAccepted，T3 关闭，集合仍 {p1}）审批 ✓ lane 步不等待（唯一写例外）✓ 过期 ✓ 门 ✓
   S->>IO: Prepared @p3（阻塞头集合 = {p1, p3}）
   IO->>I: SendBarrier(p3) → cancel(target = p1 的订单键；键 K(p3) 若声明请求键)
-  I-->>IO: Ack → VenueAccepted(p3)（撤单请求到达；不决议 p1，不证明 p1 已结束）
-  Note over IO: p3 移出集合；p1 仍停等，IO 壳不自动重开 p1 的取证
+  I-->>IO: Ack → VenueAccepted(p3)（撤单请求到达；这个结果本身不决议 p1，不证明 p1 已结束）
+  Note over IO: 本图设回执里目标订单的记录不带 FromAttempt(p1) 的证据（带时它经 Attributed 确立 p1 的结果、结束 p1 的等待，§6.6）；p3 移出集合；p1 仍停等，IO 壳不自动重开 p1 的取证
   OP->>IO: retry_reconciliation(p1)（principal 看了撤单结果后决定再问一次）
   IO->>IO: append ReconciliationReopened{p1, Manual(principal)}；按声明的渠道从头取证（D6.2）
   alt 有 by-key 能力
