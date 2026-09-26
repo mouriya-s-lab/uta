@@ -1,0 +1,23 @@
+[package]
+name = "uta-channel"
+version = "0.0.0"
+description = "Core-created session channel and credential handle, inherited only by the spawned integration process."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+tokio = { version = "1.53.1", features = ["net", "io-util", "rt"] }
+zeroize = "1.9.0"
+
+[lints]
+workspace = true
+
+[target."cfg(unix)".dependencies]
+command-fds = "0.3.3"
+libc = "0.2.189"
+rustix = { version = "1.1.5", features = ["process"] }
+
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading", "Win32_System_IO"] }

@@ -1,0 +1,23 @@
+[package]
+name = "uta-testkit"
+version = "0.0.0"
+description = "Fixture child processes and cross-crate real-process tests for the UTA runtime substrate."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde_json = "1.0.151"
+tokio = { version = "1.53.1", features = ["macros", "rt", "sync", "time"] }
+uta-base = { version = "0.0.0", path = "../uta-base" }
+uta-channel = { version = "0.0.0", path = "../uta-channel" }
+uta-proc = { version = "0.0.0", path = "../uta-proc" }
+uta-rpc = { version = "0.0.0", path = "../uta-rpc" }
+uta-store = { version = "0.0.0", path = "../uta-store" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"
