@@ -694,6 +694,8 @@ dependencies = [
 name = "uta-core"
 version = "0.0.0"
 dependencies = [
+ "libc",
+ "rusqlite",
  "tempfile",
  "thiserror",
  "tokio",
