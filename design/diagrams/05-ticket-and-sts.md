@@ -16,7 +16,7 @@ stateDiagram-v2
   Drafting --> Drafting : Revise（仅 responsible，版本链前进）
   Drafting --> Drafting : Transfer（responsible 变更，记录在案）
   Drafting --> AwaitingDecision : SubmitForDecision（冻结 current_version）
-  AwaitingDecision --> AwaitingDecision : Transfer
+  AwaitingDecision --> AwaitingDecision : Transfer（responsible 变更；STS 链按新负责人从授权步起重过，D5.3）
   AwaitingDecision --> Drafting : SendBack（responsible 不变）
   AwaitingDecision --> CP : Close(Prepared)，与 Prepared 同事务
   AwaitingDecision --> CR : Close(DecisionRejected)，由决定者或 STS 链
@@ -81,7 +81,7 @@ flowchart LR
 
 ## D5.3 STS 顺序固定链（从 `AwaitingDecision` 到 `Prepared`）
 
-对照：§6.3 五步表、等待与重入、放行门、规则版本变更；§6.2 门只看必要项；§5.2 `basis_validity`。
+对照：§6.3 五步表、等待与重入、放行门、规则版本变更、移交；§6.2 门只看必要项；§5.2 `basis_validity`。
 
 ```mermaid
 flowchart TB
@@ -92,11 +92,13 @@ flowchart TB
   B -->|"否"| RJ2["NonEmpty<Rejection>：全部违反项（参数违反 / NotSupported / SchemaMismatch / TargetNotAccepted 可区分）<br/>Close(DecisionRejected)"]
   B -->|"parameter_validity == CapabilityNotEstablished"| WAITB["停在输入约束步，单据仍 AwaitingDecision，不产生记录<br/>声明版本 / CapabilityObserved / 会话进入或离开 Established 时重新求值"]
   WAITB -->|"能力确立"| B
-  B -->|"是"| C{"审批<br/>策略：总是 / 从不 / 名义 > N（以数量定量 = 需人工；Cancel 只可总是 / 从不）"}
-  C -->|"是"| WAITC["等待 decide(Approve / Reject)<br/>待决集合对审批人可见（读模型 tickets）<br/>同 (ticket, current_version) 第二条 decide → Conflict(AlreadyDecided)"]
+  B -->|"是"| C{"审批<br/>这一版已有批准的 Decision？（规则变更或移交之后重过时仍算数）<br/>没有时看策略：总是 / 从不 / 名义 > N（以数量定量 = 需人工；Cancel 只可总是 / 从不）"}
+  C -->|"已有批准的 Decision：仍算数，不再等"| D
+  C -->|"已有 Decision，而规则变更后原决定者已无该授权：审批步否决"| RJ3
+  C -->|"没有 Decision，需人工"| WAITC["等待 decide(Approve / Reject)<br/>待决集合对审批人可见（读模型 tickets）<br/>同 (ticket, current_version) 第二条 decide → Conflict(AlreadyDecided)"]
   WAITC -->|"Reject"| RJ3["Close(DecisionRejected)"]
   WAITC -->|"Approve（绑定版本；决定者按动作种类授权）"| D
-  C -->|"否：以 rule_version 为依据通过，本步对 current_version 的 Outcome，不写 Decision；当前规则仍不要求人工时 decide 被拒、不 append"| D
+  C -->|"没有 Decision，不需人工：以 rule_version 为依据通过，本步对 current_version 的 Outcome，不写 Decision；当前规则仍不要求人工时 decide 被拒、不 append"| D
   D{"lane<br/>该 WriteLaneKey 阻塞头集合非空？"}
   D -->|"非空，且本笔既不是以阻塞头中某次尝试记为订单键的调用方键为 target 的撤单，也没有覆盖当前全部阻塞头的 bypass_lane 控制记录"| WAITD["停在 lane 步，单据仍 AwaitingDecision<br/>期间 alignment 照常重算"]
   WAITD -->|"该 lane 执行事实或 bypass_lane 提交：重跑 lane 步"| D
@@ -107,19 +109,20 @@ flowchart TB
   E{"过期步<br/>deadline（UTC）已过？"}
   E -->|"是"| RJ5["Close(Expired)：不补偿"]
   E -->|"否"| G
-  G{"依据有效性门<br/>basis_validity == Fresh ∧ 必要项 alignment == Aligned（能力项恒必要，按同一可执行性谓词核对会话有效能力）∧ 审批依据绑定 current_version（需人工：Decision 绑定版本 == current_version；不需人工：审批步对 current_version 的 Outcome）"}
+  G{"依据有效性门<br/>basis_validity == Fresh ∧ 必要项 alignment == Aligned（能力项恒必要，按同一可执行性谓词核对会话有效能力）∧ 审批依据绑定 current_version（有批准的 Decision：它绑定的版本 == current_version，规则变更或移交之后仍算数；没有 Decision（不需人工）：审批步对 current_version 的 Outcome）"}
   G -->|"否"| RJ4["PredicateFailure（fail-closed）<br/>Rejection 带 rule_version + checked_as_of<br/>Close(DecisionRejected)"]
   G -->|"能力项未确立（Unknown 或无会话）"| WAITG["停在放行门，单据仍 AwaitingDecision，不产生记录；同 WAITB 的事件重新求值"]
   WAITG -->|"能力确立：从 lane 步起重跑（lane → 冷却 → 过期 → 门），不直接进 Prepared"| D
   G -->|"是"| OUT[("同事务 append Prepared + Close(Prepared(position))<br/>+ Outcome（带 rule_version、checked_as_of）")]
   TMR["deadline 计时器"] -.->|"AwaitingDecision 任一等待点到期（审批、lane、能力未确立）"| RJ5
   RL["reload_config(rules)"] -.->|"待决单据放行时按当时规则从授权步重过五步：已有 Decision 仍绑定版本，决定者授权与是否需人工按新规则重判"| A
+  TR["AwaitingDecision 中的 Transfer"] -.->|"事务提交后按新负责人从授权步重过五步：授权与允许集合按新负责人；已有绑定 current_version 的 Decision 仍算数，没有时按新负责人的规则判是否需人工（需要 → 等 Decision；不需要 → 本步对这一版的 Outcome）"| A
 ```
 
 读法（假想运行时）：
 
-- 链是事件驱动的：`SubmitForDecision` 跑到第一个等待点；`decide`、该 lane 上的新执行事实、能力或会话变化、`deadline` 到时各自让它重新求值（§6.3 等待与重入）；每推一步只持久化该步产生的记录（`Vec<Outcome>` 或 `NonEmpty<Rejection>`）。规则判断所用的状态（`RuleState`）每次由记录 fold 出，不另存。
-- 重入都经过 lane 步：停在审批步、lane 步或放行门前的单据从 lane 步起重跑，停在输入约束步的从输入约束步起重跑，依次过 lane（阻塞头）→ 冷却 → 过期 → 门；没有从放行门前的等待直达 `Prepared` 的边。同 lane 两张单据离线时都停在门前，会话恢复后先放行的那张成为阻塞头，另一张停在 lane 步（§6.3 等待与重入）。
+- 链是事件驱动的：`SubmitForDecision` 跑到第一个等待点；`decide`、该 lane 上的新执行事实、能力或会话变化、`reload_config(rules)`、`Transfer`、`deadline` 到时各自让它重新求值（§6.3 等待与重入）；每推一步只持久化该步产生的记录（`Vec<Outcome>` 或 `NonEmpty<Rejection>`）。规则判断所用的状态（`RuleState`）每次由记录 fold 出，不另存。
+- 重入都经过 lane 步：停在审批步、lane 步或放行门前的单据从 lane 步起重跑，停在输入约束步的从输入约束步起重跑，依次过 lane（阻塞头）→ 冷却 → 过期 → 门；没有从放行门前的等待直达 `Prepared` 的边。同 lane 两张单据离线时都停在门前，会话恢复后先放行的那张成为阻塞头，另一张停在 lane 步（§6.3 等待与重入）。规则版本变更与 `Transfer` 从授权步起重过（`RL`、`TR` 两条边）：授权、允许集合与是否需人工都以负责人为主体，换了负责人，此前各步的通过不再作依据（§6.3 移交）。
 - 审批、lane 与能力未确立的等待都发生在 `Prepared` 之前：单据在等，不是已放行的记录在等；停在门前的单据也不是阻塞头，所以才要重过 lane 步。已放行的尝试只会在发出前门等会话或能力（D6.1）。
 - 过期步是第五步：每次重跑都先看 `deadline` 再进门；计时器只是让等待中的单据也能到期，不是让过期单据仍能 `Prepared` 的旁路。
 - 门读的是单据 fold 已算好的字段，规则自己不算；世界变了单据先变 `Diverged`，审批人看得到，放行时门自然失败。

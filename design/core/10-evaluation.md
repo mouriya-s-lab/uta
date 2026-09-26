@@ -204,7 +204,7 @@
 
 **能力未确立时的单据**（§6.2 参数合规、§6.3 等待与重入）。已定（验收 §10.5 #60）。
 
-- 选中：`ParameterValidity` 增 `CapabilityNotEstablished(Unknown | NoSession)`，非终结：单据停在输入约束步或放行门等待，不产生记录；声明版本、`CapabilityObserved` 或会话进入 / 离开 `Established` 时重新求值，`deadline` 到期由过期步关闭。从任一等待恢复都重过 lane 步：停在放行门前（或审批、lane）的单据从 lane 步起依次过 lane、冷却、过期与门，停在输入约束步的从输入约束步起。已确立的 `Unsupported` 仍是终结的否决。
+- 选中：`ParameterValidity` 增 `CapabilityNotEstablished(Unknown | NoSession)`，非终结：单据停在输入约束步或放行门等待，不产生记录；声明版本、`CapabilityObserved` 或会话进入 / 离开 `Established` 时重新求值，`deadline` 到期由过期步关闭。从任一等待恢复都重过 lane 步：停在放行门前（或审批、lane）的单据从 lane 步起依次过 lane、冷却、过期与门，停在输入约束步的从输入约束步起；规则版本变更与 `AwaitingDecision` 中的 `Transfer` 从授权步起重过（§6.3）。已确立的 `Unsupported` 仍是终结的否决。
 - Q 场景后果：Q16/Q18：来源断线或能力未知时，待审单据不被当作“不支持”关闭，也不凭离线时的声明副本放行。
 - 不选：`Unknown` 视同 `Unsupported`（把“未确立”当作来源的否定）；离线时按最近声明判定（以副本代替源头此刻的结论）；另设等待标志（等待是记录的 fold，§6.3）。
 - 证据：§6.2、§6.3、§7.5；§0.1。
@@ -314,7 +314,7 @@
 **规则判断所用的状态**（§6.3 `RuleState` 是记录的 fold）。已定（证伪 §10.4 #28；验收 §10.5 #64）。
 
 - 选中：`RuleState` 是 `step` 的值输入，每次求值由记录 fold 出：冷却时钟来自 `SendBarrier`，待决集合版本来自单据动作与 Decision，lane 阻塞头来自该 lane 上各尝试的记录与 `bypass_lane` 控制记录，过期来自 `deadline` 与核心 UTC 时钟。不另存状态表，没有与决策同事务的状态更新。等待不是记录，由 STS 在列出的事件提交之后对相关单据重新求值。
-- Q 场景后果：Q7/Q9/Q17：重启后与平时同样按记录求值，不存在“状态表与记录不一致”的恢复分支；等待中的单据在阻塞头结束、Decision 到达、能力确立或 `deadline` 到时各自往下推。
+- Q 场景后果：Q7/Q9/Q17：重启后与平时同样按记录求值，不存在“状态表与记录不一致”的恢复分支；等待中的单据在阻塞头结束、Decision 到达、能力确立、`reload_config(rules)`、`Transfer` 或 `deadline` 到时各自往下推。
 - 不选：持久化规则状态表并与决策同事务更新（同一事实两个存处，崩溃与版本升级时要对账）；没有实测需要时加缓存（缓存要写清源头、依赖与失效，§0.1）。
 - 证据：§0.1；§6.3；§7.4。
 
@@ -915,7 +915,7 @@
     - 声明 `Replace` 为 `Unsupported` 的来源上，改单意图送审即 `NotSupported` + `Close(DecisionRejected)`，无 `Prepared`；调用方组合的撤单与下单是两张单据、两次尝试，下单单据在撤单尝试等待期间停在 lane 步；撤单的 `VenueAccepted` 不使核心放行任何写；
     - 握手声明撤单带订单键、不带键的写证明声明 by-key 或 replay-by-key 渠道、撤单声明 listing 或成交 / 持仓对账渠道、`Cancel`/`Replace` 的 `target_kinds` 为空：投影不合法，集成 `Halted{ProjectionInvalid}`；
     - 不带键的撤单尝试 `Undetermined`：取证从不调用 `query_by_key`/`replay_by_key`，按它自己的渠道推进或停等；
-    - `SendBarrier` 之后重握手改变该操作的键角色：这次尝试的取证渠道在声明与记录不一致期间为空，尝试停等；声明恢复一致后续跑。
+    - `SendBarrier` 之后重握手改变该操作的键角色：这次尝试的取证渠道在声明与记录不一致期间为空，尝试停等；此后同一会话里的能力变更（`CapabilityObserved`）使声明恢复一致时，在同一会话里续跑本轮，从本轮尚未取证的渠道起，不等重连或 `retry_reconciliation`，不 append `ReconciliationReopened`。
 42. **目标种类**（§2.2、§6.2 可执行性、§6.4）：（对应 Q7/Q8）
     - 只接受 `VenueRef` 的来源上，`target` 为 `IdemKey` 的撤单与改单在起单后 `parameter_validity` 为 `TargetNotAccepted`，送审得输入约束步 `Rejection` + `Close(DecisionRejected)`，无 `Prepared`、无 `SendBarrier`；与 `NotSupported`、`SchemaMismatch` 可区分；
     - 阻塞头 `Undetermined` 时，以其订单键为 `target` 的撤单在该来源上同样被否决，阻塞头集合仍只有一条；
@@ -1029,9 +1029,10 @@
     - 声明作用域里另一 principal 的单据与尝试同样投给程序（唤起 `Advance`、计入其预算），它们的 `ticket_id` 与 `p` 不在该程序的 `Drafted` 与 `Close(Prepared)` 所给之内；宿主进程与投递不读任何记录的内容来决定投递；
     - 在 `Advance` 提交之后、结果到达之前重启：程序从 `Checkpoint` 与同事务的 cursor 续跑，恰收到之后的结果各一次；`cold_start` 的 `Reset` 之后全部输入 cursor 按声明的起点重建，与 `ProgramReset` 同事务。
 63. **instrument 归属交给上游**（§6.3 输入约束步、C9）：他账户的 instrument 在允许集合内、参数合规时，单据通过输入约束步，fixture 上游恰收到一次写并拒绝，append `VenueRejected`（原文保留）；允许集合不含它时在输入约束步被否决、无 `Prepared`；代码中输入约束步不读任何账户与 instrument 归属的观察。（对应 Q8）
-64. **规则状态是记录的 fold**（§6.3 `RuleState` 是记录的 fold）：（对应 Q7/Q9/Q17）
+64. **规则状态是记录的 fold**（§6.3 `RuleState` 是记录的 fold、移交）：（对应 Q7/Q9/Q17）
     - 存储中没有规则状态表；删除全部快照后重启，每张待决单据的去向（停在审批、lane、能力未确立，冷却判定结果）与不重启时相同；
-    - 停在 lane 步的单据在该 lane 上 `SendBarrier`、`VenueAccepted`、`VenueRejected`、`NotSent`、`Undetermined`、`ResolutionEvidence`、`Expired`、`Abandoned` 或 `bypass_lane` 控制记录提交之后被重新求值，集合为空即放行；停在审批的单据在 Decision 提交后求值；停在能力未确立的单据在声明版本、`CapabilityObserved` 或会话变化后求值；任一等待点到 `deadline` 即关闭；
+    - 停在 lane 步的单据在该 lane 上 `SendBarrier`、`VenueAccepted`、`VenueRejected`、`NotSent`、`Undetermined`、`ResolutionEvidence`、`Expired`、`Abandoned` 或 `bypass_lane` 控制记录提交之后被重新求值，集合为空即放行；停在审批的单据在 Decision 提交后求值；停在能力未确立的单据在声明版本、`CapabilityObserved` 或会话变化后求值；停在任一点的单据在 `reload_config(rules)` 或该单据的 `Transfer` 提交后求值；任一等待点到 `deadline` 即关闭；
+    - `AwaitingDecision` 中的 `Transfer`：A 与 B 的审批都为“从不”，A 的允许集合含 instrument X、B 的给出空集；A 的 X 单据自动通过、停在 lane 步，移交给 B 之后：链从授权步起按 B 重过，在输入约束步 `Rejection` + `Close(DecisionRejected)`，无 `Prepared`；移交给没有该 `(WriteLaneKey, OperationKind)` 授权的 principal 时在授权步 `Rejection`，并记安全事件；A 的审批为“从不”、B 的为“总是”时，移交给 B 之后单据停在审批步，没有 Decision 就不放行（lane 清空也不放行），此时有决定权的 principal 的 `decide` 被接受；A 的审批为“总是”且已有绑定该 `current_version` 的 Decision 时，移交给有授权的 B：B 的审批为“总是”时不再要第二条 Decision，为“从不”时放行门以这条 Decision 为依据、不以缺 `Outcome` 否决，此时的 `decide` 被拒；两种情形 lane 清空后都照常放行；
     - 一次放行的事务里只有 `Outcome`/Decision、`Prepared` 与 `Close(Prepared)`，没有另外的状态更新。
 65. **按键取证的窗口**（§6.6、§8.2、§8.3）：以 fixture 上游设定键唯一期与保留期：（对应 Q3）
     - `barrier_at` 已超出唯一期的尝试，`query_by_key` 得 `Unavailable`（`Gap{origin: Channel}`），从不得 `Absent`；超出保留期时 `replay_by_key` 得 `Unavailable`，fixture 上游未收到重放；

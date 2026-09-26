@@ -27,7 +27,7 @@ flowchart TB
   IL <-->|"核心↔解释层 IDL（本仓库内部）<br/>每个下游连接一个会话；principal = (os_user, actor)"| CORE
   CORE <-->|"核心拉起时创建、经句柄继承交给该进程的通道（一个进程一个会话）<br/>核心→请求（IDL 10 操作，全部经集成会话的调用通道）<br/>集成→推送（观察 · Gap · 能力变更 · readiness）"| INT1
   CORE <-->|"同一 IDL"| INT2
-  CORE <-->|"宿主协议 Load / Advance / Reset / Unload"| HOST1
+  CORE <-->|"宿主协议 Load / Advance / Unload"| HOST1
   CORE <-->|"宿主协议"| HOST2
   INT1 <-->|"上游协议（REST / WS / FIX）"| V1
   INT2 <-->|"上游协议"| V2

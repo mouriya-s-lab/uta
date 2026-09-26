@@ -147,7 +147,7 @@ enum ParameterValidity { Valid, Invalid(NonEmpty<Violation>), CapabilityNotEstab
 enum TicketAction<Intent> {
     Draft   { by: Principal, initial: Intent, basis: Basis },  // 建立单据 = 取得锁 = 声明负责
     Revise  { by: Principal, next: Intent, basis: Basis },     // 仅 responsible；追加版本，current_version 前进
-    Transfer{ by: Principal, from: Principal, to: Principal },  // 显式移交，记录，不静默；by = from（自愿）或持有控制授权的 principal（强制，§8.5）
+    Transfer{ by: Principal, from: Principal, to: Principal },  // 显式移交，记录，不静默；by = from（自愿）或持有控制授权的 principal（强制，§8.5）；AwaitingDecision 中移交使 STS 链按新负责人从授权步起重过（§6.3 移交）
     SubmitForDecision { by: Principal, at: Hash },           // 送审：冻结 current_version，Drafting → AwaitingDecision
     SendBack { by: Principal, reason },                      // 审批退回：AwaitingDecision → Drafting，responsible 不变
     Close   { outcome: Prepared(LogPosition) | Withdrawn | DecisionRejected | Expired },  // 锁消失；Withdrawn 仅 responsible，DecisionRejected 仅决定者或 STS 链的否决，Expired 仅过期规则，Prepared 仅放行链
@@ -158,7 +158,7 @@ enum TicketAction<Intent> {
 
 - **锁的本质是 `responsible` 字段**：`Draft` 即取锁，`Close` 即释放。持锁期间仅 `responsible` 可 `Revise`/`SubmitForDecision`；其他 principal 的 `Revise` 被拒绝，不排队、不产生分支。
 - **`TicketAction` 均为 append 记录**：每条带 principal 与依据 `LogPosition`。`Ticket` 自身是这些记录的 fold（`fold_state`，§4.1），不是原地修改的对象。
-- “锁”因此也是记录的解释：`responsible` 由最近一次 `Draft`/`Transfer` 决定。
+- “锁”因此也是记录的解释：`responsible` 由最近一次 `Draft`/`Transfer` 决定。STS 的授权、允许集合与是否需人工都以它为主体，所以 `AwaitingDecision` 中的 `Transfer` 使链按新负责人从授权步起重过（§6.3 移交）。
 
 **穷尽转移表：**
 
@@ -170,7 +170,7 @@ enum TicketAction<Intent> {
 | `AwaitingDecision` | `Close(Prepared)` | `Closed` |
 | `Drafting` \| `AwaitingDecision` | `Close(Withdrawn)` | `Closed` |
 | `AwaitingDecision` | `Close(Expired \| DecisionRejected)` | `Closed` |
-| `Drafting` \| `AwaitingDecision` | `Transfer` | 同态 |
+| `Drafting` \| `AwaitingDecision` | `Transfer` | 同态（`AwaitingDecision` 中移交后，STS 链按新负责人从授权步起重过，§6.3 移交） |
 
 - `Closed` 无出边：之后任何 `TicketAction` 被拒，含再次 `Close`。`Prepared` 之后的命运属尝试（§6.5），不再经单据。
 - `AwaitingDecision` 期间 `Revise` 被拒：决定绑定的 current_version 不能变（C11）。
@@ -416,7 +416,7 @@ IO 壳不知道单据的存在。
 - **锁最大的意义不是互斥，是入口**：它是 UTA 表达“**现在有一张单据，我是负责人**”的唯一方式。取得单据 = 单据存在 + 某 principal 从此负责；后续编辑、送审都以这个身份记账。没有负责人的单据不存在。
 - **一份单据只有一种交易意图**：不分叉不合并，订单不能“同时想买又想卖两个价”。版本链线性；`Revise` 在锁内追加，不需要 hash 期望比较。
 - **产品层代价与协作边界**：两个 AI 不能同时处理同一张单据。合理，但不好用。核心有意接受这个代价，不用分叉 / 合并修补。协作在核心之外：`Transfer` 移交；第二个 AI 另起单据，由决定者二选一；或把建议发给负责人。
-- **决定绑定 current_version**：策略要求人工时，批准的 Decision 引用 `AwaitingDecision(current_version)` 的 hash，进入 `Prepared` 要求它所决定的版本 = 当前 current_version；不要求人工时没有 Decision，依据是审批步对当前 current_version 给出、带 `rule_version` 的 `Outcome`（§6.3 审批步、放行门）。`SendBack` 后的 `Revise` 使 current_version 前进，旧 Decision 与旧 `Outcome` 都自然失效。
+- **决定绑定 current_version**：批准的 Decision 引用 `AwaitingDecision(current_version)` 的 hash，进入 `Prepared` 要求它所决定的版本 = 当前 current_version。策略要求人工时审批步等这样一条 Decision；这一版没有 Decision 而策略不要求人工时，依据是审批步对当前 current_version 给出、带 `rule_version` 的 `Outcome`（§6.3 审批步、放行门）。规则版本变更或移交之后，这一版已有的 Decision 仍是它的依据（§6.3 规则版本变更、移交）。`SendBack` 后的 `Revise` 使 current_version 前进，旧 Decision 与旧 `Outcome` 都自然失效。
 - **一张单据至多一次 `Close(Prepared)`**：之后的改动是新单据（改单 / 撤单 / 平仓各自起单），各走各的写边界。
 - **单据不记起单理由** [设计]：`Draft`/`Revise` 与批准都不带负责人或审批人撰写的自由文本。单据记录回答“谁、何时、依据哪些位置、哪一版”（S8）；自由文本只出现在对他人意图的判断上：`SendBack` 的原因、否决的原因、规则 `Rejection` 的违反项，读模型 `tickets` 按版本给出它们（§8.5）。“为什么想下这一单”是策略的业务上下文，由下游按它拿到的请求引用自己保存（§10.6）；它不能放进意图参数，意图参数会原样交给集成。不选：`Draft`/`Revise`/每条 Decision 都带备注，没有任何核心代数读它，而批准本就不带原因（P7）。
 
@@ -491,8 +491,8 @@ trait Rule {
   - 停在 lane 步：该 lane 上 `SendBarrier`、`VenueAccepted`、`VenueRejected`、`NotSent`、`Undetermined`、`ResolutionEvidence`、`Expired`、`Abandoned` 与 `bypass_lane` 控制记录的 append；
   - 停在审批步：该单据的 Decision；
   - 能力未确立：该来源的声明版本、`CapabilityObserved`，会话进入或离开 `Established`；
-  - 任一停下的点：该单据 `deadline` 的计时器到期（过期步对停在任一点的 `AwaitingDecision` 单据生效，见“过期步”），`reload_config(rules)`。
-- **重入经过 lane 步** [设计]。从任一等待（能力或会话未确立、审批、lane）恢复的单据，重跑链时都依次重过 lane（阻塞头）→ 冷却 → 过期 → 放行门，每一步照常可以停下或否决：停在审批步、lane 步或放行门前的单据从 lane 步起重跑；停在输入约束步的单据还没有过审批与 lane，从输入约束步起重跑，同样经过 lane 步。单据从不由放行门前的等待直接进入 `Prepared`：append `Prepared` 的那次求值必定刚过了 lane 步与冷却。例外只有两个，都不产生 `Prepared` 的捷径：规则版本变更从授权步起重过全部五步（见“规则版本变更”）；`deadline` 计时器只求值过期步（见“过期步”）。
+  - 任一停下的点：该单据 `deadline` 的计时器到期（过期步对停在任一点的 `AwaitingDecision` 单据生效，见“过期步”），`reload_config(rules)`，该单据的 `Transfer`（见“移交”）。
+- **重入经过 lane 步** [设计]。从任一等待（能力或会话未确立、审批、lane）恢复的单据，重跑链时都依次重过 lane（阻塞头）→ 冷却 → 过期 → 放行门，每一步照常可以停下或否决：停在审批步、lane 步或放行门前的单据从 lane 步起重跑；停在输入约束步的单据还没有过审批与 lane，从输入约束步起重跑，同样经过 lane 步。单据从不由放行门前的等待直接进入 `Prepared`：append `Prepared` 的那次求值必定刚过了 lane 步与冷却。例外都不产生 `Prepared` 的捷径：规则版本变更与 `Transfer` 从授权步起重过全部五步（见“规则版本变更”“移交”）；`deadline` 计时器只求值过期步（见“过期步”）。
   - 理由：阻塞头只算已 `Prepared` 的尝试（§6.4），停在放行门前的单据不是阻塞头。同一 lane 的两张单据可以在离线期间都过了 lane 步、停在放行门前；会话恢复时若从门续跑，两张先后 `Prepared`，同 lane 出现两次等待中的尝试，冷却也被绕过。从 lane 步重跑，先放行的那张成为阻塞头，后一张在 lane 步看到它而停下。
 - **原子性。** 一步产生的全部记录同一事务 append；放行时 `Prepared` 与 `Close(Prepared)` 同事务（§6.2）。没有“记录 + 状态表”的双写。
 - **恢复。** 重启后对每张 `AwaitingDecision` 单据按记录重新求值（§7.2 第 4 步）：停在哪一步、等什么，都由记录与当时的会话、能力、时钟重新得出。
@@ -538,9 +538,9 @@ trait Rule {
 - 是否需人工由策略按 `(principal, WriteLaneKey, OperationKind)` 给出：总是、从不，或“名义超过阈值 N 时”。第三种下，意图带 `notional` 且 ≤ N 则不需人工；带 `notional` 且 > N、或以 `quantity` 定量（不带 `notional`）则需人工。STS 不读观察，不估算以数量定量的单子值多少钱；估算属于敞口检查（§6.2），而不能比较时一律走人工是 fail-closed 的一侧。`Cancel` 既不带 `notional` 也不带 `quantity`，第三种条件对它无从判定，只能给“总是”或“从不”；给它第三种条件，规则文件不合法（§7.6），理由同输入约束步的适用范围。
 - 决定者按 `(principal, 动作种类)` 授权。
 - 另一笔过期未决独立处理。
-- **`decide` 只在要求人工时被接受** [设计]：当前规则对该单据的 `(principal, WriteLaneKey, OperationKind)` 要求人工审批时，`decide` 才被接受；否则它被拒，不 append 任何记录，错误名由实现定（§8.5 单据组的错误）。这包括审批步已以 `Outcome` 自动通过、仍停在 lane 步的单据。之后规则改为要求人工时，人的 `decide` 照常被接受（见“规则版本变更”）。
-  - 理由：不要求人工时放行的依据是审批步的 `Outcome`，放行门不读 Decision（下文“放行门”第 3 项）；这时接受 `decide`，批准不起任何作用，否决却关闭一张规则已放行的单据，决定者就借此越过了“不要求人工”这条规则。下游决定者本就只在要求人工的单据上起作用（§6.2 目录之外的 guard）。
-- **一个 `current_version` 至多一条 Decision** [设计]：被接受的 `decide` 另以“该 `(ticket, current_version)` 尚无 Decision 记录”为判据（C11 的待决集合版本即此）；已有 → `Conflict(AlreadyDecided)`。不要求人工时审批步只写 `Outcome`、不写 Decision，所以之后规则改为要求人工时，这一版还没有 Decision，人的 `decide` 不得 `Conflict(AlreadyDecided)`。
+- **`decide` 只在要求人工时被接受** [设计]：当前规则对该单据的 `(principal, WriteLaneKey, OperationKind)` 要求人工审批时，`decide` 才被接受；否则它被拒，不 append 任何记录，错误名由实现定（§8.5 单据组的错误）。这里的 principal 是 `decide` 调用时该单据的负责人（最近一次 `Draft`/`Transfer` 所定，§6.2），所以 `Transfer` 之后按新负责人判定（见“移交”）。这包括审批步已以 `Outcome` 自动通过、仍停在 lane 步的单据。之后规则改为要求人工时，人的 `decide` 照常被接受（见“规则版本变更”）。
+  - 理由：不要求人工时，没有 Decision 的单据以审批步的 `Outcome` 放行（下文“放行门”第 3 项）；这时接受 `decide`，批准不起任何作用，否决却关闭一张规则已放行的单据，决定者就借此越过了“不要求人工”这条规则。下游决定者本就只在要求人工的单据上起作用（§6.2 目录之外的 guard）。
+- **一个 `current_version` 至多一条 Decision** [设计]：被接受的 `decide` 另以“该 `(ticket, current_version)` 尚无 Decision 记录”为判据（C11 的待决集合版本即此）；已有 → `Conflict(AlreadyDecided)`。不要求人工时审批步只写 `Outcome`、不写 Decision，所以只以 `Outcome` 自动通过、从未有过 Decision 的版本，之后规则改为要求人工（或移交给要求人工的负责人）时还没有 Decision，人的 `decide` 不得 `Conflict(AlreadyDecided)`；已有 Decision 的版本在规则变更或移交之后仍以它为依据，第二条 `decide` 照常 `Conflict(AlreadyDecided)`。
 - 理由：决定之后单据可能仍停在 lane 步而版本不变，靠 `Closed` 挡不住同版本的第二条决定。
 
 **lane 步。** 阻塞头集合的定义与语义见 §6.4。
@@ -566,7 +566,7 @@ trait Rule {
 
 1. `basis_validity == Fresh`（§5.2）；
 2. 必要项 `alignment` 为 `Aligned`（§6.2）；能力项恒在必要项内，不由策略声明，它按会话有效声明核对可执行性（含意图所带的参数 schema 身份仍是声明的那个）；
-3. 审批的依据绑定当前版本：策略要求人工时，批准的 Decision 所绑定的版本 = `AwaitingDecision(current_version)`；不要求人工时，审批步对这一 current_version 给出了带 `rule_version` 的 `Outcome`（不写 Decision，§6.2 决定绑定 current_version）。
+3. 审批的依据绑定当前版本：这一版有批准的 Decision 时，它所绑定的版本 = `AwaitingDecision(current_version)`；没有 Decision 时（审批步只在策略不要求人工时不等 Decision），审批步对这一 current_version 给出了带 `rule_version` 的 `Outcome`（不写 Decision，§6.2 决定绑定 current_version）。规则版本变更或移交之后，已有的 Decision 仍是这一版的依据，即使当前规则已不要求人工（见“规则版本变更”“移交”）。
 
 能力项未确立（该来源此刻没有已建立的会话，或会话有效声明对该操作为 `Unknown`）时，门不求值：单据停在门前等待，能力确立后从 lane 步起重跑（见“等待与重入”），`deadline` 到期由过期步关闭。其余任一不满足 → `PredicateFailure`（fail-closed，C12），不发出。
 
@@ -588,6 +588,16 @@ trait Rule {
   - 原单自动通过而新规则要求人工 → 单据停在审批步等 Decision；
   - 原决定者在新规则下已无该授权 → 审批步否决。
 - 任一步在新规则下否决即 `Rejection`（带新 `rule_version`），单据 `Close(DecisionRejected)`。
+
+### 移交 [设计]
+
+授权步、输入约束步的允许集合与审批步的“是否需人工”都以单据的负责人为 `(principal, WriteLaneKey, OperationKind)` 的主体，而负责人由最近一次 `Draft`/`Transfer` 决定（§6.2）。此前各步的通过依据的是当时的负责人，负责人换了，这些依据随之结束。所以 `AwaitingDecision` 中的 `Transfer` 是一个重新求值事件（见“等待与重入”）：它的事务提交之后，不论单据停在哪一步，链都与规则版本变更一样从授权步起重过全部五步，主体是新负责人：
+
+- 授权步与输入约束步按新负责人判定：新负责人没有该 `(WriteLaneKey, OperationKind)` 的授权即授权步否决，意图的 instrument 不在新负责人的允许集合内即输入约束步否决，都是 `Rejection`（带 `rule_version`）+ `Close(DecisionRejected)`。
+- 审批步：已有绑定 `current_version` 的人工 Decision 仍算数（Decision 决定的是一个版本，§6.2 决定绑定 current_version），不因移交再要一条，新负责人的规则不要求人工时也由它作放行门第 3 项的依据。没有时按当前规则对新负责人的 `(principal, WriteLaneKey, OperationKind)` 判定：要求人工 → 停在审批步等 Decision；不要求 → 本步对这一 current_version 给出 `Outcome`。
+- 然后照常过 lane、冷却、过期与放行门。
+- 理由：不重过授权与输入约束，单据就会按旧负责人的授权与允许集合放行，新负责人的规则要求否决的意图照样进入 `Prepared`；只从 lane 步续跑，又会让放行门读到旧负责人名下的 `Outcome`，越过新负责人要求的人工审批。
+- 不选：**`AwaitingDecision` 中拒绝 `Transfer`、先 `SendBack` 再移交**：强制移交是负责人失联时由规则处理的出口（§6.2 权衡），而 `SendBack` 只能由审批人发起。
 
 ### 不变量
 
@@ -913,6 +923,7 @@ venue 对我方写的响应是执行事实：C13 原始负载完整保留，执�
 | `Undetermined`，等待 `Abandoned`，结果仍未知 | `Found`/`Absent`（`Attributed`，或 principal 发起的 `retry_reconciliation`） | 补上结果；等待仍是 `Abandoned` |
 | `Undetermined`，等待 `Abandoned`，结果仍未知 | `ResolutionEvidence{Inconclusive}`（principal 发起的 `retry_reconciliation` 那一轮） | 什么都不变：等待仍是 `Abandoned`，结果仍未知；本轮下一渠道，渠道穷尽即停（§6.6） |
 | `Undetermined`，结果仍未知（等待 `Active`；`Manual` 重开时也可以是等待 `Abandoned`） | `ReconciliationReopened{cause}`（`SessionRestored` 只对渠道穷尽而停等、等待 `Active` 的；`Manual` 对任一结果仍未知的） | 新一轮：已取证渠道集从空开始，按渠道顺序重新取证；等待与结果都不变（§6.6 重开与轮次） |
+| `Undetermined`，等待 `Active`，结果仍未知，本轮渠道已穷尽而停等 | 同一会话里的能力变更（`CapabilityObserved`）使渠道集出现本轮尚未取证的渠道 | 本轮继续：该渠道是下一渠道；不开新一轮，不 append `ReconciliationReopened`（§6.6 停等） |
 | `Undetermined`，结果已确立（等待 `Finished`，或等待 `Abandoned` 而结果已补上） | 结果确立之后才完成的取证调用的 `ResolutionEvidence`（任一结果） | 只 append 作审计：结果与等待都不变，不推进任何渠道 |
 
 ### 与集成操作集的关系
@@ -933,7 +944,7 @@ venue 对我方写的响应是执行事实：C13 原始负载完整保留，执�
 - 调用方键是 `AttemptRef` 的单射编码，由核心铸造；核心从不凭键字节归因，也从不断定 `External`。由键铸造与归因分工（§8.3）保证。
 - 每次尝试的等待**至多**结束一次，且在证据充分（回执、`NotSent`、`Found`/`Absent`、`deadline`）或 principal 放弃时必结束；`Abandoned` 之后等待不再改变。由闭合 sum 与转移表保证。
 - 结果只由上游证据（回执、`Found`/`Absent`）或集成确知的未交出（`NotSent`）与发出前门的到期（`Expired`）给出，至多确立一次；放弃不给出结果。由两根轴的分工保证。
-- `Undetermined` 的收敛不承诺时限（C2），只承诺停等可被推进：新证据（任一时刻到达的 `Attributed`、`ReconciliationReopened` 重开后的取证），或 principal 的 `abandon`。
+- `Undetermined` 的收敛不承诺时限（C2），只承诺停等可被推进：新证据（任一时刻到达的 `Attributed`、`ReconciliationReopened` 重开后的取证、同一会话里的能力变更使本轮尚未取证的渠道进入渠道集之后的取证），或 principal 的 `abandon`。
 - `VenueAccepted` 只认业务回执；`NotSent` 只认集成可证明的未交出；其余落 `Undetermined`。由写操作（`submit`/`cancel`）的返回契约保证。
 
 ## 6.6 对账驱动与放弃跟踪
@@ -975,10 +986,11 @@ by-key → listing + venue 身份 → fills/positions → replay-by-key
 
 ### 停等
 
-渠道穷尽仍 `Inconclusive`，append 后**停下**。停等可由三种事件推进：
+渠道穷尽仍 `Inconclusive`，append 后**停下**。停等可由四种事件推进：
 
 - 一条 `ReconciliationReopened{attempt, cause}` [设计] 重开一轮；
 - 被动渠道 `Attributed` 在任一时刻到达（见下）；
+- 同一会话里的能力变更（`CapabilityObserved`）使渠道集出现本轮尚未取证的渠道 [设计]：只对等待是 `Active` 的尝试；本轮继续，该渠道就是下一渠道（§6.5 取证渠道与轮次），不开新一轮；
 - principal 经 `abandon` 放弃跟踪（见下）：它结束等待，不给出结果。
 
 IO 壳**永不 heuristic**。取证是读副作用，可以重试；写调用是写副作用，永不重试（§3.4）。
@@ -1053,7 +1065,7 @@ IO 壳**永不 heuristic**。取证是读副作用，可以重试；写调用是
 ### 不变量
 
 - 取证（读副作用）可重试，写调用（写副作用）永不重试。由两类副作用的区分保证（§3.4）。
-- `Inconclusive` 停等，IO 壳永不 heuristic；停等只由新证据推进，或由 principal 放弃跟踪结束。由对账驱动保证。
+- `Inconclusive` 停等，IO 壳永不 heuristic；停等只由新证据推进（含同一会话里的能力变更使本轮尚未取证的渠道进入渠道集之后的取证），或由 principal 放弃跟踪结束。由对账驱动保证。
 - 放弃跟踪从不给出结果；`Abandoned` 只在在途取证全部完成、结果仍未知时 append，之后等待不再改变，也不再自动取证。由 `abandon` 的次序保证。
 - 按键的取证在上游保留期或唯一期之外返回 `Unavailable`，空列表不是 `Absent`。由集成义务（§8.3）保证。
 

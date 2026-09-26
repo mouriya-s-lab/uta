@@ -53,7 +53,7 @@ stateDiagram-v2
 
 ## D6.2 取证循环（`Undetermined` 之后）
 
-对照：§6.6 对账驱动（渠道顺序、撤单尝试的取证、取证结果与记录的固定矩阵、`ReconciliationReopened`）、`replay_by_key`；§8.2 四个取证操作；§8.3 按 `barrier_at` 判断窗口；§8.5 `retry_reconciliation`；§4.2 `Gap{Channel}`。
+对照：§6.6 对账驱动（渠道顺序、撤单尝试的取证、取证结果与记录的固定矩阵、停等、`ReconciliationReopened`）、`replay_by_key`；§8.2 四个取证操作；§8.3 按 `barrier_at` 判断窗口；§8.5 `retry_reconciliation`；§4.2 `Gap{Channel}`。
 
 ```mermaid
 flowchart TB
@@ -70,6 +70,7 @@ flowchart TB
   INC --> NEXT
   NEXT -->|"否：渠道穷尽"| WAIT["停等：等待仍 Active，留在阻塞头集合<br/>IO 壳永不 heuristic；保留钉仍在"]
   WAIT -->|"ReconciliationReopened{p, SessionRestored}（append 前重查结果仍未知）<br/>集成会话重建，只对停等、等待 Active 者"| CH0
+  WAIT -->|"同一会话里的能力变更（CapabilityObserved）使渠道集出现本轮尚未取证的渠道（只对等待 Active 者）<br/>本轮继续，不开新一轮、不 append ReconciliationReopened"| NEXT
   MAN["retry_reconciliation（principal）"] -->|"ReconciliationReopened{p, Manual}（append 前重查结果仍未知）<br/>任一结果未知的 Undetermined（Active 或 Abandoned）；Abandoned 者这一轮依序取证一遍、渠道穷尽即停，等待仍是 Abandoned"| CH0
   WAIT -->|"abandon（principal）：见 D6.4"| AB[("Abandoned：等待结束，结果未知")]
   ATTR["被动渠道：带 attribution FromAttempt(p) 的观察记录，不论来源（推送、回执、取证响应、一次性读的结果项；集成在声明的键作用域与唯一期内填写；核心不按键字节归因），且 p 处于 Undetermined、结果未知"] -->|"同事务"| ATT["ResolutionEvidence{p, Attributed, Found{observation: 该记录, evidence: 该记录的载荷 + 原始负载}}"]
@@ -81,6 +82,7 @@ flowchart TB
 读法：
 
 - 每一步取证都是一条记录，所以重启后"做到第几个渠道"由 fold 重建，不需要驱动器内存。
+- 停等由四种事件推进：重开新一轮（`SessionRestored` 或 `Manual`）、`Attributed`、`abandon`，以及同一会话里的能力变更使渠道集出现本轮尚未取证的渠道：渠道集按当前会话有效能力求，所以这时本轮接着取证，不等重连（§6.5 取证渠道与轮次、§6.6 停等）。
 - `Unavailable` 不是证据：一个不可用的渠道不能被"跳过"，否则"没查到"会伪装成"查过了"；同渠道按 pacing 重试直到可用。
 - 按键渠道的窗口由集成按 `barrier_at` 判断，核心不持有上游的保留期或唯一期。
 - 撤阻塞头（D6.7）的结果不重开阻塞头的取证，也不是阻塞头的证据；要再问一次由 principal 发 `retry_reconciliation`。
@@ -260,7 +262,7 @@ sequenceDiagram
   I->>OJ: 观察记录 → p 处于 Undetermined、结果未知 → 同事务 EJ: ResolutionEvidence{p, Attributed, Found} → 结果确立（已 Abandoned 时只补结果，等待不变）
 ```
 
-读法：末态可枚举（found → `Evidence` + 观察记录 / absent → 未发生 / 无渠道 → 停等）；停等态之后仍有多条入口：任一时刻到达的 `Attributed Found`、`ReconciliationReopened`（会话重建 / `retry_reconciliation`）重开的取证，或 principal 的 `abandon`：它只结束等待，结果仍等上游证据。
+读法：末态可枚举（found → `Evidence` + 观察记录 / absent → 未发生 / 无渠道 → 停等）；停等态之后仍有多条入口：任一时刻到达的 `Attributed Found`、`ReconciliationReopened`（会话重建 / `retry_reconciliation`）重开的取证、同一会话里的能力变更使本轮尚未取证的渠道进入渠道集之后的取证，或 principal 的 `abandon`：它只结束等待，结果仍等上游证据。
 
 核出：无。
 

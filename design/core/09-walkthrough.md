@@ -75,7 +75,7 @@
 3. 收敛按 `SendBarrier` 所记写证明声明的渠道**自动**依次取证（§6.6、§8.2；读副作用可重试）。取证在该集成新会话建立后开始；会话建立之前 IO 壳不对它发读，也不记 `Gap{origin: Channel}`（§6.6）：
    - **按键回读** `query_by_key(key, key_role, scope, barrier_at)`：`Found(state)` → 同事务 观察记录 + `ResolutionEvidence{ByKey, Found}` → 结果确立、等待结束、移出阻塞头集合；`Absent` → `ResolutionEvidence{ByKey, Absent}`，结果确立（本次未发生）。集成按 `barrier_at` 判断该键已超出上游唯一期时返回 `Unavailable`，不返回 `Absent`（§8.3）。
    - **listing+身份** `list_open`/`list_fills`：命中归因到该尝试的订单 / 成交 → 同事务 观察记录 + `ResolutionEvidence{Found}`；未命中或空列表 → `Inconclusive`（F10：listing 未见不证明未递，本渠道无 `Absent`）。
-   - **无渠道**：渠道穷尽仍 `Inconclusive` → append 后停等。停等由 `ReconciliationReopened`（集成会话重建 / principal 的 `retry_reconciliation`）重开一轮、任一时刻到达的归因观察（步 4）推进，或由 principal 的 `abandon` 结束等待（§6.6）。IO 壳永不 heuristic（C1/C2/C12）。
+   - **无渠道**：渠道穷尽仍 `Inconclusive` → append 后停等。停等由 `ReconciliationReopened`（集成会话重建 / principal 的 `retry_reconciliation`）重开一轮、任一时刻到达的归因观察（步 4）、同一会话里的能力变更使本轮尚未取证的渠道进入渠道集（本轮继续）推进，或由 principal 的 `abandon` 结束等待（§6.6）。IO 壳永不 heuristic（C1/C2/C12）。
    - 对外可见：三种环境末态可枚举：found → 回执即观察记录；absent → 未发生；无渠道 → 停等，或放弃跟踪后“已放弃跟踪，结果未知”。
    - **放弃跟踪**：运维 principal 调 `abandon(attempt, note)`（§8.5）。IO 壳停发新的取证调用，等在途的 `query_by_key` 完成并记下它自己的结果；结果仍未知才 append `Abandoned{attempt, principal, note, rule_version}`。该尝试移出阻塞头集合，lane 放行后续写；此后不再自动取证，会话恢复也不重开它。之后到达的归因观察（步 4）或 principal 再发的 `retry_reconciliation` 仍可补上结果，但不恢复等待。对外可见：`Abandoned` 带 principal；结果补上前显示“已放弃跟踪，结果未知”。
 4. 迟到回执收敛：
@@ -308,8 +308,8 @@
    - 下游的自动决定者（检查目录之外的 guard，§6.2）与人工审批人同受此约束：它批准后，人就不能再决定这一版；它否决则单据关闭；它想改判一个已批准的版本，只能经 `SendBack` 退回草稿、由负责人 `Revise` 出新版本。`SendBack` 不是 Decision，不占这一版的决定。退回与否决的原因随版本可读（读模型 `tickets`）。
 4. 负责人失联：由策略层处理（权衡，§6.2）。
    - 过期步在 `deadline` 到期 `Close(Expired)`；
-   - 或持有控制授权的 principal 经 `transfer(ticket, to)` 强制转移（§8.5），转移记录带 principal 与依据。
-   - 对外可见：单据要么 `Closed(Expired)`，要么 `responsible` 变更且可追溯。
+   - 或持有控制授权的 principal 经 `transfer(ticket, to)` 强制转移（§8.5），转移记录带 principal 与依据；单据在 `AwaitingDecision` 时，STS 链按新负责人从授权步起重过（§6.3 移交）：新负责人无授权或允许集合不含该 instrument 即否决，已有绑定该版本的 Decision 仍算数，没有时按新负责人的规则决定等 Decision 还是直接给出 `Outcome`。
+   - 对外可见：单据要么 `Closed(Expired)`，要么 `responsible` 变更且可追溯；`AwaitingDecision` 中的转移之后，单据还可能按新负责人的规则 `Closed(DecisionRejected)` 或停在审批步。
 
 **走通。**
 

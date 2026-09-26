@@ -78,7 +78,7 @@ sequenceDiagram
 
 ## D4.2 程序生命周期
 
-对照：§8.6 装载期校验、`Load`/`Reset`/`Unload`、程序的活动集合与失败抑制、卸载与替换、程序流的 epoch、预算语义、状态迁移、运维冷启动；§8.5 `load_program`/`unload_program`；§8.7 原生 op 的执行；§6.1 发出成员；§4.2 `start`、`program_upgrade`；§7.2 生命周期表与受控停止。
+对照：§8.6 装载期校验、宿主协议 `Load`/`Unload`、`Reset`（不沿用旧状态的替换 `Applied` 事务的核心侧处理，不是宿主消息）、程序的活动集合与失败抑制、卸载与替换、程序流的 epoch、预算语义、状态迁移、运维冷启动；§8.5 `load_program`/`unload_program`；§8.7 原生 op 的执行；§6.1 发出成员；§4.2 `start`、`program_upgrade`；§7.2 生命周期表与受控停止。
 
 ```mermaid
 stateDiagram-v2

@@ -459,7 +459,7 @@
 |---|---|---|
 | 观察记录 | 集成推送观察记录（venue seq/cursor 证据、`attribution`、契约载荷 + `payload_schema`、原始负载），不带会话 epoch；`LogPosition` 由核心按到达顺序分配，`SessionEpoch` 由核心盖上（§7.2 会话 epoch） | append 观察 `Journal`、推进序号覆盖（§8.4）、触发处理器与 DAG |
 | `Gap{origin: Source}` | 集成负责的观察流断代；会话内上报的每条带该流在本会话的 `generation`（集成创建，会话开始为 0，每上报一条加一并带上新值，§8.2 `route`） | 记来源 gap（新 epoch 首条记录，含前一范围与最后 `Seq`、原因，会话内上报的另含 `generation`） |
-| 能力变更 | 握手后能力变化，含某流一次性读与回填能力（§2.2 `StreamDecl`）；配额只随重新握手变化 | IO 壳 append `CapabilityObserved`（执行 J，§7.5）、重算受影响单据的 `alignment` 与 `parameter_validity` |
+| 能力变更 | 握手后能力变化，含某流一次性读与回填能力（§2.2 `StreamDecl`）；配额只随重新握手变化 | IO 壳 append `CapabilityObserved`（执行 J，§7.5）、重算受影响单据的 `alignment` 与 `parameter_validity`；停等中、等待 `Active` 的尝试的渠道集随之出现本轮尚未取证的渠道时，本轮在同一会话里继续（§6.6 停等） |
 | readiness（P16） | 按集成 × 流：`Starting` / `Live{live_from}`（含 `Degraded` 子态）；`live_from` 是回填的终点，声明时机按该流有无可衔接序号而定（§8.4） | 核心盖上到达会话的 `SessionEpoch` 与该流当时的流 epoch 后 append 为健康观察；只在该集成的会话值（§8.4 健康不留旧值）是那个会话的 `Established`、该流 epoch 仍是当前流 epoch 时有效（§8.4 readiness 的 fold）；订阅状态派生（非损失，不需确认） |
 
 错误与 undesired events：
@@ -772,7 +772,7 @@
 **单据组**：`draft(intent) → TicketId`；`revise(ticket, expected_version, diff)`；`submit_for_decision(ticket, expected_version)`；`decide(ticket, expected_version, Approve | Reject(reason))`；`send_back`；`withdraw`；`transfer(ticket, to: principal)`。
 
 - 动作轴：写（append `TicketAction`）。
-- 核心内部结果：单据 fold 转移（§6.2）；`Approve` 触发 STS 链放行（§6.3）。
+- 核心内部结果：单据 fold 转移（§6.2）；`Approve` 触发 STS 链放行（§6.3）；`AwaitingDecision` 中的 `transfer` 使 STS 链按新负责人从授权步起重过（§6.3 移交）。
 - `draft` / `revise` 不因参数不合规被拒：参数合规是单据 fold 的状态，读模型 `tickets` 返回它，送审时由输入约束步否决并留下意图与否决记录（§6.2 参数合规、§6.3）。
 - `decide` 由人或下游的自动决定者调用，二者同受一版一条 Decision 的约束，也同样只在当前规则对该单据要求人工审批时被接受（§6.3 审批步）；交易协议检查目录之外的 guard 只能以这种身份出现（§6.2）。
 - 错误：
@@ -861,7 +861,7 @@
 - principal → scope 与控制动作、结果未知组的授权，写在统一路径的策略 / 审批规则文件（§7.6）。
 - 规则文件只写交易协议定义的词汇与取值：人工审批条件与名义阈值、instrument 允许集合、按 `(WriteLaneKey, OperationKind)` 的冷却间隔（§6.3），检查目录各项的必要 / advisory、参数与“先查后判”（§6.2）。判据由交易协议写定，同一规则文件在任何实现里给出同一个放行 / 否决。
 - 规则版本 = 内容 hash，经 `reload_config` 生效。
-- 规则不冻结进单据；待决单据在放行时按当时规则重过五步（§6.3）。收紧规则可使待决单据在放行时 `Rejection`，记录带 `rule_version`。
+- 规则不冻结进单据；待决单据按当时规则求值：规则版本变更或 `transfer` 之后从授权步起重过五步，其余重新求值事件从 lane 步起（停在输入约束步的从输入约束步起，`deadline` 计时器只求值过期步；§6.3 等待与重入）。收紧规则可使待决单据在放行时 `Rejection`，记录带 `rule_version`。
 - 负责人失联由规则处理：过期步 `Close(Expired)`，或带 principal 的强制 `transfer`（§6.2）。
 - 每条 `Outcome`/`Rejection`/控制记录都带所依据的规则版本 hash，审计由此回链。
 
@@ -949,9 +949,14 @@
 - **程序流的 epoch** [设计]：一个成员的**程序流**是它的程序值在 `outputs` 里声明的流，每条的身份是 `(Program(id), name)`（§2.3 `Source`、§4.3），流上记录的写法见 §4.3（输出记录是节点的当前值）。成员的**输出契约**是 `outputs` 各项的 `(name, 值类型)`（§4.3）；开始成员的每条 `Applied`（`load_program` 或替换）以值记下它，与执行事实输入一样从同一次读到的程序值取出（§8.5 `load_program`）。内容 hash 只能发现程序值变了，文件被改或删去之后取不回输出契约，而沿用判定、程序流的 epoch 与程序来源的接纳（§8.5 订阅组）在那之后仍要读它，所以以值记下；这不是程序值的副本，只是这一个成员事实。沿用判定比较的是被结束成员的 `Applied` 所记的输出契约与新成员的；下文各条按流的规则只读各 `Applied` 所记输出契约里的流名，不读程序值文件。开始一个不沿用旧状态的成员的 `Applied`，在同一事务为这个成员的每条程序流开新 epoch，append 它的首条记录 `Gap{origin: Source}`；确认者是控制面，`StreamId.epoch` 由核心分配。让 id 进入活动集合的 `load_program`（首次装载，或卸载之后再装载）带 `reason: start`；不沿用旧状态的替换带 `reason: program_upgrade`（下文 `Reset`）。这个成员不声明的流，这一事务不写记录：它的 epoch 照旧开着，流上只是不再有记录，与卸载之后一样。该 id 下第一次被声明的流（此前没有任何 `Applied` 的输出契约含它），这条 gap 没有前驱（§4.2），不论原因是 `start` 还是 `program_upgrade`。每条程序流的 epoch 到同一条流上下一条开 epoch 的 `Gap{origin: Source}` 为止，即同一 id 此后第一个声明这条流、不沿用旧状态的成员开始时在它的 `Applied` 里写的那条，它同时开始下一个 epoch：`unload_program` 与不声明这条流的成员都不结束它，其间流上只是没有记录；沿用旧状态的替换（它要求新旧成员的输出契约相同，§8.5 `load_program`）与实例更替（崩溃或受控停止之后第 5 步重新 `Load`）都接着它。让 id 进入活动集合的装载不是 `Reset`：它不结束任何成员，没有被丢弃的运行中状态，不 append `ProgramReset`。
   - 理由：程序流的记录出自成员的状态，冷启动的成员与此前的输出之间没有可证明的续接，这正是 `start` 与 `program_upgrade` 标出的断代（§4.2）；沿用旧状态的成员从同一状态接着算，续接成立。沿用因此要求输出契约不变：沿用的替换不写 gap，流名变了，新声明的流就没有开 epoch 的记录；值类型变了，同一个 epoch 里就有两种类型的记录，这与载荷 schema 版本变化即开新 epoch 同理（§2.2 `payload_schema` 身份）。卸载不写程序流，断代要到下一次开始声明它的成员时才有写者与确认者，所以它落在那个 `Applied` 里；不声明它的成员同样不写，它开着的 epoch 由此后声明它的成员结束。
 
+**`Reset(reason)`**（核心侧：不沿用旧状态的替换 `Applied` 事务的处理，不是宿主协议的消息）
+
+- 丢弃旧状态、冷启动：新成员的宿主不携带 `checkpoint` 装载（下文 `Load`）；`reason ∈ {Replace, Operator}`：`Operator` 由 `cold_start` 的替换触发，`Replace` 由其余不沿用的替换（新程序不接受旧版本，或新旧成员的输出契约不同）触发。
+- append 程序观察 `ProgramReset{reason}`；新成员的每条程序流开新 epoch（`Gap{origin: Source, reason: program_upgrade}`，§4.2、上文“程序流的 epoch”），按 H9 回填；程序订阅的全部项与 cursor（含请求流）按各输入声明的起点重新建立，重建的 cursor 上未确认的投递缺口随之删除（§4.2），与 `ProgramReset` 同一事务（见上文“程序的输入”）。这一事务就是替换的 `Applied` 事务（上文第 4 步）：旧成员的宿主执行此前已经结束（第 1–3 步），新宿主在它提交之后才拉起，所以没有宿主接收 `Reset`。丢弃的状态里记着的请求，其之后到达的结果对新状态只是请求流与执行事实流上的普通记录。
+
 ### 宿主协议
 
-核心 ↔ 宿主进程，同一 IDL 传输。
+核心 ↔ 宿主进程，同一 IDL 传输。宿主协议的消息是 `Load`、`Advance` 与 `Unload`；`Reset` 是替换 `Applied` 事务里的核心侧处理（上文），不向宿主发送。
 
 **`Load(program, checkpoint?, budget) → Loaded{state_version}`**（核心→宿主）
 
@@ -975,11 +980,6 @@
 - 核心把 `effects`（append 为 `EffectRequest` 记录，落该程序的请求流，每条记下这次 `Advance` 所属成员：开始它的 `Applied` 的位置，§6.1 发出成员）、`derivations`（程序值 `outputs` 里每项输出声明所指节点 `node` 在这批推进之后的值，按 §4.3“输出记录是节点的当前值”写在流 `(Program(id), name)` 上，可以一条也没有；未声明为输出的节点的值不落任何流）、`checkpoint` 与该程序的 cursor **同一事务**持久化：事务由程序宿主元素编排，cursor 由持久订阅元素写在程序订阅上，同一次写删去新 cursor 覆盖的投递缺口（上文“程序订阅”），`checkpoint` 写在它自己的表里；这批推进没有派生记录时，cursor 与 `checkpoint` 照常提交。一批推进含哪些记录由核心按记录到达调度，不在契约里（§4.3）。程序值的输出声明 `Output{name, node}` 与这里宿主返回的 `Output{effects, derivations, checkpoint}` 是两个东西，本节其余处的 `Output` 都指后者。
 - 事务未提交则这批推进视为未发生，重启后从同一组已提交的 cursor 重新推进（这一批可以与崩溃前的不同，§4.3；cursor 仍为 `Start{from}` 的，前导整段重新交出），因此不会重复 `Emit`（§10.5 #16）。
 - 宿主超时 / 崩溃 → 视同 trap；`Output` 超预算（意图速率 / 状态大小），或它的 `checkpoint` 的 `state_version` 不在本成员接受的集合内 → 整个 `Output` 不持久化，按预算语义处理（见下）。
-
-**`Reset(reason)`**（核心→宿主）
-
-- 丢弃状态、冷启动；`reason ∈ {Replace, Operator}`：`Operator` 由 `cold_start` 的替换触发，`Replace` 由其余不沿用的替换（新程序不接受旧版本，或新旧成员的输出契约不同）触发。
-- append 程序观察 `ProgramReset{reason}`；新成员的每条程序流开新 epoch（`Gap{origin: Source, reason: program_upgrade}`，§4.2、上文“程序流的 epoch”），按 H9 回填；程序订阅的全部项与 cursor（含请求流）按各输入声明的起点重新建立，重建的 cursor 上未确认的投递缺口随之删除（§4.2），与 `ProgramReset` 同一事务（见上文“程序的输入”）。这一事务就是替换的 `Applied` 事务（上文“卸载与替换”），宿主随后不携带 `checkpoint` 装载。丢弃的状态里记着的请求，其之后到达的结果对新状态只是请求流与执行事实流上的普通记录。
 
 **`Unload`**（核心→宿主）
 

@@ -36,7 +36,7 @@ stateDiagram-v2
 
 - 登记方是核心、消费者不手工登记；解除随持有者生命周期自动发生。
 - 解除后的历史引用仍可读作审计；已解除的引用落到边界之下读得 `BeyondRetention`，不阻止压缩。未解除的引用即使已在边界之下（程序第一个 `Checkpoint` 登记的 cursor 可能如此）也照样阻止边界推进，直到被取代或解除（§2.4 不变量）。
-- `Undetermined` 停等时，它的 `basis` 与取证引用钉住保留边界；解除随该尝试等待结束自动发生——任一入口（`Attributed Found`、`ReconciliationReopened` 后的自动取证、`abandon` 之后 IO 壳 append 的 `Abandoned`，D6.2）都行，没有绕过记录的旁路。
+- `Undetermined` 停等时，它的 `basis` 与取证引用钉住保留边界；解除随该尝试等待结束自动发生——任一入口（`Attributed Found`、`ReconciliationReopened` 后的自动取证、同一会话里的能力变更使本轮尚未取证的渠道进入渠道集之后的取证、`abandon` 之后 IO 壳 append 的 `Abandoned`，D6.2）都行，没有绕过记录的旁路。
 
 核出：无。
 
