@@ -1,0 +1,13 @@
+[package]
+name = "xtask"
+version = "0.0.0"
+description = "Repository checks: crate dependency direction."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

@@ -1,0 +1,13 @@
+[package]
+name = "uta-rpc"
+version = "0.0.0"
+description = "Symmetric JSON-RPC 2.0 peer over length-delimited frames; every call completes exactly once, no timeouts, no retries."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

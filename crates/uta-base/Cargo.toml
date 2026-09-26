@@ -1,0 +1,18 @@
+[package]
+name = "uta-base"
+version = "0.0.0"
+description = "Identifiers whose source is outside the UTA core (Alice-written files), parsed once at the boundary."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+
+[dev-dependencies]
+serde_json = "1"
+
+[lints]
+workspace = true

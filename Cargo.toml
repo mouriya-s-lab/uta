@@ -1,0 +1,24 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/uta-base",
+    "crates/uta-proc",
+    "crates/uta-rpc",
+    "crates/uta-channel",
+    "crates/uta-store",
+    "crates/uta-core",
+    "xtask",
+]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.89"
+license = "UNLICENSED"
+publish = false
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
