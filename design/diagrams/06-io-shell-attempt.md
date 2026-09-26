@@ -69,7 +69,8 @@ flowchart TB
   RES -->|"未命中（listing / fills 空列表永远不是 Absent，F10）"| INC["ResolutionEvidence{p, channel, Inconclusive}"]
   INC --> NEXT
   NEXT -->|"否：渠道穷尽"| WAIT["停等：等待仍 Active，留在阻塞头集合<br/>IO 壳永不 heuristic；保留钉仍在"]
-  WAIT -->|"ReconciliationReopened{p, cause}（append 前重查结果仍未知）<br/>cause = SessionRestored（集成会话重建，只对等待 Active 者）/ Manual（retry_reconciliation）"| CH0
+  WAIT -->|"ReconciliationReopened{p, SessionRestored}（append 前重查结果仍未知）<br/>集成会话重建，只对停等、等待 Active 者"| CH0
+  MAN["retry_reconciliation（principal）"] -->|"ReconciliationReopened{p, Manual}（append 前重查结果仍未知）<br/>任一结果未知的 Undetermined（Active 或 Abandoned）；Abandoned 者这一轮依序取证一遍、渠道穷尽即停，等待仍是 Abandoned"| CH0
   WAIT -->|"abandon（principal）：见 D6.4"| AB[("Abandoned：等待结束，结果未知")]
   ATTR["被动渠道：带 attribution FromAttempt(p) 的观察记录，不论来源（推送、回执、取证响应、一次性读的结果项；集成在声明的键作用域与唯一期内填写；核心不按键字节归因），且 p 处于 Undetermined、结果未知"] -->|"同事务"| ATT["ResolutionEvidence{p, Attributed, Found{observation: 该记录, evidence: 该记录的载荷 + 原始负载}}"]
   FOUND --> RS[("结果确立")]
@@ -157,7 +158,7 @@ stateDiagram-v2
 读法：
 
 - 左轴回答"UTA 还要不要等"，源头是 UTA；右轴回答"这次写发生没有"，源头是上游。principal 只能动左轴：没有人工写结果的操作。
-- `abandon` 没有中间记录：①只是 IO 壳进程内的停发；③之前崩溃，日志里没有 `Abandoned`，恢复后仍 `Active`（§9.2 #8）。在途调用已给出结果时不写 `Abandoned`，返回 `Rejected(NotUndetermined)`。
+- `abandon` 没有中间记录：①只是 IO 壳进程内的停发；③之前崩溃，日志里没有 `Abandoned`，恢复后仍 `Active`（§9.2 #8）。在途调用已给出结果时不写 `Abandoned`，返回 `Rejected(NotUndetermined)`。受控停止开始时已在执行的 `abandon` 照常完成：②里没有返回的调用在停止第 3 步被强制完成为 `Unavailable`，③在实例结束锚点之前得出（§7.2 受控停止“停止之前已在执行的控制动作”）。
 - 离开 `Active` 的那一刻移出 lane 阻塞头集合、释放保留钉（§6.4、§2.4）。
 
 核出：无。

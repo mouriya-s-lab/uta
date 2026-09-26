@@ -498,7 +498,7 @@
 
 **受控停止**（§7.2 受控停止、生命周期表）。已定（证伪 §10.4 #35；验收 §10.5 #81）。
 
-- 选中：OS 的停止请求按生命周期从内到外结束本实例：关闭新工作入口与消费方会话 → 程序 `Unload`（活动集合不变）→ 集成会话以“在途调用恰好完成一次”结束 → OS 确认全部子进程退出、清空进程表 → 写实例结束锚点 → 释放 fence。有进程得不到确认，或其余各步都已完成时停止之前已发出的原生 op 交出仍没有子系统的回答，停止以失败报告：不写结束锚点、不释放 fence，后者也不因没有回答而 append `ProgramHalted`。
+- 选中：OS 的停止请求按生命周期从内到外结束本实例：关闭新工作入口与消费方会话、不再接受新的控制动作 → 程序 `Unload`（受控停止本身不改变成员）→ 集成会话以“在途调用恰好完成一次”结束 → OS 确认全部子进程退出、清空进程表 → 写实例结束锚点 → 释放 fence。停止之前已在执行的控制动作照常完成，结论在结束锚点之前（`unload_program`、替换的 `Applied`，`abandon` 的 `Abandoned` 或 `Rejected(NotUndetermined)`）。有进程得不到确认，或其余各步都已完成时停止之前已发出的原生 op 交出仍没有子系统的回答，停止以失败报告：不写结束锚点、不释放 fence，后者也不因没有回答而 append `ProgramHalted`，等这次交出的控制动作没有结论记录，随实例结束、不生效。
 - Q 场景后果：Q20/Q21：停止成功时没有孤儿进程、没有无后继的 `SendBarrier`、每个在途调用都有结果；继任实例能区分上一实例是受控停止还是崩溃。
 - 不选：
   - 停止即退出、交给继任者的崩溃恢复：外层结束时内层仍活着，每次停止都产生孤儿与 `Undetermined(CrashWindow)`；
@@ -1000,11 +1000,12 @@
     - 重新握手使一条有整流供给项的订单状态流进入配额池：该项转挂起（原因 `WholeStreamInPool`，与 `QuotaExceeded` 可区分），核心自己的 `All` 撤去，fixture 在新会话里收不到该流的 `route`（重算后的需求为空）；该流上的只投递项不受影响；该流离开配额池时该项恢复，新会话按会话建立的规则下发；
     - fixture 集成把同一持仓身份放到同一作用域的两条持仓流上：`positions` 对它标出跨流冲突、并列两条流各自的最近观察、不选其一、不相加；对该持仓的敞口检查与持仓在检查得 `Undecidable`；
     - 核心重启后第 5 步：对已建立会话的集成，每条不在配额池里的订单状态流与成交流的 `route` 全集含 `All`，即使没有任何订阅选中它们。
-58. **放弃跟踪**（§6.5 等待与结果、§6.6 放弃跟踪、§8.5 结果未知组）：以 fixture 上游驱动一次停等的 `Undetermined`：（对应 Q3/Q7）
+58. **放弃跟踪**（§6.5 等待与结果、§6.6 放弃跟踪、§8.5 结果未知组、§7.2 受控停止）：以 fixture 上游驱动一次停等的 `Undetermined`：（对应 Q3/Q7）
     - principal `abandon`：在途的一次 `query_by_key` 照常完成并 append 自己的结果之后才出现 `Abandoned{principal, note, rule_version}`；在途调用给出 `Found`/`Absent` 时没有 `Abandoned`，返回 `Rejected(NotUndetermined)`；越权得 `Unauthorized` 与安全事件；对非 `Undetermined`、已有结果或已 `Abandoned` 的尝试得 `Rejected(NotUndetermined)`；
     - `Abandoned` 之后该尝试移出阻塞头集合，同 lane 等待中的单据放行；它不再有自动取证调用，会话重建也不出现它的 `ReconciliationReopened{SessionRestored}`；它引用的保留钉释放；
     - 之后 fixture 推送一条归因到它的记录：append `ResolutionEvidence{Attributed, Found}`，结果确立而等待仍是 `Abandoned`，lane 不再被它阻塞；principal `retry_reconciliation` 开出的一轮依序取证一遍、渠道穷尽即停；这一轮里得 `Inconclusive` 的渠道不改变任何状态：等待仍是 `Abandoned`、结果仍未知、lane 不被重新阻塞；
     - 在停发之后、`Abandoned` 之前注入崩溃：日志中没有任何“放弃中”的记录，重启后该尝试等待仍 `Active`、仍在阻塞头集合里，按本轮进度续跑；
+    - 在 `abandon` 等在途 `query_by_key` 时受控停止（fixture 不作答）：该调用在停止第 3 步得 `Unavailable`（只一条 `Gap{Channel}`），之后在实例结束锚点之前出现 `Abandoned`；fixture 在停止第 3 步之前作答 `Found`/`Absent` 时没有 `Abandoned`，结果由这条证据确立；两种情形里重启之后都没有“放弃中”的遗留，该尝试的等待与停止之前得出的结论一致（同 #81）；
     - 不存在由 principal 写 `Found`/`Absent` 的操作；`read_model(lanes)` 与下游对它显示“已放弃跟踪，结果未知”，结果补上后显示该结果。
 59. **`NotSent` 与写调用时限**（§6.5 `NotSent`、§8.2、§8.3）：以 fixture 上游与 fixture 集成驱动：（对应 Q2/Q7/Q17）
     - 过屏障之后集成发现意图的参数 schema 身份已不是它此刻接受的：返回 `NotSent(SchemaMismatch)`，fixture 上游写调用数为 0，append `NotSent`，等待结束、lane 解除，没有 `Undetermined`；冷却时钟仍由该 `SendBarrier` 设起；健康把它计为失败；
@@ -1087,9 +1088,12 @@
     - 历史切面：在两个实例之间做上述改动，对每个实例内、`restart_integration(Y)` 之前与之后的控制流位置各读一次 `read_model(health, as_of)`：列出的集成恰为该位置之前最近一条采纳记录的 id 加其后带同一 `instance_id` 的 `Applied` 的 id；上一实例的 `restart_integration` `Applied` 不进入下一实例的采纳集合；从起点订阅控制流、按同一规则自行 fold 的结果与之相等；
     - 下次启动后 Z 不被拉起，`health()` 不列 Z；Z 的流记录、声明历史与订阅仍可读，核心没有为 Z 新 append 任何记录；新的 `read` 与供给项对 Z 得“来源未登记”；以只投递项订 Z 历史上声明过的流、以执行事实 selector 订 Z 历史上声明过的作用域都被接纳，从 `from` 起收到已 append 的记录；订 Z 从未声明过的流或作用域被拒；
     - 统一路径下没有核心写的文件。
-81. **受控停止**（§7.2 受控停止、生命周期表）：在各目标 OS 上以服务管理器与终端中断发出停止请求：（对应 Q20/Q21）
+81. **受控停止**（§7.2 受控停止、生命周期表；§8.6 卸载与替换；§6.6 放弃跟踪）：在各目标 OS 上以服务管理器与终端中断发出停止请求：（对应 Q20/Q21）
     - 有在途写、在途读、在途 `Advance` 时停止：在途写恰得 `NoResponse`（→ `Undetermined`）、在途读恰得 `Unavailable`，各与计数同事务；程序最近的 `Checkpoint` 与 cursor 同事务；进程表清空、实例表本行有结束锚点；OS 进程列表中没有该实例拉起的进程；
-    - 停止后启动新实例：第 1 步没有要回收的行，第 2 步没有无后继的 `SendBarrier`，活动集合与停止前相同，受控停止前处于 `Halted` 的集成仍 `Halted`；
+    - 停止后启动新实例：第 1 步没有要回收的行，第 2 步没有无后继的 `SendBarrier`；受控停止本身不改变成员，停止前已在执行的控制动作照常完成（见下两条），新实例的活动集合与停止之前只差这些动作的 `Applied` 所记下的变化；受控停止前处于 `Halted` 的集成仍 `Halted`；
+    - 在 `unload_program` 处于“结束宿主执行中”时停止（宿主正在 `Advance`，或 fixture 子系统对它的交出尚未回答、在停止第 2–4 步完成之前作答）：该 `unload_program` 的 `Applied` 出现在实例结束锚点之前，新实例的活动集合里没有该程序；替换同样如此：替换的 `Applied` 在结束锚点之前，停止期间新成员没有任何装载步骤（fixture 子系统没有收到它的交出，没有宿主被拉起），新实例第 5 步照常判定装载新成员；
+    - 在 `abandon` 等在途取证调用时停止：在途调用在停止第 3 步得 `Unavailable`（fixture 不作答时）或照常作答，之后在实例结束锚点之前要么有 `Abandoned`（结果仍未知），要么没有 `Abandoned` 而结果已由在途调用的证据确立（返回 `Rejected(NotUndetermined)`）；新实例里该尝试的等待与这一结论一致；
+    - fixture 子系统对 `unload_program` 所等的交出始终不回答时停止：停止以失败报告，控制流上没有这次 `unload_program` 的 `Applied` 或 `Rejected`；外力结束之后继任实例的活动集合仍含该程序，第 5 步照常判定装载；
     - 注入一个不响应退出请求且无法被终止的子进程：停止以失败报告，实例表没有结束锚点，fence 未释放；
     - fixture 子系统对停止之前已发出的交出始终不回答：第 2–4 步照常完成，停止以失败报告，实例表没有结束锚点，fence 未释放，控制流上没有该程序新的 `ProgramHalted`；之后外力结束实例，继任实例第 1 步取得 fence，第 5 步照常判定装载该程序；
     - 停止开始之后到达的消费方连接被拒绝，已有消费方会话被关闭。

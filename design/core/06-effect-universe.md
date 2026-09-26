@@ -131,7 +131,7 @@ struct Ticket<Intent> {
     parameter_validity: ParameterValidity, // 参数合规：当前版本的参数是否合目标来源声明的意图参数 schema（见“参数合规”）；不读观察，不属两层对账；输入约束步读取
     basis_validity: BasisValidity, // 第一层：依据有效性（§5.2 定义 basis_valid / BasisValidity；单据只应用此门）
     alignment: IntentAlignment,   // 第二层：意图专属对账，逐项状态（可能全部 InputMissing）
-    latest_revision: Option<Revision<Intent>>,  // 最近一次 Revise 的结构差（派生；见编辑 diff）
+    latest_revision: Option<Revision<Intent>>,  // 最近一次 Revise 的结构差（派生；见编辑 diff；重新送审时呈给审批人的是上一次 SubmitForDecision 以来的每个相邻 Revision，不只这一个）
     state: Drafting | AwaitingDecision(Hash) | Closed(Outcome),
 }
 
@@ -297,7 +297,7 @@ IO 壳不知道单据的存在。
 | 变的是 | 单据（意图）变了，世界没变 | 世界变了，单据没变 |
 | 来源 | `TicketAction::Revise`（负责人主动） | 观察侧推进 → `basis_validity`/`alignment` 重算 |
 | 类型 | `Revision<Intent>`：两版意图的结构差（价格改了 / 数量改了 / 目标换了） | `IntentAlignment` 的变化：`Aligned → Diverged` |
-| 触发 | 变更通知（审批人看到“改了什么”；`Revise` 只在 `Drafting` 里成立，守卫字段的变更随下一次 `SubmitForDecision` 以 `Revision` 呈给审批人）、限额差额校验、审计记录 | 偏离警告（审批人可 `SendBack`，§6.3 放行门）、放行门 fail-closed |
+| 触发 | 变更通知（审批人看到“改了什么”；`Revise` 只在 `Drafting` 里成立，重新送审时，上一次 `SubmitForDecision` 所送审的版本以来的每个相邻 `Revision` 都随这次 `SubmitForDecision` 呈给审批人，按记下的版本锚定，守卫字段的变更由此不会被后来的编辑遮住）、限额差额校验、审计记录 | 偏离警告（审批人可 `SendBack`，§6.3 放行门）、放行门 fail-closed |
 
 - `Revision<Intent>` 是派生字段：`revision(versions[n], versions[n+1])` 由意图类型定义（[交易协议] 提供 `Revision<PlaceOrder>`）。核心不解释，与 `IntentAlignment` 同为单据 fold 的派生结果。
 - 编辑 diff 的处理器是字段处理器（§2.1）。它属效应抽象但**不进入 IO 壳**：发生在 `Prepared` 之前，与两阶段无关。它触发的对外写（通知）自己作为新请求走完整路径。
@@ -1008,6 +1008,7 @@ IO 壳**永不 heuristic**。取证是读副作用，可以重试；写调用是
   1. IO 壳不再为该尝试发起新的取证调用；
   2. 已在途的取证调用照常完成，各自按上表 append 自己的结果；
   3. 然后 IO 壳在一个事务里重查：结果仍未知则 append `Abandoned{attempt, principal, note, rule_version}` 并返回 `Abandoned(position)`；在途调用已给出结果则不写，返回 `Rejected(NotUndetermined)`。
+- **受控停止时正在进行的 `abandon`**：照常完成（§7.2 受控停止“停止之前已在执行的控制动作”）。第 2 步等的在途取证调用自行完成，或在停止第 3 步随会话结束被强制完成为 `Unavailable`（只记 `Gap{Channel}`，不给出结果）；然后照第 3 步重查，`Abandoned` 或 `Rejected(NotUndetermined)` 都在实例结束锚点之前得出。发起它的消费方会话已在停止第 1 步关闭，调用方重连之后从该尝试的执行事实看到结果：有 `Abandoned`，或结果已由在途调用的证据确立。
 - **不设持久的“放弃中”标志**：第 1 步只是 IO 壳进程内的停发，不是记录。第 3 步之前崩溃，日志里没有 `Abandoned`，恢复后该尝试照常 `Active`；调用方没有收到返回，重发 `abandon` 即可。
 - **效果**：等待变为 `Abandoned`，这是吸收态。该尝试移出 lane 阻塞头集合（§6.4），它的保留钉释放（§2.4）；IO 壳不再自动取证，`SessionRestored` 不再重开它。
 - **结果仍可补上**：被动的 `Attributed` 与 principal 的 `retry_reconciliation` 照常可以给出 `Found`/`Absent`；它们只补结果，不恢复等待，不重新阻塞 lane。
