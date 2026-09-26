@@ -416,7 +416,7 @@ IO 壳不知道单据的存在。
 - **锁最大的意义不是互斥，是入口**：它是 UTA 表达“**现在有一张单据，我是负责人**”的唯一方式。取得单据 = 单据存在 + 某 principal 从此负责；后续编辑、送审都以这个身份记账。没有负责人的单据不存在。
 - **一份单据只有一种交易意图**：不分叉不合并，订单不能“同时想买又想卖两个价”。版本链线性；`Revise` 在锁内追加，不需要 hash 期望比较。
 - **产品层代价与协作边界**：两个 AI 不能同时处理同一张单据。合理，但不好用。核心有意接受这个代价，不用分叉 / 合并修补。协作在核心之外：`Transfer` 移交；第二个 AI 另起单据，由决定者二选一；或把建议发给负责人。
-- **决定绑定 current_version**：Decision 引用 `AwaitingDecision(current_version)` 的 hash；进入 `Prepared` 要求被决定的版本 = 当前 current_version。`SendBack` 后的 `Revise` 使 current_version 前进，旧 Decision 自然失效。
+- **决定绑定 current_version**：策略要求人工时，批准的 Decision 引用 `AwaitingDecision(current_version)` 的 hash，进入 `Prepared` 要求它所决定的版本 = 当前 current_version；不要求人工时没有 Decision，依据是审批步对当前 current_version 给出、带 `rule_version` 的 `Outcome`（§6.3 审批步、放行门）。`SendBack` 后的 `Revise` 使 current_version 前进，旧 Decision 与旧 `Outcome` 都自然失效。
 - **一张单据至多一次 `Close(Prepared)`**：之后的改动是新单据（改单 / 撤单 / 平仓各自起单），各走各的写边界。
 - **单据不记起单理由** [设计]：`Draft`/`Revise` 与批准都不带负责人或审批人撰写的自由文本。单据记录回答“谁、何时、依据哪些位置、哪一版”（S8）；自由文本只出现在对他人意图的判断上：`SendBack` 的原因、否决的原因、规则 `Rejection` 的违反项，读模型 `tickets` 按版本给出它们（§8.5）。“为什么想下这一单”是策略的业务上下文，由下游按它拿到的请求引用自己保存（§10.6）；它不能放进意图参数，意图参数会原样交给集成。不选：`Draft`/`Revise`/每条 Decision 都带备注，没有任何核心代数读它，而批准本就不带原因（P7）。
 
@@ -518,7 +518,7 @@ trait Rule {
 |---|---|---|
 | 授权 | 以单据 `responsible` 为主体查 `(principal, WriteLaneKey, OperationKind)` scope | §6.8；C11 |
 | 输入约束 | 读单据 fold 的 `parameter_validity`（§6.2 参数合规）；守卫字段校验：子账户已枚举、instrument 在策略的允许集合内（允许集合只对带 instrument 的操作种类，`Cancel` 不适用） | C9/C10；守卫字段处理器（§2.1） |
-| 审批 | 策略要求人工则送审，等待带版本的 Decision；不要求人工则以 `rule_version` 为依据直接通过 | C3；H6；C11 |
+| 审批 | 策略要求人工则送审，等待带版本的 Decision；不要求人工则以 `rule_version` 为依据直接通过，结果是本步对当前 current_version 的 `Outcome`，不写 Decision | C3；H6；C11 |
 | lane | 读该 `WriteLaneKey` 的阻塞头集合；集合非空则停在本步；集合为空时判冷却，冷却期内否决，否则放行 | H4；C12 |
 | 过期 | `deadline` 过期规则，由 `deadline` 到时触发 | H6 |
 
@@ -538,7 +538,7 @@ trait Rule {
 - 是否需人工由策略按 `(principal, WriteLaneKey, OperationKind)` 给出：总是、从不，或“名义超过阈值 N 时”。第三种下，意图带 `notional` 且 ≤ N 则不需人工；带 `notional` 且 > N、或以 `quantity` 定量（不带 `notional`）则需人工。STS 不读观察，不估算以数量定量的单子值多少钱；估算属于敞口检查（§6.2），而不能比较时一律走人工是 fail-closed 的一侧。`Cancel` 既不带 `notional` 也不带 `quantity`，第三种条件对它无从判定，只能给“总是”或“从不”；给它第三种条件，规则文件不合法（§7.6），理由同输入约束步的适用范围。
 - 决定者按 `(principal, 动作种类)` 授权。
 - 另一笔过期未决独立处理。
-- **一个 `current_version` 至多一条 Decision** [设计]：`decide` 的接受判据是“该 `(ticket, current_version)` 尚无 Decision 记录”（C11 的待决集合版本即此）；已有 → `Conflict(AlreadyDecided)`。
+- **一个 `current_version` 至多一条 Decision** [设计]：`decide` 的接受判据是“该 `(ticket, current_version)` 尚无 Decision 记录”（C11 的待决集合版本即此）；已有 → `Conflict(AlreadyDecided)`。不要求人工时审批步只写 `Outcome`、不写 Decision，所以之后规则改为要求人工时，人的 `decide` 照常被接受（见“规则版本变更”）。
 - 理由：决定之后单据可能仍停在 lane 步而版本不变，靠 `Closed` 挡不住同版本的第二条决定。
 
 **lane 步。** 阻塞头集合的定义与语义见 §6.4。
@@ -564,7 +564,7 @@ trait Rule {
 
 1. `basis_validity == Fresh`（§5.2）；
 2. 必要项 `alignment` 为 `Aligned`（§6.2）；能力项恒在必要项内，不由策略声明，它按会话有效声明核对可执行性（含意图所带的参数 schema 身份仍是声明的那个）；
-3. `AwaitingDecision(current_version)` 与决定绑定的版本一致。
+3. 审批的依据绑定当前版本：策略要求人工时，批准的 Decision 所绑定的版本 = `AwaitingDecision(current_version)`；不要求人工时，审批步对这一 current_version 给出了带 `rule_version` 的 `Outcome`（不写 Decision，§6.2 决定绑定 current_version）。
 
 能力项未确立（该来源此刻没有已建立的会话，或会话有效声明对该操作为 `Unknown`）时，门不求值：单据停在门前等待，能力确立后从 lane 步起重跑（见“等待与重入”），`deadline` 到期由过期步关闭。其余任一不满足 → `PredicateFailure`（fail-closed，C12），不发出。
 

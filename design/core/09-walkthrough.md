@@ -32,9 +32,9 @@
 3. 写处理器在同一事务内 `SubmitForDecision`（程序意图无编辑期，§6.1）：冻结 `current_version`，`Drafting → AwaitingDecision`（§6.2）。
    - 对外可见：事务提交后，审批人 / 读模型 `tickets` 看到一张 `AwaitingDecision` 单据，负责人 = 装载 principal。
    - STS 顺序固定链：授权 → 输入约束 → 审批 → lane → 过期（§6.3）。
-   - 放行前读单据 fold 的 `basis_validity == Fresh`、必要项 `alignment == Aligned`、版本一致（§6.3 放行门）。
-   - append 规则的 Decision/`Outcome` 与单据记录（执行 J，同事务）；规则判断所用的状态由记录 fold 出，不另写（§6.3）。
-   - 行动者：STS 规则链，身份 = 决定的 principal（不要求人工时为 `rule_version`）。
+   - 放行前读单据 fold 的 `basis_validity == Fresh`、必要项 `alignment == Aligned`、审批依据绑定当前版本（§6.3 放行门）。
+   - append 规则的 `Outcome` 与单据记录（执行 J，同事务）；只在策略要求人工时另有审批人的 Decision（绑定 `current_version`）；规则判断所用的状态由记录 fold 出，不另写（§6.3）。
+   - 行动者：STS 规则链，身份 = 决定的 principal（不要求人工时没有 Decision，审批步的 `Outcome` 以 `rule_version` 为依据）。
 4. 放行：同一事务 append `Prepared` 并 `Close(Prepared(position))`（§6.2、§7.4）。
    - `Prepared` 是单据 → IO 壳的唯一交出点（§5.3）。
    - 行动者：单据（交出）→ IO 壳（接手）。

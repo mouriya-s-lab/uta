@@ -52,20 +52,20 @@ sequenceDiagram
 stateDiagram-v2
   state "Disconnected（派生值，不是记录）" as DC
   state "Live{live_from}（非 Degraded）" as LN
-  [*] --> DC : 该集成的会话为 Connecting 或 Halted
-  DC --> Starting : 会话 Established（新 SessionEpoch）；该流在本会话、当前流 epoch 里尚无 readiness
+  [*] --> DC : 该集成的会话值为 Connecting、Halted 或 Unobserved（切面把最近一次采纳与它的初始观察分开）
+  DC --> Starting : 会话值 Established（新 SessionEpoch）；该流在本会话、当前流 epoch 里尚无 readiness
   Starting --> Live : 集成声明 live_from（核心盖上本会话的 SessionEpoch 与该流当前流 epoch 后 append）：声明 joinable_venue_seq 的流于上游确认实时订阅即声明（下一个期望序号，不等首条记录）；其余流为首条实时记录的事件时间，与该记录同时或先于它声明
   state Live {
     [*] --> LN
     LN --> Degraded : 集成上报：上游降级 / 上游限流 / 能力收紧（子态，接受条件不变；与核心配额挂起订阅互相独立）
     Degraded --> LN : 恢复
   }
-  Starting --> DC : 会话离开 Established（最近的会话记录不再是 Established）
-  Live --> DC : 会话离开 Established（旧会话的 Live 随会话记录更替失效）
+  Starting --> DC : 会话离开 Established（会话值不再是 Established）
+  Live --> DC : 会话离开 Established（旧会话的 Live 随会话值更替失效；新的采纳之后上一实例的 Established 不再是会话值）
   Live --> Starting : 会话内集成上报 Gap{Source, generation} 开新流 epoch（旧 epoch 的 Live 随该逻辑流的 None{新 epoch} 失效；上报之前集成已以 Unavailable 完成它已收到的该流 read / backfill / route）；核心接受它即为该流起 route 义务（已有则并入），此后的 route 带这个 generation，集成收到后才推送，再为新 epoch 声明 Live{live_from}
   note right of DC
-    由会话状态派生：没有记录、没有自己的时刻
-    只随附当前会话状态及其 since（会话记录的时刻，不是断线时刻）
+    由会话值派生：没有记录、没有自己的时刻
+    只随附会话值及其 since（会话记录的时刻，不是断线时刻；Unobserved 没有 since）
     核心不替集成 append readiness，也不回填崩溃发生的时刻
   end note
   note right of Starting
@@ -101,7 +101,7 @@ stateDiagram-v2
   end note
 ```
 
-读法：readiness 是集成在一个会话里、对该流一个流 epoch 的实时供给的陈述：集成推送，核心盖上到达会话的 `SessionEpoch` 与该流当时的流 epoch 后 append；fold 只取同时带着最近一条会话记录的 `SessionEpoch` 与该流当前流 epoch 的值，且只在那条会话记录是 `Established` 时；已建立而当前流 epoch 里没有这样的值为 `Starting`，会话不在 `Established` 时为派生的 `Disconnected`。会话内上报的 `Gap{Source}` 开新流 epoch，readiness 回到 `Starting`，与握手开的新 epoch 同样处理：同一会话里 e0 为 `Live`、之后 `Gap{Source}` 与 `None{e1}` 已 append 而 e1 尚无 readiness，该流是 `Starting`，不是 e0 的 `Live`。流上的 `read`、`backfill`、`route` 调用只嵌在会话里，发出时的流 epoch 是它们问的那个 epoch、决定结果能否准入，不是它们的外层：集成在上报 `Gap{Source}` 之前以 `Unavailable` 完成它已收到的这些调用；`read`、`backfill` 的结果在更替之后才到核心的，由核心完成为 `Unavailable`、不作新 epoch 的记录；`route` 是否跨过更替只由集成按 `generation` 判定（§8.2、§8.3、§8.4）。回填进度由核心凭读结论记录判定、持久订阅 append，只说当前流 epoch 的 `[起点, live_from)` 补齐到哪。二者都是健康观察（不需确认），经 `health` 读模型对解释层可见，再由它翻成下游的连接状态；它们不改变记录接受条件——核心只从当前会话的通道读入。
+读法：readiness 是集成在一个会话里、对该流一个流 epoch 的实时供给的陈述：集成推送，核心盖上到达会话的 `SessionEpoch` 与该流当时的流 epoch 后 append；fold 只取同时带着该集成会话值（切面上带最近一次采纳之 `instance_id` 的最近一条会话观察，§8.4）的 `SessionEpoch` 与该流当前流 epoch 的值，且只在会话值是 `Established` 时；已建立而当前流 epoch 里没有这样的值为 `Starting`，会话值不是 `Established`（含 `Unobserved`）时为派生的 `Disconnected`。会话内上报的 `Gap{Source}` 开新流 epoch，readiness 回到 `Starting`，与握手开的新 epoch 同样处理：同一会话里 e0 为 `Live`、之后 `Gap{Source}` 与 `None{e1}` 已 append 而 e1 尚无 readiness，该流是 `Starting`，不是 e0 的 `Live`。流上的 `read`、`backfill`、`route` 调用只嵌在会话里，发出时的流 epoch 是它们问的那个 epoch、决定结果能否准入，不是它们的外层：集成在上报 `Gap{Source}` 之前以 `Unavailable` 完成它已收到的这些调用；`read`、`backfill` 的结果在更替之后才到核心的，由核心完成为 `Unavailable`、不作新 epoch 的记录；`route` 是否跨过更替只由集成按 `generation` 判定（§8.2、§8.3、§8.4）。回填进度由核心凭读结论记录判定、持久订阅 append，只说当前流 epoch 的 `[起点, live_from)` 补齐到哪。二者都是健康观察（不需确认），经 `health` 读模型对解释层可见，再由它翻成下游的连接状态；它们不改变记录接受条件——核心只从当前会话的通道读入。
 
 核出：readiness 原把 `Backfilling` 放在 `Live` 之前，而回填窗口的终点 `live_from` 要到 `Live` 才有，`through` 又是核心凭读结论记录才证明得了的——已拆为集成推送的 readiness 与核心判定的回填进度（§8.4）。
 

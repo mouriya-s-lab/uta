@@ -76,19 +76,21 @@ sequenceDiagram
   Note over N,I: 第 3 步 采纳集成登记，建立会话（读统一路径配置失败即拒绝启动；各集成独立推进）
   N->>DB: 从控制流 fold 各集成的 Halted：最近的 IntegrationHalted 未被某条 Applied 以位置引用解除者保持 Halted，不拉起
   N->>DB: 同一事务：append 登记的采纳记录（控制流；文件内容 hash、集成 id；发起方为本实例 instance_id）+ 每个采纳的集成的初始会话健康观察（保持 Halted 者为 Halted{cause, since}，其余为 Connecting，即本实例运行的开始锚点）
-  N->>I: 读封存文件，拉起进程：创建通道并经句柄继承交出，凭据经继承句柄交付；写进程表 (instance_id, pid, start_time, role)；分配 session_seq
-  N->>I: 在这条通道上 handshake()
-  alt 合法 Projection
-    I-->>N: Projection（scopes / streams / capabilities）
-    N->>DB: 集成会话编排的同一事务：声明版本 + Established{epoch} 健康观察；开新 epoch 的流由集成会话 append Gap{Source}，并请持久订阅同事务写 None{epoch}；required_inputs 比对；集成会话请持久订阅把待接纳的订阅项（含等待该来源首个声明版本的程序订阅的项）按新声明转为接纳或被拒，那些程序随之按“等待的先后”判定（D4.2）；既有订阅按新声明重算路由
-  else 投影不合法 / 契约版本不兼容 / Refused(reason)
-    N->>DB: Halted{cause}：同一事务 append IntegrationHalted（P14，控制流；开始 Halted 抑制）与健康观察
-    N->>I: 提交之后：结束会话、关闭通道、请求进程退出（超时强制终止）
-    I-->>N: OS 确认退出 → 清除进程表的行：本次集成运行到此结束；不自动重试（等 restart_integration；Refused 另可 rotate_credential）
-  else Unavailable
-    N->>I: 保持 Connecting，按 pacing 在同一通道上重握手；本步不等它
-  else 通道断开 / 进程退出
-    N->>I: 结束该会话；OS 确认退出之后按 pacing 拉起新进程与新会话（D1.3）
+  opt 本步进入 Connecting 的集成（保持 Halted 者不拉起、不握手）
+    N->>I: 读封存文件，拉起进程：创建通道并经句柄继承交出，凭据经继承句柄交付；写进程表 (instance_id, pid, start_time, role)；分配 session_seq
+    N->>I: 在这条通道上 handshake()
+    alt 合法 Projection
+      I-->>N: Projection（scopes / streams / capabilities）
+      N->>DB: 集成会话编排的同一事务：声明版本 + Established{epoch} 健康观察；开新 epoch 的流由集成会话 append Gap{Source}，并请持久订阅同事务写 None{epoch}；required_inputs 比对；集成会话请持久订阅把待接纳的订阅项（含等待该来源首个声明版本的程序订阅的项）按新声明转为接纳或被拒，那些程序随之按“等待的先后”判定（D4.2）；既有订阅按新声明重算路由
+    else 投影不合法 / 契约版本不兼容 / Refused(reason)
+      N->>DB: Halted{cause}：同一事务 append IntegrationHalted（P14，控制流；开始 Halted 抑制）与健康观察
+      N->>I: 提交之后：结束会话、关闭通道、请求进程退出（超时强制终止）
+      I-->>N: OS 确认退出 → 清除进程表的行：本次集成运行到此结束；不自动重试（等 restart_integration；Refused 另可 rotate_credential）
+    else Unavailable
+      N->>I: 保持 Connecting，按 pacing 在同一通道上重握手；本步不等它
+    else 通道断开 / 进程退出
+      N->>I: 结束该会话；OS 确认退出之后按 pacing 拉起新进程与新会话（D1.3）
+    end
   end
   Note over N,I: 第 4 步 恢复效应侧（只为已建立会话的集成发送与取证；之后建立会话者届时补做）
   N->>DB: 其集成已建立新会话、停等且结果未知、未被放弃的 Undetermined → append ReconciliationReopened{SessionRestored}
@@ -109,7 +111,7 @@ sequenceDiagram
 - 第 2 步的结论只来自记录：`Undetermined(CrashWindow)` 在没有任何集成在线时就已 append；随后第 4 步才去问 venue。上一实例受控停止时，第 1 步没有要回收的行，第 2 步没有无后继的 `SendBarrier`。
 - 第 4 步先取证后发送：等待已结束的尝试先移出阻塞头集合，再放未发出的 `Prepared`；发送与取证都依赖该集成已建立的会话，尚无会话的集成其尝试在发出前门等会话建立（或 `deadline` 到期）。
 - 失败分两级：取不到 fence、格式版本 / 迁移 / 重建失败、统一路径配置读不出，整体拒绝启动，不进入部分运行态；单个集成 `Connecting` 或 `Halted`、单个程序装载失败、被失败抑制或等待所引用集成来源的首个声明版本，只使该单元不可用，其余照常启动。`Halted` 与程序的失败抑制跨核心重启保持：它们来自控制流上的执行事实 `IntegrationHalted`、`ProgramHalted`，不来自可压缩的观察记录。消费方在第 5 步之前只看到 `Starting`。
-- 旧实例的 readiness 不另写：第 3 步的 `Connecting` 记录之后，readiness 由 fold 派生为 `Disconnected`，直到新会话 `Established`（§8.4）。
+- 旧实例的 readiness 不另写：第 3 步的采纳记录之后，会话值只取带本实例 `instance_id` 的会话观察（切面把采纳与初始 `Connecting` 分开时为 `Unobserved`），readiness 由 fold 派生为 `Disconnected`，直到新会话 `Established`（§8.4）。
 
 核出：第 4 步原文只写了取证与发送，没写 `EffectRequest` 重派与待决单据的计时器重装——已并入 §7.2 第 4 步。
 
@@ -146,8 +148,8 @@ stateDiagram-v2
   end note
   note left of HS
     只有 Established 时 IO 壳才发写与取证（发出前门，D6.1）
-    全部调用经集成会话的调用通道；每次状态改变（HS→HS 不算）集成会话 append 一条会话健康观察；
-    readiness 不另写：最近的会话健康观察不是 Established 时，fold 派生 Disconnected
+    全部调用经集成会话的调用通道；每次状态改变（HS→HS 不算）集成会话 append 一条会话健康观察，带本实例的 instance_id；
+    readiness 不另写：会话值（带最近一次采纳之 instance_id 的最近一条会话观察，没有即 Unobserved）不是 Established 时，fold 派生 Disconnected
   end note
 ```
 
@@ -258,7 +260,7 @@ flowchart LR
 | 调用结果的记录（回执、取证、读结论、`Gap{Channel}`、`Undetermined`）+ 该调用的计数健康观察 | §7.3、§8.4 | 二者皆无：调用结果未落，计数不前进；不存在“计了数却无结果”的持久态 |
 | 握手成功（集成会话编排）：声明版本 + `Established` 健康观察 + 开新 epoch 的流的 `Gap{Source}` 与各自的 `None{epoch}` 回填进度（集成会话请持久订阅写）+ 待接纳订阅项（含程序订阅的项）按新声明转为接纳或被拒；有未兑现的轮换时，各流 `Gap{Source, credential_rotated}` + 控制流上以位置引用被兑现的 `rotate_credential` `Applied` 的轮换兑现记录 | §7.2 第 3 步、§7.6、§8.2 `handshake`、§8.4 | 二者皆无：会话未建立，轮换仍未兑现，重启后在新进程的新通道上再握手，那次成功的握手照样开新 epoch 并兑现 |
 | 会话内上报开新 epoch（集成会话编排）：集成推送入口 append 的 `Gap{Source}` + 持久订阅为该逻辑流写的 `None{epoch}` | §8.3、§8.4 会话内开的新流 epoch | 二者皆无：这条 gap 未被接受，重启后该流在新会话的握手里按续接或新 epoch 决定 |
-| 启动第 3 步：登记的采纳记录（控制流）+ 每个采纳的集成的初始会话健康观察（`Connecting`，或恢复的 `Halted{cause, since}`） | §7.2 第 3 步、§8.4 健康不留旧值 | 二者皆无：本实例还没有采纳记录，重启后由继任实例第 3 步重来；不存在列出采纳成员而没有本实例会话值的健康切面 |
+| 启动第 3 步：登记的采纳记录（控制流）+ 每个采纳的集成的初始会话健康观察（`Connecting`，或恢复的 `Halted{cause, since}`；都带本实例的 `instance_id`） | §7.2 第 3 步、§8.4 健康不留旧值 | 二者皆无：本实例还没有采纳记录，重启后由继任实例第 3 步重来；含整个事务的健康切面给出初始观察，把二者分开的切面给出 `Unobserved`，不给上一实例的会话值 |
 | `IntegrationHalted` + `Halted` 健康观察（进程的终止在提交之后，另由 OS 确认） | §7.2 第 3 步 | 二者皆无：仍在上一状态，重启按执行事实重判；已提交而进程未确认退出：继任实例第 1 步回收 |
 | 解除 `Halted` 的控制记录 `Applied`（引用 `IntegrationHalted`）+ `Connecting` 健康观察；只在上一次集成运行结束（进程 OS 确认退出、行已清除）之后提交 | §7.2 第 3 步 | 二者皆无：仍 `Halted`，没有握手发生 |
 | `restart_integration` 采纳本实例尚未运行的 id：`Applied`（带文件 hash 与 `instance_id`）+ `Connecting` 健康观察 | §7.2 第 3 步、§8.5 | 二者皆无：该 id 不在采纳集合里，没有运行、没有进程 |

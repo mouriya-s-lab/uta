@@ -96,7 +96,7 @@ flowchart TB
   C -->|"是"| WAITC["等待 decide(Approve / Reject)<br/>待决集合对审批人可见（读模型 tickets）<br/>同 (ticket, current_version) 第二条 decide → Conflict(AlreadyDecided)"]
   WAITC -->|"Reject"| RJ3["Close(DecisionRejected)"]
   WAITC -->|"Approve（绑定版本；决定者按动作种类授权）"| D
-  C -->|"否：以 rule_version 为依据通过"| D
+  C -->|"否：以 rule_version 为依据通过，本步对 current_version 的 Outcome，不写 Decision"| D
   D{"lane<br/>该 WriteLaneKey 阻塞头集合非空？"}
   D -->|"非空，且本笔既不是以阻塞头中某次尝试记为订单键的调用方键为 target 的撤单，也没有覆盖当前全部阻塞头的 bypass_lane 控制记录"| WAITD["停在 lane 步，单据仍 AwaitingDecision<br/>期间 alignment 照常重算"]
   WAITD -->|"该 lane 执行事实或 bypass_lane 提交：重跑 lane 步"| D
@@ -107,7 +107,7 @@ flowchart TB
   E{"过期步<br/>deadline（UTC）已过？"}
   E -->|"是"| RJ5["Close(Expired)：不补偿"]
   E -->|"否"| G
-  G{"依据有效性门<br/>basis_validity == Fresh ∧ 必要项 alignment == Aligned（能力项恒必要，按同一可执行性谓词核对会话有效能力）∧ 决定绑定版本 == current_version"}
+  G{"依据有效性门<br/>basis_validity == Fresh ∧ 必要项 alignment == Aligned（能力项恒必要，按同一可执行性谓词核对会话有效能力）∧ 审批依据绑定 current_version（需人工：Decision 绑定版本 == current_version；不需人工：审批步对 current_version 的 Outcome）"}
   G -->|"否"| RJ4["PredicateFailure（fail-closed）<br/>Rejection 带 rule_version + checked_as_of<br/>Close(DecisionRejected)"]
   G -->|"能力项未确立（Unknown 或无会话）"| WAITG["停在放行门，单据仍 AwaitingDecision，不产生记录；同 WAITB 的事件重新求值"]
   WAITG -->|"能力确立：从 lane 步起重跑（lane → 冷却 → 过期 → 门），不直接进 Prepared"| D

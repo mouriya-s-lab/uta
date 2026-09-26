@@ -144,7 +144,7 @@ flowchart TB
 
 读统一路径配置（§7.6）。集成登记只在两种时刻读取：本步，与 `restart_integration(id)` 生效时（§8.5）；文件变了而没有这两种时刻，核心不重读。
 
-- **采纳** [设计]：本步读到的集成登记，由集成会话 append 一条采纳记录（执行事实）：该文件的内容 hash 与其中列出的集成 id；启动时没有运维 principal，发起方记为本实例（`instance_id`）。同一事务为每个采纳的集成 append 它的初始会话健康观察（进入 `Connecting`，或恢复的 `Halted`，见下文），所以没有哪个健康切面列出一个采纳的 id 而它还没有会话值（§8.4）。`restart_integration(id)` 的 `Applied` 带它所读文件的内容 hash 与生效时的 `instance_id`，采纳的只是该 id 的条目（§8.5）。二者都在**控制流**上（见下文“控制流”）。一个切面（`as_of` 在控制流上的位置）的**采纳集合** = 该位置及以前最近一条采纳记录列出的 id，并上它之后、该位置及以前、`instance_id` 与它相同的各 `restart_integration` `Applied` 采纳的 id；本实例当前的采纳集合即流末的切面。它只由控制流这一条流按位置 fold 出，不比较不同流上记录的先后；健康面按它列出集成（§8.4、§8.5 `health`）。采纳记录是“本实例按哪一版登记运行”这件核心自己的事实；登记内容的源头仍是 Alice 的文件。
+- **采纳** [设计]：本步读到的集成登记，由集成会话 append 一条采纳记录（执行事实）：该文件的内容 hash 与其中列出的集成 id；启动时没有运维 principal，发起方记为本实例（`instance_id`）。同一事务为每个采纳的集成 append 它的初始会话健康观察（进入 `Connecting`，或恢复的 `Halted`，见下文），所以含整个事务的健康切面给出初始观察；把采纳记录与初始观察分开的切面（控制流位置含采纳记录，健康流位置在初始观察之前）给出 `Unobserved`，而不是上一实例的会话值（§8.4 健康不留旧值）。`restart_integration(id)` 的 `Applied` 带它所读文件的内容 hash 与生效时的 `instance_id`，采纳的只是该 id 的条目（§8.5）。二者都在**控制流**上（见下文“控制流”）。一个切面（`as_of` 在控制流上的位置）的**采纳集合** = 该位置及以前最近一条采纳记录列出的 id，并上它之后、该位置及以前、`instance_id` 与它相同的各 `restart_integration` `Applied` 采纳的 id；本实例当前的采纳集合即流末的切面。它只由控制流这一条流按位置 fold 出，不比较不同流上记录的先后；健康面按它列出集成（§8.4、§8.5 `health`）。采纳记录是“本实例按哪一版登记运行”这件核心自己的事实；登记内容的源头仍是 Alice 的文件。
 - **集成 id 的稳定是 Alice 的义务** [设计]：同一 id 始终指同一个集成，用过的 id 不再给另一个集成，与 `account_ref` 同形（§2.2）。核心查不出复用：被复用的 id 会接上旧 id 的声明历史、健康键、`Halted` 抑制与订阅。
 - **被移除的登记** [设计]：上一版采纳里有、这一版没有的 id，在本实例没有集成运行：不拉起进程、没有会话、不产生新的声明版本。它已有的流记录、声明历史、健康观察与订阅都保留；核心不为它补写任何记录，也没有“已退役”一类的锚点或状态。要来源自己供给或作答的新请求（一次性读、供给项）对它按“来源未登记”判定（“登记”指本实例的采纳集合，§8.5）；只读 UTA 自己日志的新订阅项（只投递项、执行事实 selector）只按声明历史判定，不看采纳集合，所以它的历史仍可订阅审计（§8.5 订阅组）。健康面只列采纳集合里的集成（§8.4）。之后的采纳里重新出现这个 id，就是这个集成再次运行。
 - **运行中改文件**：文件里新加的 id，经 `restart_integration(id)` 采纳并开始运行：其 `Applied` 带文件 hash，与该集成转入 `Connecting` 的健康观察同一事务，这一条就是它在本实例的运行的开始锚点，提交之后才拉起进程（受控停止开始时还没有提交的，以 `Rejected(Stopping)` 结束、不采纳，见下文“停止之前已在执行的控制动作”）；从文件里删去的 id，本实例的运行照常继续，对它的 `restart_integration` 因 id 不在文件里得 `Rejected`、不改变它，下一次启动时它按“被移除的登记”处理。核心不因文件变化自行增减运行。
@@ -171,14 +171,14 @@ flowchart TB
 | `Connecting` | 投影不合法 / 契约版本不兼容 | `Halted{ProjectionInvalid}` / `Halted{ContractIncompatible}` |
 | `Connecting` | 握手返回 `Refused(reason)` | `Halted{Refused(reason)}` |
 | `Established` | 通道断开、集成进程退出（含集成因上游在会话中拒绝身份而结束会话，§8.3） | `Connecting`（同上） |
-| `Connecting` / `Established` | `rotate_credential` 或 `restart_integration` 生效 | `Connecting`：结束该会话、终止进程，OS 确认退出之后拉起新进程（重读封存文件；`restart_integration` 另重读该 id 的登记条目）；`rotate_credential` 另留下一项未兑现的轮换，此后第一次成功的握手强制各流开新 epoch（§7.6） |
+| `Connecting` / `Established` | `rotate_credential` 或 `restart_integration` 生效 | `Connecting`：结束该会话、终止进程；它的 `Applied` 在旧进程（有的话）OS 确认退出之后、拉起新进程之前提交，提交之后才拉起新进程（重读封存文件；`restart_integration` 另重读该 id 的登记条目）；`rotate_credential` 另留下一项未兑现的轮换，此后第一次成功的握手强制各流开新 epoch（§7.6） |
 | `Halted{Refused}` | `rotate_credential` 或 `restart_integration` 生效 | `Connecting` |
 | `Halted{ProjectionInvalid}` / `Halted{ContractIncompatible}` | `restart_integration` 生效 | `Connecting` |
 | `Halted{ProjectionInvalid}` / `Halted{ContractIncompatible}` | `rotate_credential` | 不转移，控制记录 `Rejected`：要重新拉起只经 `restart_integration`，届时照常读凭据文件 |
 
 - 一条通道上的握手是串行的：上一次返回之前不发下一次；旧会话的通道已关闭，它的握手结果读不到。所以没有“别的握手结果”要识别或丢弃。
 - 未生效的控制动作（越权、文件不合法、id 不在登记里，§8.5）不转移。
-- 状态每改变一次（`Connecting → Connecting` 不算），集成会话 append 一条会话健康观察（新状态、原因、起始时间；`Established` 带它的 `SessionEpoch`，§8.4）。集成进入初始状态时也 append 一条：本步的各集成（`Connecting`，或恢复的 `Halted`；与本步的采纳记录同一事务），以及 `restart_integration` 采纳的本实例尚未运行的 id（与其 `Applied` 同一事务）。这样的 `Connecting` 一条就是本实例该集成运行的开始锚点。readiness 不另写：它只在最近一条会话健康观察为 `Established` 时，取同时带着该会话的 `SessionEpoch` 与该流当前流 epoch 的值（没有这样的值为 `Starting`），否则由 fold 派生为 `Disconnected`（§8.4），所以旧实例、旧会话与旧流 epoch 的 `Live` 都不会延续。
+- 状态每改变一次（`Connecting → Connecting` 不算），集成会话 append 一条会话健康观察（新状态、原因、起始时间；每条都带 append 它的核心实例的 `instance_id`，`Established` 另带它的 `SessionEpoch`，其 `instance_id` 即此，§8.4）。集成进入初始状态时也 append 一条：本步的各集成（`Connecting`，或恢复的 `Halted`；与本步的采纳记录同一事务），以及 `restart_integration` 采纳的本实例尚未运行的 id（与其 `Applied` 同一事务）。这样的 `Connecting` 一条就是本实例该集成运行的开始锚点。一个健康切面上的会话值只取带该切面上该集成最近一次采纳之 `instance_id` 的最近一条会话观察；没有时为 `Unobserved`，只在控制流前缀落后于已压缩的健康流时得 `BeyondRetention`（§8.4 健康不留旧值）。readiness 不另写：它只在会话值为 `Established` 时，取同时带着该会话的 `SessionEpoch` 与该流当前流 epoch 的值（没有这样的值为 `Starting`），否则由 fold 派生为 `Disconnected`（§8.4），所以旧实例、旧会话与旧流 epoch 的 `Live` 都不会延续。
 - **进入 `Halted`** [设计]：集成会话在同一事务 append 执行事实 `IntegrationHalted{integration, cause, session_epoch}`（P14）与该 `Halted` 的健康观察。`IntegrationHalted` 断言的是核心自己的决定：该集成失去被接受的资格，本实例与此后各实例都不再自动握手，直到运维动作解除；它开始的是 `Halted` 抑制，不是本次集成运行的结束，也不断言进程已经退出。提交之后才清理：结束该会话（此时只有已返回的握手，没有别的在途调用）、关闭通道、请求进程退出，超时后强制终止，OS 确认退出之后清除进程表的行。这次清除是本次集成运行的结束锚点：运行的内层（会话、进程、凭据副本）都已结束。清理的确认者是 OS；核心在确认之前崩溃的，由继任实例第 1 步回收。集成登记、该集成已有的流记录与订阅不变。
   - 理由：先终止再记录，则二者之间崩溃会让重启自动重试（持久的 `Halted` 还没写下）；把“进程已终止”写进 `Halted` 的含义，又让持久记录先于它所断言的事实。所以 `Halted` 只记核心的决定，进程的结束由 OS 另行确认。
 - 解除 `Halted` 的控制记录 `Applied`（`restart_integration`，或 `Halted{Refused}` 上的 `rotate_credential`）带被解除的那条 `IntegrationHalted` 的位置，与转入 `Connecting` 的健康观察同一事务：这是新一次集成运行的开始锚点。这一事务只在该集成上一次运行结束（上一个进程 OS 确认退出、进程表的行已清除）之后提交；提交之后集成会话才拉起进程、握手。所以同一集成的两次运行不重叠。受控停止开始时还没有提交的解除以 `Rejected(Stopping)` 结束，`Halted` 仍在（下文“受控停止”）。
@@ -247,7 +247,7 @@ flowchart TB
   - `abandon`（§6.6 放弃跟踪）：它等的在途取证调用自行完成，或在第 3 步随会话结束被强制完成为 `Unavailable`；然后照常在一个事务里重查：结果仍未知则 append `Abandoned`，在途调用已给出结果则不写、返回 `Rejected(NotUndetermined)`。
   - `restart_integration` 与 `rotate_credential`（§8.5 控制组、§7.6）：停止开始时 `Applied` 还没有提交的，不论在等该集成上一个进程 OS 确认退出，还是 `restart_integration` 要采纳本实例尚未运行的 id，都在第 1 步以控制记录 `Rejected(Stopping)` 结束：不采纳、不解除 `Halted`、不换凭据，也不留下未兑现的轮换。这条记录就是这个动作的结论，与其余结论记录一样在实例结束锚点之前提交；动作已经结束的会话、已请求退出的进程不因此恢复，照停止本来的顺序在第 3、4 步结束。发起方重连之后在控制流上看到 `Rejected(Stopping)`，在服务再次启动之后重新发起。
     - 停止开始之前已提交 `Applied` 的，`Applied` 与它记下的事实（采纳、解除、未兑现的轮换）不变；新进程还没有拉起的不再拉起（第 1 步）：它开始或延续的运行此时没有进程，以实例结束锚点结束，停止不为它写健康观察（见下文）。`rotate_credential` 的 `Applied` 留下的未兑现轮换照常留着，直到该集成此后（下一实例或更晚）第一次成功的握手兑现它（§7.6）。
-    - 理由：这两个动作生效就是开始或延续一次集成运行（拉起进程、握手），而实例正在结束，它的内层运行不能在这时开始。若让它们在实例结束之前提交 `Applied` 却不开始运行，采纳或解除就成了一个没有运行的事实：健康切面会列出一个没有会话值的采纳成员（§8.4），下一实例还要另定怎样接续它。以 `Rejected(Stopping)` 结束，动作在第 1 步就有确定的结论，要做的事留给服务再次启动之后。
+    - 理由：这两个动作生效就是开始或延续一次集成运行（拉起进程、握手），而实例正在结束，它的内层运行不能在这时开始。若让它们在停止开始之后提交 `Applied` 却不开始运行，采纳或解除就成了停止自己制造的、没有运行的事实，下一实例还要另定怎样接续它。以 `Rejected(Stopping)` 结束，动作在第 1 步就有确定的结论，要做的事留给服务再次启动之后。
   - 这些结论记录（`Applied`、`Rejected(Stopping)`、`Abandoned`）都在实例结束锚点之前提交。发起它的消费方会话已在第 1 步关闭，会话不拥有它（§8.5 会话的生命周期）；发起方重连之后从记录得知结果：`unload_program`、替换、`restart_integration` 与 `rotate_credential` 看控制流，`abandon` 看该尝试的执行事实。
   - **未完成的控制动作的结束锚点**：`unload_program` 或替换等的结论始终没有到（停止之前已发出的交出没有回答，或它等的宿主进程得不到 OS 确认退出）时，停止按下文失败。这个控制动作没有 `Applied` 也没有 `Rejected`：它随实例结束，结束锚点即继任者取得 fence 的事务，不留记录、不生效；它要结束的成员仍在活动集合里，继任实例第 5 步照常判定装载。发起方重连之后从控制流看到它没有结论记录，即它没有生效。
   - 理由：`unload_program`、替换与 `abandon` 的每个内层都有确认者，而停止本来就要等到它们结束，所以动作的结论能在外层结束之前写下；停止时丢弃这样一个已在执行的动作，就要为一个已开始、内层已部分结束的动作另定取消记录与确认者。
