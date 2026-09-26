@@ -204,9 +204,6 @@ dependencies = [
 [[package]]
 name = "uta-channel"
 version = "0.0.0"
-dependencies = [
- "uta-proc",
-]
 
 [[package]]
 name = "uta-core"
