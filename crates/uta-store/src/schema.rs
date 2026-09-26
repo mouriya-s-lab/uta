@@ -1,0 +1,81 @@
+//! Format versions and forward-only migrations (design §7.4, C14).
+//!
+//! `MIGRATIONS[n]` brings a file from format version `n` to `n + 1`. All pending
+//! migrations run in one transaction, so after a crash at any point the file is
+//! either at its old version or at the new one, never in between.
+
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+
+use crate::OpenError;
+
+/// Format version this build writes and reads.
+pub const FORMAT_VERSION: u32 = 1;
+
+const MIGRATIONS: [&str; FORMAT_VERSION as usize] = [
+    // 0 -> 1
+    "CREATE TABLE schema_meta (
+         singleton      INTEGER PRIMARY KEY CHECK (singleton = 1),
+         format_version INTEGER NOT NULL
+     );
+     CREATE TABLE instances (
+         instance_id   INTEGER PRIMARY KEY CHECK (instance_id > 0),
+         started_at_ms INTEGER NOT NULL,
+         ended_at_ms   INTEGER
+     );
+     CREATE TABLE processes (
+         pid         INTEGER NOT NULL,
+         start_time  INTEGER NOT NULL,
+         instance_id INTEGER NOT NULL REFERENCES instances (instance_id),
+         role_kind   TEXT NOT NULL CHECK (role_kind IN ('integration', 'program_host')),
+         role_id     TEXT NOT NULL,
+         PRIMARY KEY (pid, start_time)
+     );",
+];
+
+/// The version recorded in the file; `None` for a file without the meta table.
+pub(crate) fn recorded_version(conn: &Connection) -> rusqlite::Result<Option<u32>> {
+    let has_meta: bool = conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_meta')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !has_meta {
+        return Ok(None);
+    }
+    conn.query_row(
+        "SELECT format_version FROM schema_meta WHERE singleton = 1",
+        [],
+        |r| r.get(0),
+    )
+    .optional()
+}
+
+pub(crate) fn bring_forward(conn: &mut Connection) -> Result<(), OpenError> {
+    let found = recorded_version(conn)?.unwrap_or(0);
+    if found > FORMAT_VERSION {
+        return Err(OpenError::FormatTooNew {
+            found,
+            supported: FORMAT_VERSION,
+        });
+    }
+    if found == FORMAT_VERSION {
+        return Ok(());
+    }
+    let migrate = |conn: &mut Connection| -> rusqlite::Result<()> {
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for step in &MIGRATIONS[found as usize..] {
+            tx.execute_batch(step)?;
+        }
+        tx.execute(
+            "INSERT INTO schema_meta (singleton, format_version) VALUES (1, ?1)
+             ON CONFLICT (singleton) DO UPDATE SET format_version = excluded.format_version",
+            params![FORMAT_VERSION],
+        )?;
+        tx.commit()
+    };
+    migrate(conn).map_err(|source| OpenError::Migration {
+        from: found,
+        to: FORMAT_VERSION,
+        source,
+    })
+}
