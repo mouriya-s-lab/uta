@@ -6,7 +6,7 @@
 - **本文决定什么**：核心进程内部的模型（两类记录、两个类型宇宙与唯一边、位置与进度、gap 的分类、读写两类副作用、无锁定位，以及本进程定义、程序宿主进程与集成部分共用的组合子值树与五个 fold）；它分解成哪些组件、每个组件拥有与隐藏什么；组件之间的接口（uses、同事务集合、调用结果与计数的提交、保留引用的登记与解除、执行事实的唯一写入口）；持久化、统一路径文件、进程生命周期（启动五步与受控停止）三个视图；W1–W20 的组件级走查与崩溃矩阵 #1–#21。
 - **不在本文**：任何组件的内部（状态机、转移表、每个对外操作的规格），它们写在各组件文档，本文以链接指过去；对外操作的完整规格也在实现它的组件文档（本文 §4.2 只给总表）；全局原则、问题域登记与需求编号（[README.md §2 问题域](../../README.md#2-问题域)）；程序宿主进程内部（[program-host/design.md](../program-host/design.md)）；集成与解释层两个部分的内部（[integration/design.md](../../integration/design.md)、[downstream/design.md](../../downstream/design.md)）；可选行情派生计算子系统（只在它与程序宿主元素的接口处出现，[program-host-element.md §4.7 核心↔可选行情派生计算子系统](program-host-element.md#47-核心可选行情派生计算子系统)）。
 - **读者**：核心的实现者与评审者；写组件文档与改组件契约的人。审批者：维护者。
-- **状态**：评审中。§5.3 登记了五项未关闭的卡点（程序规则时限的触发、保留边界推进的崩溃窗口、留存窗口下界的换算、决定冲突的记录、`request_snapshot` 的结论），各自的关闭事件在所属组件文档；其余已走通。
+- **状态**：已定。
 - **阅读约定**：证据标签 `[证据]`/`[设计]`/`[推断]`、编号前缀与跨文档引用写法见 [README.md §0.4 阅读约定](../../README.md#04-阅读约定)。“观察 J”= 观察 `Journal`，“执行 J”= 执行事实 `Journal`。
 
 ## 1 问题域
@@ -259,6 +259,7 @@ LogPosition = (StreamId, Seq)           // 一条记录的顺序身份
 - 调用方先撤后下是两张单据、两次写：各自一次，中间看目标是否已结束的读由调用方自己做。撤单的回执或取证 `Found` 只说这次撤单请求的结果，不证明目标已结束；核心不把两次写拼成一个复合操作（[ticket.md §4.5 交易协议：操作种类、目标、可执行性、检查目录](ticket.md#45-交易协议操作种类目标可执行性检查目录-交易协议)）。
 - `replay_by_key` 形式是写、语义是读。分类边界上的操作必须显式声明属于哪边（[io-shell.md §4.6 replay_by_key](io-shell.md#replay_by_keykey-key_role-scope-barrier_at--original--unavailable)）。
 - `Undetermined` 只属于写：读没有 in-doubt，只有“没拿到”。这就是为什么检查项的 `Unavailable` 可行动（再发一次读），而 IO 壳的 `inconclusive` 只能停等：读已穷尽，写的结果仍未知，只由新到的来源证据终结；principal 可以放弃等待（`Abandoned`），但那不改写结果（[io-shell.md §4.8 结果未知组（核心↔解释层）：放弃跟踪与重开](io-shell.md#48-结果未知组核心解释层放弃跟踪与重开)）。
+- 程序的定时器是读副作用：它不改变世界，只让系统里多一条记录（请求流上的 `EffectResponse{Fired}`）并唤醒程序；作答来源是核心时钟，不经集成，重做无害，结果总可判定（[outbound-requests.md §4.2 读处理器](outbound-requests.md#42-读处理器)）。
 
 不变量：
 
@@ -276,12 +277,15 @@ money/quantity 是交易协议处理器的值类型（[envelope.md §2.4 推论]
 | 金额 | 精确有理数/定点数 + 货币索引；离散化返回余数，不静默丢钱 | fp-04 命题 1 safe-money |
 | 数量 | 精确数值；**不**做“数量带 instrument 尺度”（无证据） | — |
 | 身份 | 上游身份一律 `(venue, native_id)` opaque + 智能构造器 | fp-04 命题 16；域 F2 |
-| 时间 | `occurred_at` / `received_at` 分离；`deadline` 以 UTC 时刻声明并随记录持久化，运行期计时器用单调钟；来源顺序只由来源给的定序证据（venue 序号等）给出，日志顺序只是 `(stream, seq)` 偏序，都不由任何时钟推导 | fp-04 命题 9/11；域 F11 |
+| 时间 | `occurred_at` / `received_at` 分离；每条记录的信封另有**记录时间**（本地墙钟 UTC 时刻 + 单调计数，[README.md §2.2 机器与域共享的现象](../../README.md#22-机器与域共享的现象)），由核心 append 时盖上，是核心自己的时间；`deadline` 以 UTC 时刻声明并随记录持久化；运行期计时器用单调钟唤醒、到点之前按 UTC 墙钟复核；来源顺序只由来源给的定序证据（venue 序号等）给出，日志顺序只是 `(stream, seq)` 偏序，都不由任何时钟推导 | fp-04 命题 9/11；域 F11 |
 | 错误 | 每规则封闭 sum；venue 映射保留 `Unmapped` | fp-04 命题 8；域 C13 |
 | 外部写结果 | `Prepared \| SendBarrier \| VenueAccepted \| VenueRejected \| NotSent \| Undetermined \| Expired` + `ResolutionEvidence` 记录；另有 UTA 自己的 `Abandoned`（放弃等待，不是结果）；非 `Option`/字符串 | fp-06 命题 1（MongoDB `UnknownTransactionCommitResult`、Oracle in-doubt）；fp-01 M11 DAML 反例 |
 
 - **身份**出现在四处：投影里的 `WriteLaneKey`/`StreamId`（[integration-session.md §3.3 投影 Projection](integration-session.md#33-投影-projection)）、意图的 `target`（[ticket.md §4.5 交易协议：操作种类、目标、可执行性、检查目录](ticket.md#45-交易协议操作种类目标可执行性检查目录-交易协议)）、观察记录的 `attribution`（§4.4）、成交记录的 `execution_id`（[read-model.md §3.2 成交的计数身份](read-model.md#32-成交的计数身份-设计)）。instrument 只在 venue 作用域内有意义。换名不是安全，隐藏构造器才是。
 - **时间**：`deadline` 以 UTC 时刻持久化，所以发出前门与过期步跨重启仍可比。
+- **记录时间** [设计]：核心在 append 每条记录（观察与执行事实）时盖上的本地墙钟 UTC 时刻，加一个单调计数区分同一时刻的记录。它是核心自己的事实，不是来源给的 `received_at`（集成填写的锚点）或事件时间。它在两处被读：观察侧留存窗口的下界换算（[observation-journal.md §2.6 推进判定](observation-journal.md#26-推进判定-设计)）；程序值经记录时间访问器读一条输入记录的记录时间（§3.12）。
+- **值树里的时间值** [设计]：UTC 时刻与时长两种值类型；时刻 + 时长得时刻。它们只从记录（记录时间）或常量得出，程序值里没有“此刻”。
+- **计时器的复核规则** [设计]：STS 的 `deadline` 计时器（[decision-chain.md §4.4 lane 步、冷却与过期步](decision-chain.md#44-lane-步冷却与过期步)）与定时器处理器（[outbound-requests.md §4.2 读处理器](outbound-requests.md#42-读处理器)）共用这一条：单调钟只负责唤醒；醒来之后、做到点动作之前按 UTC 墙钟复核，墙钟未到点就重新挂上。所以到点动作只会迟、不会早：墙钟回拨时醒得早，复核后重新等待；墙钟前跳时单调钟仍按原来的间隔唤醒，到点动作可能晚于墙钟到点的时刻。停止、崩溃与故障期间的时间都只推迟到点动作。
 
 ### 3.9 无锁定位
 
@@ -332,7 +336,7 @@ UTA 唯一的锁是单据；执行阶段与观察侧没有锁。
 | `SendBarrier` / `AwaitingDecision` | IO 壳发送屏障：`Prepared` 之后，外部动作即将发生 | 单据送审：`Prepared` 之前，无外部动作 | 二者相隔整条 STS 链 | IO 壳、单据 |
 | `basis` / `required_inputs` | 值：这张单据实际引用了哪些 `LogPosition` | 类型：这个检查/处理器要读哪些 `StreamKind` | `required_inputs` 从组合树派生；`basis` 从实际评估记录 | 单据、信封解析入口 |
 | `LogPosition` / `Hash` | 日志位置：顺序身份 | 内容寻址：版本身份 | `current_version` 是 `Hash`，`Prepared(position)` 是 `LogPosition` | 本文 §3.1、单据 |
-| 四种“过期” | `Ticket.Close(Expired)`：STS 过期步，在 `Prepared` 之前（H6） | `DecisionStep::Expire(Deadline)`：程序规则时限 | 第三种：尝试记录 `Expired(deadline)`，已放行而交出前 `deadline` 已过，IO 壳不发并结束等待；写可能已交出之后不再有 `Expired`，结束等待的唯一出口是 `Abandoned`。第四种：写调用的时限在集成里，集成在时限内得不到回执时返回 `NoResponse`，只是 `Undetermined` 的原因之一；核心没有调用时限 | 单据与 STS 规则链、程序宿主进程、IO 壳、集成部分 |
+| 四种“过期” | `Ticket.Close(Expired)`：STS 过期步，在 `Prepared` 之前（H6） | `DecisionStep::Expire(t, k)`：程序规则时限，到值树求出的 UTC 时刻 t 执行回调 k；按定义是一条定时器请求加对其 `Fired` 响应的 `On`（[outbound-requests.md §3.1 EffectRequest：唯一出口，请求是值](outbound-requests.md#31-effectrequest唯一出口请求是值)） | 第三种：尝试记录 `Expired(deadline)`，已放行而交出前 `deadline` 已过，IO 壳不发并结束等待；写可能已交出之后不再有 `Expired`，结束等待的唯一出口是 `Abandoned`。第四种：写调用的时限在集成里，集成在时限内得不到回执时返回 `NoResponse`，只是 `Undetermined` 的原因之一；核心没有调用时限 | 单据与 STS 规则链、程序宿主进程与出站请求处理器、IO 壳、集成部分 |
 | 两种“拒绝” | `VenueRejected`：写已发出，venue 拒了；执行事实、终态之一 | `DecisionRejected`：审批人否决，或 STS 链否决；单据关闭，从未进入 `Prepared` | 前者在链上，后者在单据上 | IO 壳、单据 |
 | 两种 schema 身份 | `payload_schema`：观察记录的契约载荷按哪份 schema 读，随 `StreamDecl` 声明 | 意图参数 schema：写意图的参数按哪份 schema 校验，随写能力声明，每版意图带它 | 前者标观察的载荷，核心不校验；后者在输入约束步校验，校验后参数原样交给集成 | 信封解析入口、单据 |
 | 上游的两种 `Refused` | `handshake` 返回 `Refused`：上游拒绝集成的身份或配置，整个集成登记 `Halted` | `read`/`backfill` 返回 `Refused`：上游拒绝这一次读，集成照常运行，不是 gap | 都只在上游明确拒绝时返回；不可达、超时一律 `Unavailable` | 集成会话、一次性读、持久订阅 |
@@ -368,7 +372,7 @@ enum DerivationNode {
     Field(FieldName),                 // field::<T>(name)：带类型标签的访问器叶子，读树隐含的那条记录（处理器、检查项）；协议差异压在这一层
     Input(InputName),                 // 程序的观察输入：指名 Program.inputs 里的一项，值是该输入流 cursor 之后的记录
     Pred(PredOp, Vec<Id>),            // 谓词/比较算子：InBand / Eq / Lt / And / Or / Not …，输出 bool
-    Op1(Op1, Id), Op2(Op2, Id, Id),   // 一元/二元值算子；Op1 含访问器 Field(FieldName)，程序值里读一个 Input 节点给出的记录的字段
+    Op1(Op1, Id), Op2(Op2, Id, Id),   // 一元/二元值算子；Op1 含访问器 Field(FieldName)（程序值里读一个 Input 节点给出的记录的字段）与记录时间访问器 RecordTime；Op2 含时刻 + 时长
     Scan(ScanOp, Id),                 // 状态累加节点（即 Fold）
     Window(Id, W),                    // 核心内按位置产出值的滑动窗口节点
     Join(JoinOp, Vec<Id>),
@@ -378,6 +382,7 @@ enum DerivationNode {
 
 - `Field::<T>(name)` 是带类型标签的访问器，类型随访问器进入表达式，启动 / 装载期校验。处理器与检查项的树有一条隐含的记录，叶子 `Field(name)` 读它，启动期按字段注册（[envelope.md §3.2 处理器字段注册表](envelope.md#32-处理器字段注册表)）校验。
 - 程序值有多个具名输入、没有隐含记录 [设计]：访问器写作 `Op1(Field(name), i)`，`i` 是一个 `Input(name)` 节点，读该输入给出的记录的字段；类型由访问器的类型标签给出，装载期与该输入流在最近声明里的 `payload_schema` 核对；含 `Field` 叶子的程序值在装载期被拒（[program-host-element.md §4.2 装载期校验](program-host-element.md#42-装载期校验)）。理由：访问器与它所读的输入之间的绑定就是树里的一条边，两个实现者从同一棵树读出同一个绑定；类型取标签，程序的输出类型才能不等声明就从程序值求出。不选：给 `Field` 叶子加上所读的节点，处理器与检查项的树就要为隐含的记录另造一个节点。
+- **记录时间访问器** [设计]：`Op1(RecordTime, i)` 读 `Input(name)` 节点 i 给出的记录的记录时间（§3.8），值类型为 UTC 时刻。它读的是信封锚点，不读载荷，不经 `payload_schema` 核对；结构校验按锚点表给它定型（[envelope.md §3.1 锚点表 × 链路](envelope.md#31-锚点表--链路)）。它与一个时长经 `Op2` 相加得出截止时刻，是程序规则时限 `Expire` 的截止时刻的来源（[outbound-requests.md §3.1 EffectRequest：唯一出口，请求是值](outbound-requests.md#31-effectrequest唯一出口请求是值)）。
 - 组合子从不提 venue，只接受三种输入：锚点、注册表里的具名字段（带类型）、经 `payload_schema` 访问器取得的载荷值。记录映射的换算是唯一例外的输入：它的输入是上游字段值，但树里仍不出现上游字段名，字段名只在记录映射的处置表里（[integration-session.md §3.4 记录映射](integration-session.md#34-记录映射-设计)）。
 - 协议差异被压在访问器一层，谓词之上一律纯组合：`InBand(field("px"), lo, hi)` 对任何注册了 `px: Price` 的 venue 都成立。
 - 程序值是一组节点加决策步、输入声明与输出声明：`Program { nodes, rules, inputs, facts, outputs }`（[program-host-element.md §3.1 程序值](program-host-element.md#31-程序值)）。`InputDecl`、`FactDecl` 与 `Output` 都不是节点构造子。
@@ -393,7 +398,7 @@ enum DerivationNode {
 | fold | 结果 | 替代的旧做法 |
 |---|---|---|
 | `required_inputs` | 树里所有 `Field` 叶子的 stream kind 之并；启动期与所引用集成来源的最近声明比对，缺失即 fail-closed。程序值不用它：程序的输入就是 `inputs` 声明，装载期逐项与所引用集成来源的最近声明比对 | 登记 → 字面意义的推导 |
-| 输出类型 | 每节点值类型：`Field::<T>` 给基类型，`Input` 节点给该输入流 `payload_schema` 所定的记录类型，`Op`/`Scan`/`Join` 按算子推导，对原生 op 的引用取它在值树里带的声明结果类型；`Pooled` 节点输出类型即段布局；程序的输出契约取 `outputs` 各项所指节点的这个类型 | 手写的布局 / 输出类型 |
+| 输出类型 | 每节点值类型：`Field::<T>` 给基类型，`Input` 节点给该输入流 `payload_schema` 所定的记录类型，记录时间访问器给 UTC 时刻，时刻 + 时长给 UTC 时刻，`Op`/`Scan`/`Join` 按算子推导，对原生 op 的引用取它在值树里带的声明结果类型；`Pooled` 节点输出类型即段布局；程序的输出契约取 `outputs` 各项所指节点的这个类型 | 手写的布局 / 输出类型 |
 | 求值 | `Pred` → `bool`；`Comb` → 值；`Scan`/`Fold` → 状态 | — |
 | 失败 | **单一 kind enum + 路径上下文**（`InBand{field, lo, hi, actual}`、`FieldAbsent(kind)`…，附树中路径） | 组合子层失败不再是各组合子变体的类型级并集 |
 | 说明 | 为审批人生成“为何否决”；静态检查“引用了没有集成提供的字段” | 每条规则各写一遍 |
@@ -466,7 +471,7 @@ core 与外部之间的关联各有自己的承载，不塞进一个对象的字
 
 | 组件 | 拥有 | 隐藏的决定 | 假设 | 文档 |
 |---|---|---|---|---|
-| 出站请求处理器 | `EffectRequest` → 读 / 写处理器分派；读处理器经一次性读立即执行成观察，写处理器以发出成员的装载 principal 开单；`EffectResponse`；请求流 | 副作用具体种类 | 写处理器不绕效应路径；请求按发出成员处理 | [outbound-requests.md](outbound-requests.md) |
+| 出站请求处理器 | `EffectRequest` → 读 / 写处理器分派；读处理器经一次性读立即执行成观察，定时器按核心时钟作答；写处理器以发出成员的装载 principal 开单；`EffectResponse`；请求流；本实例内的在途定时唤醒 | 副作用具体种类 | 写处理器不绕效应路径；请求按发出成员处理 | [outbound-requests.md](outbound-requests.md) |
 | 单据 | 意图形成期锁（`responsible`）、线性版本链、`basis`、两层对账状态（`basis_validity`、`alignment`、`parameter_validity`）、编辑 diff；交易协议 | 意图类型解释、`Revision<Intent>` | 单据不驱动 IO 壳，只单向读其记录 | [ticket.md](ticket.md) |
 | STS 规则链 | 顺序固定链（授权→输入约束→审批→lane→过期）、`RuleState`（记录的 fold，不存储）、`Rejection`、放行判定；规则文件的内容与合法性 | 规则内部守卫（组合子 kind enum） | 规则不引用读模型 | [decision-chain.md](decision-chain.md) |
 | lane 驱动 | 每 `WriteLaneKey` 的阻塞头集合（该 lane 执行事实与 `bypass_lane` 控制记录的 fold）与按 `Prepared` 位置的执行顺序 | 上游账户结构对齐 | 有序与阻塞来自通讯协议，不是 UTA 的锁；lane 等待发生在 `Prepared` 之前 | [lane.md](lane.md) |
@@ -585,7 +590,7 @@ flowchart TB
   HCORE -->|"Load / Advance / Unload"| HPROC
   CTL -->|"程序控制动作的判定与生效 · 程序值交结构校验 · InUse 判定"| HCORE
   HCORE -->|"load / unload 的 Applied 事务：程序订阅的建立、沿用、重建、结束"| SUB
-  OJ -->|"压缩当前 epoch 记录之前：请写覆盖检查点"| SUB
+  OJ -->|"advance_retention 生效事务里：请写覆盖检查点"| SUB
   CTL -->|"restart_integration / rotate_credential"| SESS
   ATTR -.读观察记录上的归因.-> OJ
   TICKET -.basis · 钩子读观察值与归因观察.-> OJ
@@ -672,6 +677,8 @@ flowchart TB
 | 解除 `Halted` 的 `Applied` + `Connecting` 健康观察（只在上一次运行结束之后提交）；`restart_integration` 采纳本实例尚未运行的 id：`Applied` + `Connecting` 健康观察 | 集成会话 | 控制面（`Applied`）、集成会话（健康观察） | 仍 `Halted` / 该 id 不在采纳集合里 |
 | fence 取得 + 实例表新一行（`instance_id` 加一） | 存储 | 存储 | 旧 `instance_id` 仍有效，重来 |
 | 单条观察 append + `LogPosition` 分配 | 观察 `Journal` | 观察 `Journal` | #9 |
+| `advance_retention` 生效：各流新边界 + `Applied` + 覆盖检查点 + 边界之下应删行的删除 | 观察 `Journal` | 观察 `Journal`（边界、删除）、控制面（`Applied`）、持久订阅（覆盖检查点） | 四者皆无，边界不变，动作没有结论（[observation-journal.md §3.2 控制动作 advance_retention(to: Set<LogPosition>)](observation-journal.md#32-控制动作-advance_retentionto-setlogposition)） |
+| `request_snapshot`：快照 + `Applied` | 存储 | 存储（快照）、控制面（`Applied`） | #11 |
 
 - `SendBarrier` 不在任何集合里：它单独 durable append（fsync）后才允许该尝试的写调用，这正是把崩溃窗口二分的屏障（[io-shell.md §4.2 发送屏障与发出前门](io-shell.md#42-发送屏障与发出前门)）。
 - 保留引用的登记随 `Prepared`、`Checkpoint`、等待仍 `Active` 时的 `ResolutionEvidence` 在它们各自的事务里写（§4.3.7）。
@@ -789,6 +796,7 @@ flowchart TB
 | 在途读侧调用（`read`、`backfill`、`route`） | 经通道发出（集成会话）；发出时的流 epoch 是它的发出 epoch | 封闭返回值；会话结束的强制完成；实例崩溃时随实例结束 | 集成会话；发出 epoch 是调用的属性，不是外层 | [one-shot-read.md §4.1 核心→集成：read](one-shot-read.md#41-核心集成readstream-request-range--answered--unavailable--refused)、[subscription.md §4.3 核心→集成：route](subscription.md#43-核心集成routestream-subjects-generation--routedrefused--unavailable) |
 | `route` 义务（每条逻辑流至多一项） | 会话建立时为需求非空的流起；会话内接受该流的 gap 或需求变化时起或并入（持久订阅） | 第一次 `Routed`；会话结束时丢弃；实例崩溃时随实例结束 | 集成会话 | [subscription.md §4.3 核心→集成：route](subscription.md#43-核心集成routestream-subjects-generation--routedrefused--unavailable) |
 | 在途写与取证调用 | 经通道发出（集成会话） | 封闭返回值；会话结束的强制完成；实例崩溃时随实例结束（写由第 2 步记为 `Undetermined(CrashWindow)`） | 集成会话：按作用域寻址，不是流 epoch 的内层 | [io-shell.md §4.9 崩溃恢复与集成崩溃两故障面](io-shell.md#49-崩溃恢复与集成崩溃两故障面) |
+| 在途定时唤醒（程序定时器请求） | 出站请求处理器分派该请求时挂上（出站请求处理器） | 该请求的 `EffectResponse` append；或本实例结束；不写结束锚点记录 | 核心实例；请求本身跨实例持续，下一实例第 4 步由重派重新挂上 | [outbound-requests.md §4.2 读处理器](outbound-requests.md#42-读处理器) |
 | 程序（活动集合的成员） | `load_program` 的 `Applied`（控制面） | `unload_program` 的 `Applied` 或替换它的那个 `Applied`，只在宿主执行已结束之后 append | 不嵌在实例里：跨实例持续 | [program-host-element.md §4.4 卸载与替换](program-host-element.md#44-卸载与替换) |
 | 程序订阅 | 让程序 id 进入活动集合的 `Applied` 同一事务（持久订阅） | `unload_program` 的 `Applied`；其中的项与 cursor 另可在替换里结束 | 程序 id 在活动集合里的时段：跨替换 | [subscription.md §4.7 程序订阅](subscription.md#47-程序订阅) |
 | 程序宿主执行 | 引用原生 op 的，子系统接受交出之后；然后拉起、登记、`Load`（OS、宿主） | `Unload` 或终止之后 OS 确认退出、清除该行；继任实例回收；拉起未成即结束 | 程序成员 ∩ 核心实例 | [program-host-element.md §4.6 宿主协议](program-host-element.md#46-宿主协议) |
@@ -840,7 +848,7 @@ sequenceDiagram
 4. **恢复效应侧**（IO 壳、出站请求处理器、STS 规则链）。按恢复判定依次：
    1. 为每条结果未知且未被放弃的 `Undetermined`，以及最近一次重开是放弃之后的 `Manual`、该轮渠道尚未穷尽的 `Abandoned` 尝试，启动对账驱动（读，可重试）；渠道已穷尽而停等者，在其集成建立新会话时自动 append `ReconciliationReopened{SessionRestored}` 后重走一轮（[io-shell.md §4.5 对账驱动](io-shell.md#45-对账驱动)）。
    2. 对无 `SendBarrier` 的尝试过发出前门：过期则 `Expired`；会话已建立且会话有效声明下可执行则 `SendBarrier` → 写调用；否则等待（[io-shell.md §4.2 发送屏障与发出前门](io-shell.md#42-发送屏障与发出前门)）。
-   3. 出站请求处理器 fold 出无 `EffectResponse` 的 `EffectRequest` 重派（[outbound-requests.md §4.4 重启重派](outbound-requests.md#44-重启重派)）。
+   3. 出站请求处理器 fold 出无 `EffectResponse` 的 `EffectRequest` 重派；定时器请求由此重新挂上唤醒，`fire_at` 已过的立即得 `Fired`（[outbound-requests.md §4.4 重启重派](outbound-requests.md#44-重启重派)）。
    4. STS 链按记录重新评估每张待决单据；过期计时器按各单据的 `deadline`（UTC）重新装上（[decision-chain.md §3.5 等待与重入](decision-chain.md#35-等待与重入-设计)）。
    - 顺序理由：取证在前，可让已结束等待的尝试先移出阻塞头集合；发送与取证都需要该集成已建立的会话，尚无会话的集成，其尝试在发出前门等会话建立再发、其取证等会话建立再续。
 5. **恢复观察侧与消费面**（持久订阅、程序宿主元素、会话入口）。
@@ -855,7 +863,7 @@ sequenceDiagram
 
 1. **关闭新工作的入口**：
    - 会话入口不再接受消费方会话，关闭已有的全部消费方会话；控制面不再接受新的控制动作（已在执行的见下文）。
-   - 核心内不再发起新的集成调用：IO 壳不再 append `SendBarrier`、不再推进取证（已 append 的 `SendBarrier` 的写调用照常发出，它是同一动作的一部分）；持久订阅不再发 `route` 与 `backfill`（未了的 `route` 义务不再发出，第 3 步随会话丢弃）；一次性读不再发调用；出站请求处理器不再分派；过期计时器与链的重新评估停止。
+   - 核心内不再发起新的集成调用：IO 壳不再 append `SendBarrier`、不再推进取证（已 append 的 `SendBarrier` 的写调用照常发出，它是同一动作的一部分）；持久订阅不再发 `route` 与 `backfill`（未了的 `route` 义务不再发出，第 3 步随会话丢弃）；一次性读不再发调用；出站请求处理器不再分派，在途定时唤醒随之撤去，不等 `fire_at`、不写记录，下一实例第 4 步由重派重新挂上；过期计时器与链的重新评估停止。
    - 集成会话不再拉起任何集成进程，`Connecting` 的会话也不再发新的握手；已拉起的进程由第 3、4 步结束。
    - 程序宿主元素不再开始任何新的装载步骤，等待中的成员也不再判定装载；已发出的装载步骤在第 5 步之前等到结论（这一等待不挡第 2–4 步），按原有规则处理：真实的装载失败照常同事务 append `ProgramHalted` 与 `ProgramFailed`，停止不吞掉它；交出已被子系统接受而宿主还没有拉起的不再拉起，不拉起就是它的结束（[program-host-element.md §4.4.2 装载中的成员](program-host-element.md#442-装载中的成员)）。已在途的调用照常等结果。
 2. **程序**（程序宿主元素）：每个程序在途的 `Advance`，等它的输出事务提交（或确知不提交），然后 `Unload`。受控停止本身不改变成员：它不是 `unload_program`。下一实例第 5 步照常判定装载活动集合里的程序。
@@ -937,9 +945,9 @@ sequenceDiagram
 - 扩展（venue 专有 / 未列举状态，Q5）：集成按枚举映射表落到契约词表，表外值输出 `Unmapped(raw)` 并附原始负载；核心的信封解析入口只验证（[envelope.md §2.2 三部分](envelope.md#22-三部分-设计)）。
 - 变体（`NotSent`）：步 6 改为 `submit` 返回 `NotSent`：IO 壳同事务 append `NotSent{reason, evidence}` 与计数观察，等待结束、lane 解除，不进对账；冷却照常从 `SendBarrier` 起算。
 
-- 变体（程序规则时限）：程序的决策含 `Expire(Deadline, _)`，而到时限前后它的输入上没有新记录：步 1 之前的程序求值没有输入推进，时限何时触发未定义，走不通（§5.3 卡点 1）。
+- 变体（程序规则时限）：程序的决策含 `Expire(t, k)`，而到截止时刻前后它的输入上没有新记录。该步生效的那次 `Advance` 输出事务里有一条定时器请求（`fire_at = t`）；出站请求处理器分派时挂上唤醒；核心墙钟到 t 之后 append `EffectResponse{Fired}`（请求流）；它是程序的隐含输入，投递调度把它交给程序宿主元素组成下一次 `Advance`，解释②执行 k（例如 `Require(仍在等, …)` 不成立时放弃这一步）。宿主进程不读时钟（[program-host-element.md §5.6 程序规则时限（W1、W17 的时限变体）](program-host-element.md#56-程序规则时限w1w17-的时限变体)）。
 
-**走通**（不含程序规则时限的路径；时限变体阻塞，§5.3）。
+**走通**（含程序规则时限的变体）。
 
 #### W2（Q2+Q3）SendBarrier 后崩溃、三渠道收敛、放弃跟踪、脑裂变体
 
@@ -1043,10 +1051,10 @@ sequenceDiagram
 
 1. 第二个 principal 对已有负责人的单据 `Revise`：单据锁拒绝，不排队不分叉（[ticket.md §4.2 状态机与穷尽转移](ticket.md#42-状态机与穷尽转移)）。线性化点 = 存储单写者 append 顺序 + `Ticket` fold。
 2. `SendBack` 分支：审批人经单据组 `SendBack{reason}`，单据 `AwaitingDecision → Drafting`；此后 `Revise` 使 `current_version` 前进，旧 Decision 自然失效。`revise` 的 diff 构造不出锚点 → `Rejected(Malformed)`，不 append。
-3. 决定版本冲突：STS 规则链对同一 `(ticket, current_version)` 的第二个 Decision 返回 `Conflict(AlreadyDecided)`，不执行、不改状态（[decision-chain.md §4.3 审批步](decision-chain.md#43-审批步)）。
+3. 决定版本冲突：STS 规则链对同一 `(ticket, current_version)` 的第二个 `decide` 返回 `Conflict(AlreadyDecided)`：不执行，不 append Decision 或任何记录，意图状态不因它改变（[decision-chain.md §4.3 审批步](decision-chain.md#43-审批步)）。对外可见：第二个决定者得冲突返回；该版本仍只有第一条 Decision。
 4. 负责人失联：STS 过期步 `Close(Expired)`；或持控制授权的 principal `transfer`，单据在 `AwaitingDecision` 时 STS 链按新负责人从授权步重过（[decision-chain.md §4.7 移交](decision-chain.md#47-移交-设计)）。
 
-**走通**（第 3 步只到“冲突返回、状态不变”，Q10 要求的冲突记录见 §5.3 卡点 4）。
+**走通。**
 
 #### W12（Q27）Replace：原子改单，或由调用方组合撤单与下单
 
@@ -1059,12 +1067,12 @@ sequenceDiagram
 
 #### W13（Q28）保留边界推进与被引用位置
 
-1. 运维经控制面 `advance_retention(to)`，每条流一个新边界；观察 `Journal` 逐流判定：越过该流已登记引用最早位置 → `Rejected(ReferencedBelow{min})`；越过留存窗口下界 → `Rejected(InsideWindow{bound})`（[observation-journal.md §3.2 控制动作 advance_retention(to: Set<LogPosition>)](observation-journal.md#32-控制动作-advance_retentionto-setlogposition)）。
+1. 运维经控制面 `advance_retention(to)`，每条流一个新边界；观察 `Journal` 逐流判定：越过该流已登记引用最早位置 → `Rejected(ReferencedBelow{min})`；越过留存窗口下界（该流上记录时间 ≥ `now − D` 的最小位置，`now` 为结论记录自身的记录时间）→ `Rejected(InsideWindow{bound})`（[observation-journal.md §2.6 推进判定](observation-journal.md#26-推进判定-设计)）。
 2. 引用来自单据 `basis`（`Prepared` 时登记）、程序 `Checkpoint` cursor、等待仍 `Active` 时的 `ResolutionEvidence`（§4.3.7）。程序 `Window` 节点的累加器随 `Checkpoint` 持久化，不回读历史；`Pooled` 窗口不登记。
-3. 要删掉某流当前 epoch 的记录时，持久订阅先为它 append 覆盖检查点，序号覆盖不因压缩改变（[subscription.md §4.6 序号覆盖与覆盖检查点](subscription.md#46-序号覆盖与覆盖检查点)）；压缩只作用于观察 J，执行 J 不删。
+3. 各流都通过：观察 `Journal` 编排一个事务，写新边界、控制面写 `Applied`、持久订阅为要删当前 epoch 记录的流写覆盖检查点、删去边界之下应删的行，一起提交（§4.3.5；[subscription.md §4.6 序号覆盖与覆盖检查点](subscription.md#46-序号覆盖与覆盖检查点)）；序号覆盖不因压缩改变；压缩只作用于观察 J，执行 J 不删。提交之前崩溃则四者皆无，之后崩溃则四者皆有。
 4. 落到边界下的 `basis` 位置在单据放行前的校验里为 `BeyondRetention`（[ticket.md §3.5 第一层：依据有效性 basis_validity](ticket.md#35-第一层依据有效性-basis_validity)）。对外可见：边界推进从不越过仍被登记引用的最早位置；执行事实无记录被删。
 
-**走通**（正常路径；窗口下界的换算与推进之后的崩溃窗口见 §5.3 卡点 2、3；[observation-journal.md §6.2 验收](observation-journal.md#62-验收) #4）。
+**走通**（[observation-journal.md §6.2 验收](observation-journal.md#62-验收) #4）。
 
 #### W14（Q29）下游（Alice）断连重连
 
@@ -1102,9 +1110,9 @@ sequenceDiagram
 3. 程序经投递调度按位置看到结果项与读结论：闭环走观察侧，不进单据 / STS / IO 壳。
 4. 未调用集成的情形（无会话 / 不支持 / 未确认 / 请求不合法）：不 append 观察记录，`EffectResponse` 记下这一结论；不返回看似成功的空数组。崩溃于响应持久化前按 #21 重派。
 
-5. 变体（程序规则时限）：程序以 `Expire(Deadline, _)` 等待读结果，而结果与其他输入都没有到达：没有投递事件就没有 `Advance`，时限何时触发未定义，走不通（§5.3 卡点 1）。
+5. 变体（程序规则时限）：程序以 `Expire(t, k)` 等待读结果，而结果与其他输入都没有到达：定时器请求随该步生效的 `Advance` 输出提交，核心墙钟到 t 之后请求流上出现 `EffectResponse{Fired}`，下一次 `Advance` 把它交给程序，解释②执行 k；读结果之后才到时，它是请求流与观察输入上的普通记录，由程序按自己的状态处理。
 
-**走通**（不含程序规则时限的路径；时限变体阻塞，§5.3）。
+**走通**（含程序规则时限的变体）。
 
 细化：[one-shot-read.md §5.1 W17 的一次性读细化（读处理器）](one-shot-read.md#51-w17-的一次性读细化读处理器)、[program-host-element.md §5.1 一轮 Advance（W17 的程序宿主元素细化）](program-host-element.md#51-一轮-advancew17-的程序宿主元素细化)、[program-host/design.md §5.1 一轮 Advance（W17 的宿主细化）](../program-host/design.md#51-一轮-advancew17-的宿主细化)。
 
@@ -1116,7 +1124,7 @@ sequenceDiagram
 4. 过期：STS 过期步在 `deadline` 到时 `Close(Expired)`，不补偿、不递送。
 5. 决定版本冲突：同 W11 步 3。
 
-**走通**（第 5 步同 W11 步 3，Q10 的冲突记录见 §5.3 卡点 4；[decision-chain.md §6.3 验收](decision-chain.md#63-验收) #11、#32；[ticket.md §6.3 验收](ticket.md#63-验收) #30）。
+**走通**（第 5 步同 W11 步 3；[decision-chain.md §6.3 验收](decision-chain.md#63-验收) #11、#32；[ticket.md §6.3 验收](ticket.md#63-验收) #30）。
 
 #### W19（Q19）会话身份与未授权控制
 
@@ -1156,7 +1164,7 @@ sequenceDiagram
 | 8 | `abandon` 进行中、`Abandoned` 未 append | 在途取证的结果有或无；无 `Abandoned` | IO 壳：日志里没有“放弃中”的记录，等待仍 `Active`，会话建立后续跑；已提交的在途结果照常计入；principal 重发 `abandon` 是一次新调用（[io-shell.md §4.8 结果未知组（核心↔解释层）：放弃跟踪与重开](io-shell.md#48-结果未知组核心解释层放弃跟踪与重开)） | 不出现“放弃中”的中间态 | [io-shell.md §6.3 验收](io-shell.md#63-验收) #58 |
 | 9 | 观察 append 中途 | 半写事务未提交 | 存储：原子回滚；`fold_state` 重建 | 无半条记录；订阅者按 cursor 续接 | #8(d) |
 | 10 | 派生重算中途：核心崩溃，或只有宿主进程崩溃 | 核心崩溃：这批 `Advance` 的输出事务整批未落；宿主崩溃：同 #16 的 trap | 程序宿主元素：核心崩溃 → 第 5 步从与 cursor 同事务的 `Checkpoint` 重新 `Load`、从已提交 cursor 重推进；宿主崩溃 → 失败抑制 | 程序流上只有已提交批次的记录，不出现半批；重算可与崩溃前分批不同 | [program-host-element.md §6.4 验收](program-host-element.md#64-验收) #16 |
-| 11 | 快照写入中途 | 快照部分写、记录完整 | 存储：半写快照丢弃，从记录重建 | 重启延迟增大，语义不变 | — |
+| 11 | 快照写入中途（按频率的快照，或 `request_snapshot` 的快照 + `Applied` 事务） | 新快照未提交，只有旧快照有效；`request_snapshot` 的这次没有 `Applied` | 存储：从旧快照（或从头）加记录重建（[storage.md §3.1 控制动作 request_snapshot](storage.md#31-控制动作-request_snapshot)） | 重启延迟增大，语义不变；`request_snapshot` 没有结论、未生效 | [storage.md §6.2 验收](storage.md#62-验收) #88 |
 | 12 | 配置文件重载中途 | 文件原子替换半途 | 两层：Alice 的文件契约保证 rename 未落则旧文件完整、已落则新文件完整；核心按 §4.6：重载失败保留上一有效版本并 append `Rejected(reason)`，启动期失败按 C14 拒绝启动 | 重载成功或整体拒绝；无半写可见态 | — |
 | 13 | 集成崩溃（观察流侧） | 观察流断代 | 集成会话：会话结束、换进程、握手时按续接或新 epoch 决定（新 epoch 首条 `Gap{origin: Source}`）；持久订阅按回填补齐或标 gap | 该流 gap 显式；核心与其他流不受影响 | #9 |
 | 14 | 集成崩溃（写调用中） | 已 `SendBarrier`、写调用中途 | 集成会话：会话结束时在途写恰好完成为 `NoResponse`；IO 壳 → `Undetermined` → 对账；不区分“集成挂”与“venue 没回” | 尝试 `Undetermined`，靠证据非猜 | #9 |
@@ -1166,20 +1174,15 @@ sequenceDiagram
 | 18 | op 已产生结果、核心在结果持久化前崩溃 | op 的输出值还没有随 `Advance` 输出事务提交 | 程序宿主元素：重启后由 `Pooled` 重洗重算；op 输出只在 `outputs` 导出时随输出事务落程序流，未提交的不半接入 | 下游只见已提交的程序流记录 | — |
 | 19 | 核心崩溃时 op 孤儿 | op 进程存活、核心死 | 存储第 1 步回收宿主进程、结束宿主执行，这次执行的交出随之结束；op 进程的孤儿回收属子系统 | 无双写；宿主执行已结束 | — |
 | 20 | 下游或解释层崩溃 | 核心订阅 / 程序 / lane 完整；解释层无持久状态 | 核心独立存活；下游重连后会话入口取 principal，持久订阅重新挂接，读模型给 `as_of`（W14） | 断连损失以缺失通知给出 | [downstream/design.md §6.2 验收](../../downstream/design.md#62-验收) #23 |
-| 21 | `EffectRequest` 已随 `Advance` 输出提交，处理器未执行或 `EffectResponse` 未持久化 | `EffectRequest` 有、无 `EffectResponse` | 出站请求处理器：第 4 步 fold 出无响应的请求重派：读处理器重新执行一次；写处理器重新开单（`Draft` 与 `EffectResponse{Drafted}` 同事务，不存在“有 `Draft` 无响应”），按请求所记发出成员 `member` 所指 `Applied` 的事实处理（[outbound-requests.md §4.4 重启重派](outbound-requests.md#44-重启重派)） | 每条请求最终恰一条 `EffectResponse`；写至多一张单据；`Unhandled` 不重派 | [program-host-element.md §6.4 验收](program-host-element.md#64-验收) #16；[outbound-requests.md §6.3 验收](outbound-requests.md#63-验收) #85 |
+| 21 | `EffectRequest` 已随 `Advance` 输出提交，处理器未执行或 `EffectResponse` 未持久化 | `EffectRequest` 有、无 `EffectResponse` | 出站请求处理器：第 4 步 fold 出无响应的请求重派：读处理器重新执行一次；定时器重新挂上唤醒，`fire_at` 已过即 `Fired`，未到不产生响应；写处理器重新开单（`Draft` 与 `EffectResponse{Drafted}` 同事务，不存在“有 `Draft` 无响应”），按请求所记发出成员 `member` 所指 `Applied` 的事实处理（[outbound-requests.md §4.4 重启重派](outbound-requests.md#44-重启重派)） | 每条请求最终恰一条 `EffectResponse`（定时器在 `fire_at` 之后）；写至多一张单据；`Unhandled` 不重派 | [program-host-element.md §6.4 验收](program-host-element.md#64-验收) #16；[outbound-requests.md §6.3 验收](outbound-requests.md#63-验收) #85 |
 
 ### 5.3 卡点
 
-按新组件划分逐个走完 W1–W20 与 #1–#21 之后的结论：
+按组件划分逐个走完 W1–W20 与 #1–#21，卡点为无：每步的行动者、恢复归属与对外可见结论都能由本文与所指组件文档推出。
 
-- **已解决的归属卡点（归属不明）**：旧设计的观察 J 写者里有“集成推送入口”，模块指南里却没有这个元素；推送的接受（经当前通道读入、盖 `SessionEpoch`、分配 `LogPosition`、会话内上报 gap 的事务）落到哪里不明。按新划分走 W1 步 7、W6、#13：集成会话读当前通道（接受条件“经当前会话的通道读入”是它的），信封解析入口在边界处解析验证，观察 J 分配位置并 append；会话内上报 `Gap{origin: Source}` 的事务由集成会话编排。三处各自的规格在 [integration-session.md §4.3.2 集成→核心的推送](integration-session.md#432-集成核心的推送)、[envelope.md §2.2 三部分](envelope.md#22-三部分-设计)、[observation-journal.md](observation-journal.md)。这一分配没有新增概念。
-- **已解决的描述卡点**：旧 W10 写“宿主隔离该程序并产出失败记录”，与宿主不接触存储相矛盾；按新划分，失败记录只由程序宿主元素 append（W10 步 2）。
-- **卡点 1：程序可见的时间推进**（接口不够）。W1、W17 的时限变体：程序规则含 `Expire(Deadline, _)` 而没有新输入推进时，宿主协议没有时间输入，时限何时触发未定义。登记与关闭事件在 [program-host-element.md §5.6 卡点](program-host-element.md#56-卡点)。
-- **卡点 2：保留边界推进之后、压缩完成之前的崩溃窗口**（缺概念）。W13 的崩溃变体：新边界与 `Applied` 已提交、覆盖检查点未写时崩溃，重启后的处置未定义，本文 §5.2 崩溃矩阵因此没有这一行。登记在 [observation-journal.md §5 走查](observation-journal.md#5-走查) 卡点 1。
-- **卡点 3：留存窗口下界换算为每流位置**（缺概念）。W13 步 1 的 `InsideWindow` 判定所需的换算未定义。登记在 [observation-journal.md §5 走查](observation-journal.md#5-走查) 卡点 2。
-- **卡点 4：决定版本冲突没有记录**（归属不明）。W11 步 3、W18 步 5：Q10 的响应度量“冲突记录存在”没有记录种类与写者，这两步只能走到“第二次决定得冲突返回、状态不变”。登记在 [decision-chain.md §5 走查](decision-chain.md#5-走查) 卡点 1。
-- **卡点 5：`request_snapshot` 的结论与快照提交的先后**（接口不够）。控制组的这一动作 `Applied` 是否蕴含快照已持久、写失败得哪种结论未定义。登记在 [storage.md §5 走查](storage.md#5-走查) 卡点 1。
-- 其余每步的行动者、恢复归属与对外可见结论都能由本文与所指组件文档推出。需要实测才能给出数字的步（崩溃注入、宿主预算、秒级负载）是验收项，不是卡点；可选子系统的实现期数字不在核心范围，核心接口不依赖其结果。
+- 推送的接受落在三个组件上：集成会话读当前通道（接受条件“经当前会话的通道读入”是它的），信封解析入口在边界处解析验证，观察 J 分配位置并 append；会话内上报 `Gap{origin: Source}` 的事务由集成会话编排（W1 步 7、W6、#13；[integration-session.md §4.3.2 集成→核心的推送](integration-session.md#432-集成核心的推送)、[envelope.md §2.2 三部分](envelope.md#22-三部分-设计)、[observation-journal.md §2.2 位置的分配与记录的接受](observation-journal.md#22-位置的分配与记录的接受-设计)）。没有单独的“推送入口”元素。
+- 程序的失败记录只由程序宿主元素 append（W10 步 2）；宿主进程不接触存储。
+- 需要实测才能给出数字的步（崩溃注入、宿主预算、秒级负载）是验收项，不是卡点；可选子系统的实现期数字不在核心范围，核心接口不依赖其结果。
 
 ## 6 评估
 

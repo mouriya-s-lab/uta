@@ -4,7 +4,7 @@
 - **上级文档**：[core-process/design.md §4.1 组件指南](design.md#41-组件指南)。
 - **决定什么**：一张 `AwaitingDecision` 的单据怎样被放行进 `Prepared` 或被否决：规则的形状（STS `step`）、五步顺序固定链（授权 → 输入约束 → 审批 → lane → 过期）与放行门、冷却、规则判断所用的状态从哪来、等待与重入、规则版本变更与移交；以及统一路径里策略 / 审批规则文件的内容与合法性。
 - **读者**：核心实现者；写规则文件的运维者与 Alice；下游自动决定者的作者。
-- **状态**：评审中。§5 登记了一项卡点（Q10 要求的冲突记录没有写者）；其余已定。
+- **状态**：已定。
 - **非目标**：单据的状态字段怎样求出（参数合规、两层对账、检查目录，[ticket.md §3.4 参数合规：意图参数 schema](ticket.md#34-参数合规意图参数-schema-设计)、[ticket.md §4.5 交易协议：操作种类、目标、可执行性、检查目录](ticket.md#45-交易协议操作种类目标可执行性检查目录-交易协议)）；阻塞头集合的定义与绕过（[lane.md §3.3 阻塞头集合](lane.md#33-阻塞头集合)）；规则文件怎样被读入与重载（[control-plane.md §4.4 reload_config(kind)](control-plane.md#44-reload_configkind)、[core-process/design.md §4.6 统一路径文件](design.md#46-统一路径文件)）；会话 principal 的建立（[session-entry.md §3 模型](session-entry.md#3-模型)）。
 
 证据标签与编号前缀的约定见 [README.md §0.4 阅读约定](../../README.md#04-阅读约定)。
@@ -195,8 +195,8 @@ flowchart TB
 - 另一笔过期未决独立处理。
 - **`decide` 只在要求人工时被接受** [设计]：当前规则对该单据的 `(principal, WriteLaneKey, OperationKind)` 要求人工审批时，`decide` 才被接受；否则它被拒，不 append 任何记录，错误名由实现定（[ticket.md §4.3 单据组（核心↔解释层）](ticket.md#43-单据组核心解释层)）。这里的 principal 是 `decide` 调用时该单据的负责人（最近一次 `Draft`/`Transfer` 所定），所以 `Transfer` 之后按新负责人判定。这包括审批步已以 `Outcome` 自动通过、仍停在 lane 步的单据。之后规则改为要求人工时，人的 `decide` 照常被接受。
   - 理由：不要求人工时，没有 Decision 的单据以审批步的 `Outcome` 放行（放行门第 3 项）；这时接受 `decide`，批准不起任何作用，否决却关闭一张规则已放行的单据，决定者就借此越过了“不要求人工”这条规则。下游决定者本就只在要求人工的单据上起作用（[ticket.md §4.5 交易协议：操作种类、目标、可执行性、检查目录](ticket.md#45-交易协议操作种类目标可执行性检查目录-交易协议)）。
-- **一个 `current_version` 至多一条 Decision** [设计]：被接受的 `decide` 另以“该 `(ticket, current_version)` 尚无 Decision 记录”为判据（C11 的待决集合版本即此）；已有 → `Conflict(AlreadyDecided)`。不要求人工时审批步只写 `Outcome`、不写 Decision，所以只以 `Outcome` 自动通过、从未有过 Decision 的版本，之后规则改为要求人工（或移交给要求人工的负责人）时还没有 Decision，人的 `decide` 不得 `Conflict(AlreadyDecided)`；已有 Decision 的版本在规则变更或移交之后仍以它为依据，第二条 `decide` 照常 `Conflict(AlreadyDecided)`。
-  - 理由：决定之后单据可能仍停在 lane 步而版本不变，靠 `Closed` 挡不住同版本的第二条决定。
+- **一个 `current_version` 至多一条 Decision** [设计]：被接受的 `decide` 另以“该 `(ticket, current_version)` 尚无 Decision 记录”为判据（C11 的待决集合版本即此）；已有 → `Conflict(AlreadyDecided)`。这次调用不 append Decision 或任何记录，意图状态不因它改变（Q10）。不要求人工时审批步只写 `Outcome`、不写 Decision，所以只以 `Outcome` 自动通过、从未有过 Decision 的版本，之后规则改为要求人工（或移交给要求人工的负责人）时还没有 Decision，人的 `decide` 不得 `Conflict(AlreadyDecided)`；已有 Decision 的版本在规则变更或移交之后仍以它为依据，第二条 `decide` 照常 `Conflict(AlreadyDecided)`。
+  - 理由：决定之后单据可能仍停在 lane 步而版本不变，靠 `Closed` 挡不住同版本的第二条决定。冲突只作返回、不作记录：第一次决定已有完整的 Decision 记录（谁、何时、依据、绑定版本），第二次调用没有改变任何事实，也不是越权（越权由授权另记安全事件）；为它另设一种记录，就要为一个没有改变任何东西的调用增加记录种类与写者。
 
 ### 4.4 lane 步、冷却与过期步
 
@@ -215,7 +215,7 @@ flowchart TB
 - 理由：在检查通过时计时，放行后未发出也占冷却，且审批等待期间计时已开始（旧实现的缺陷，O11）；以业务回执计时，被拒或结果未知的发送不计冷却，丢掉了“可能已发出”的依据。放在 lane 步而不是输入约束步，因为单据可能在审批与 lane 上等很久，判定必须贴近放行。撤单与平仓是减少风险的动作，不应被冷却挡住。
 - 不选：**冷却作为一项检查（`AlignmentCheck`）**：检查只读观察值，执行事实不进钩子的 `eval`（[ticket.md §3.6 第二层：意图专属对账 alignment；偏离是状态](ticket.md#36-第二层意图专属对账-alignment偏离是状态)）；**冷却让单据等待而不是否决**：待决单据会在 lane 上堆积，与 C12 的“规则否决”不符。
 
-**过期步。** `AwaitingDecision` 期间到期 = `Close(Expired)` 否决记录，不补偿。这包括停在审批步、lane 步，以及因能力未确立停在输入约束步或放行门前时：`deadline` 计时器到期即对该单据求值过期步，不先重跑它前面停下的那一步。计时器在重启后按 `deadline`（UTC）重装。
+**过期步。** `AwaitingDecision` 期间到期 = `Close(Expired)` 否决记录，不补偿。这包括停在审批步、lane 步，以及因能力未确立停在输入约束步或放行门前时：`deadline` 计时器到期即对该单据求值过期步，不先重跑它前面停下的那一步。计时器按单调钟唤醒、到点之前按 UTC 墙钟复核（[core-process/design.md §3.8 基础值类型](design.md#38-基础值类型)），在重启后按 `deadline`（UTC）重装。
 
 ### 4.5 放行门
 
@@ -307,14 +307,9 @@ flowchart TB
 
 **重启。** 删去全部快照后重启：每张 `AwaitingDecision` 单据按记录重新求值（启动第 4 步）；冷却时钟由 `SendBarrier` fold 出，阻塞头由 lane 流 fold 出，计时器按 `deadline` 重装；每张单据停在与不重启时相同的点。
 
-**卡点 1：决定版本冲突没有记录**（分类：归属不明）。
+**W11 第 3 步、W18 第 5 步的链细化（Q10）。** 单据停在审批步（策略要求人工），版本 v3。P1 `decide(Approve)`，期望版本 v3：该版本尚无 Decision → append Decision（绑定 v3），链继续到 lane 步并停下（阻塞头集合非空）。P2 随后以同一期望版本 v3 `decide`：已有 Decision → 返回 `Conflict(AlreadyDecided)`；这次调用不 append 任何记录，单据仍是 `AwaitingDecision(v3)`、仍停在 lane 步。
 
-- **场景**：W18 第 5 步、W11 第 3 步：两个 principal 以同一期望版本 `decide`，第二个得 `Conflict(AlreadyDecided)`（§4.3）。
-- **依据**：Q10 的响应度量要求“冲突记录存在；意图状态不变”（[README.md §3.1 质量场景](../../README.md#31-质量场景)）。本组件对冲突只返回 `Conflict(AlreadyDecided)`、不 append；执行事实的唯一写入口表里没有“冲突记录”这一种记录，也没有它的写者（[core-process/design.md §4.3.4 执行事实的唯一写入口](design.md#434-执行事实的唯一写入口)）。
-- **卡在哪**：“冲突记录存在”这一度量找不到写者与记录种类；返回值不是记录，读模型与审计读不到它。本文不自行补定。
-- **关闭事件**：要么定出冲突记录的种类、写者（本组件或单据）与所在流并加入唯一写入口表，要么把 Q10 的度量改为“第二次决定得冲突返回、意图状态不变”，并同步验收 #11。
-
-其余步骤没有停在本组件之内的卡点。
+卡点：无。
 
 ## 6 评估
 
@@ -329,7 +324,7 @@ flowchart TB
 ### 6.3 验收
 
 2. **规则确定性**（§3.2）：可交换规则集通过交换性测试；顺序固定链的顺序由代码显式固定并有测试。（对应 Q8/Q9）
-11. **决定与审批可追溯**（§4.3、§4.5、[ticket.md §4.2 状态机与穷尽转移](ticket.md#42-状态机与穷尽转移)）：每条 `Close(Prepared|DecisionRejected|Expired)` 都可回答谁、何时、依据哪些 `LogPosition`、绑定哪个 `current_version`；同一版本的第二次决定返回冲突且不改状态；过期意图无 `SendBarrier`。（对应 Q9/Q10/Q26）
+11. **决定与审批可追溯**（§4.3、§4.5、[ticket.md §4.2 状态机与穷尽转移](ticket.md#42-状态机与穷尽转移)）：每条 `Close(Prepared|DecisionRejected|Expired)` 都可回答谁、何时、依据哪些 `LogPosition`、绑定哪个 `current_version`；同一版本的第二次决定返回 `Conflict(AlreadyDecided)`，这次调用不 append Decision 或任何记录，意图状态不因它改变（单据停在 lane 步的场景里，它仍是同一 `AwaitingDecision(current_version)`、仍停在 lane 步）；过期意图无 `SendBarrier`。（对应 Q9/Q10/Q26）
 31. **规则词汇与实现无关**（§4.9、[ticket.md §4.5 交易协议：操作种类、目标、可执行性、检查目录](ticket.md#45-交易协议操作种类目标可执行性检查目录-交易协议)）：对同一规则文件与同一组记录（覆盖每项检查的边界：情景值等于 `ratio · E`、`E ≤ 0`、币种不同、没有该主体的观察、多空分仓；允许集合缺省 / 空集；名义阈值等于 N、以数量定量），两个独立实现（各用随 IDL 发布的参考 schema 校验器）逐单给出相同的放行 / 否决与相同的检查结果；冷却间隔按 `(WriteLaneKey, OperationKind)` 共享，多个 principal 交替下单时按同一间隔判定；不合法的规则文件（未知键、`ratio ≤ 0`、给 `Close` 配冷却、列出需参数的项而缺参数、把“原单仍在”列为必要）被整体拒绝。（对应 Q8/Q9）
 32. **冷却**（§4.4、C12）：`SendBarrier` 持久化即设 `(WriteLaneKey, instrument)` 的时钟；未发即 `Expired` 的 `Prepared` 不设；在 `SendBarrier` 之后、调用之前崩溃仍计时，集成返回 `NotSent` 也不撤销；冷却在单据经 lane 步放行时判定、不是等待条件，单据从等待重入时随 lane 步重判，时刻等于时钟 + 间隔时放行，早于则 `Rejection::Cooldown`；`bypass_lane` 不豁免，且绕过产生的、尚未越过屏障的同键下单写使本次判定否决、在它越过屏障或 `Expired` 后不再阻碍；间隔为 0 等同不设；撤单与平仓既不设也不受；重启后判定结果与不重启时相同。（对应 Q7/Q9）
 53. **撤单的输入约束**（§4.2、§4.3、§4.9）：（对应 Q8/Q9）

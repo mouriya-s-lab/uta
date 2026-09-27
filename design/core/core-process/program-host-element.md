@@ -11,7 +11,7 @@
   - 核心↔程序宿主进程的宿主协议 `Load` / `Advance` / `Unload`；
   - 核心↔可选行情派生计算子系统的接口：`Pooled`、原生 op 的安装与每次宿主执行前的交出。
 - **读者**：实现核心进程的工程师；实现程序宿主进程的工程师（按本文 §4.6 实现宿主一端）；可选子系统的作者（按本文 §4.7 实现子系统一端）。审批者：仓库维护者。
-- **状态**：评审中。除 §5.6 登记的一项卡点（程序规则的时限触发）外，其余决定已定。
+- **状态**：已定。
 - **非目标**：
   - 宿主进程内部的解释器、增量引擎与决策解释，在[程序宿主进程](../program-host/design.md)；
   - 程序订阅的项与 cursor 怎样建立、沿用与结束，在 [subscription.md §4.7 程序订阅](subscription.md#47-程序订阅)；
@@ -76,6 +76,7 @@ struct Output    { name: StreamName, node: Id }               // 输出声明：
 - `DerivationNode` 与 `Field`、`Input(name)`、`Op1(Field(name), i)` 等构造子，以及“输出类型”fold，定义在 [core-process/design.md §3.12 组合子值树与五个 fold](design.md#312-组合子值树与五个-fold)。`DecisionStep` 与 `EffectRequest` 的形状在 [outbound-requests.md §3.1 EffectRequest：唯一出口，请求是值](outbound-requests.md#31-effectrequest唯一出口请求是值)。
 - 三种消费方式与等待窗口的语义在 [delivery.md §3.1 三种消费方式（投递侧）](delivery.md#31-三种消费方式投递侧)。`await-all` 的覆盖证据在 [subscription.md §3.6 序号覆盖](subscription.md#36-序号覆盖)。
 - 程序自己的请求流是隐含的输入，不在任何声明里，起点为 `Tail`（§3.4）。
+- **程序可见的时间只来自记录** [设计]：程序值里没有“此刻”。程序看得到的时间有两种，都是记录上的：经记录时间访问器读到的输入记录的记录时间（[core-process/design.md §3.12 组合子值树与五个 fold](design.md#312-组合子值树与五个-fold)）；请求流上定时器请求的 `EffectResponse{Fired}` 的到达（它自己的记录时间就是触发时刻，[outbound-requests.md §4.2 读处理器](outbound-requests.md#42-读处理器)）。程序规则时限 `Expire(t, k)` 由后者驱动（§4.6.2）。
 - **规范序列化形式** [设计]：程序值不编译。“编译单元”就是值代数的规范序列化形式：按 schema 校验的 JSON 值树，与 `Program { nodes, rules, inputs, facts, outputs }` 一一对应。节点对 `DerivationNode`，决策步对 `DecisionStep`，观察输入声明对 `InputDecl`，执行事实输入声明对 `FactDecl`，输出声明对 `Output`。任何面向 AI 的文本糖都编译到同一值，且不是核心的一部分。表达力不足时加构造子（[core-process/design.md §3.12 组合子值树与五个 fold](design.md#312-组合子值树与五个-fold)）。
 - 同一个程序值有两种解释：解释①（派生）与解释②（决策），在宿主进程里求值（[program-host/design.md §3.2 解释①：派生](../program-host/design.md#32-解释①派生)、[program-host/design.md §3.3 解释②：决策](../program-host/design.md#33-解释②决策)）。两种解释的消费约束在 [core-process/design.md §3.4 两个类型宇宙与唯一边](design.md#34-两个类型宇宙与唯一边)。
 
@@ -165,7 +166,7 @@ struct Output    { name: StreamName, node: Id }               // 输出声明：
 
   请求流的起点是 `Tail`。建立之后才出现的 lane 流一律从它的第一条记录起（`Start{第一条记录}`）。cursor 在开始成员的 `Applied` 同一事务里定下，`Tail` 就是控制动作生效那一刻的流末。理由：推迟到首次装载，等待所引用集成来源的声明版本或崩溃都会让起点漂移。cursor 的建立、沿用、重建与结束的完整规则在 [subscription.md §4.7 程序订阅](subscription.md#47-程序订阅)。
 - **程序看得到自己的请求的结果** [设计]：程序只经它声明的输入得知结果，与其他输入同一套 cursor：
-  - 请求流是隐含的输入：同一条流上先有它自己的 `EffectRequest`（位置由此得知；程序按自己放进载荷的内容认出它们），后有指回这些位置的 `EffectResponse`，同流有序。
+  - 请求流是隐含的输入：同一条流上先有它自己的 `EffectRequest`（位置由此得知；程序按自己放进载荷的内容认出它们），后有指回这些位置的 `EffectResponse`，同流有序。定时器请求（`Expire` 化归出的）也在这里：它的 `Fired` 在核心墙钟到点之后才出现在请求流上。
   - 要看写请求之后的单据与尝试，程序在 `facts` 里声明执行事实输入。该作用域各 lane 流上的单据记录（含 `Close` 的结局；放行时 `Close(Prepared(p))` 给出尝试位置 `p`）与 `p` 这次尝试的记录（`SendBarrier`、回执、`NotSent`、`Undetermined`、`ResolutionEvidence`、`ReconciliationReopened`、`Expired`、`Abandoned`）按位置投给它。
   - 解释②在程序内按自己的锚点（`Drafted(ticket_id)` 所指单据、`Close(Prepared(p))` 所给的 `p`）挑出属于自己的事实；宿主与投递不做关联。请求流与 lane 流之间不定投递顺序：`Draft` 与 `Drafted` 同事务提交，程序可能先看到单据记录、后看到指向它的 `Drafted`，解释②按 `ticket_id` 两种次序都能匹配。解释①的节点不消费这些事实。
   - 写请求的作用域必须在发出成员所记的执行事实输入之内，否则 `NotDrafted(ScopeNotObserved)`（[outbound-requests.md §4.3 写处理器](outbound-requests.md#43-写处理器-设计)）。所以程序不会写进一个自己看不到结果的作用域。
@@ -268,6 +269,7 @@ flowchart LR
 - `facts` 里两项的来源相同而起点不同；
 - 树里有 `Field` 叶子（程序值只经 `Op1(Field(name), i)` 读输入的字段）；
 - `Input(name)` 指名不存在的输入。
+- 某个 `Expire(t, k)` 的 t 不存在，或“输出类型”fold 求出的类型不是 UTC 时刻。
 
 原生 op 的结果类型取值树里它的引用所带的声明类型，所以这一段不需要子系统的任何状态。
 
@@ -384,7 +386,7 @@ flowchart TB
   - 新成员的每条程序流开新 epoch：`Gap{origin: Source, reason: program_upgrade}`（§3.3），按 H9 回填；
   - 程序订阅的全部项与 cursor（含请求流）按各输入声明的起点重新建立，重建的 cursor 上未确认的投递缺口随之删除（[subscription.md §4.7 程序订阅](subscription.md#47-程序订阅)）；
   - 旧保留引用解除。
-- 旧成员的宿主执行此前已经结束（§4.4.1 第 1–3 步），新宿主在这一事务提交之后才拉起，所以没有宿主接收 `Reset`：新宿主不携带 `checkpoint` 装载。丢弃的状态里记着的请求，其之后到达的结果对新状态只是请求流与执行事实流上的普通记录。
+- 旧成员的宿主执行此前已经结束（§4.4.1 第 1–3 步），新宿主在这一事务提交之后才拉起，所以没有宿主接收 `Reset`：新宿主不携带 `checkpoint` 装载。丢弃的状态里记着的请求，其之后到达的结果对新状态只是请求流与执行事实流上的普通记录。旧成员的定时器请求照常触发：`Reset` 之前已 append 的 `Fired` 在新 cursor（请求流起点为 `Tail`）之前，不交给新成员；之后才 append 的照常交出，新状态里没有它的待触发项，解释②忽略它。沿用的替换交回的 `Checkpoint` 仍记着待触发项，旧成员发出的定时器触发时由新成员执行对应的回调。
 
 **状态迁移契约** [设计]：`Checkpoint` 带 `state_version`；每个成员的 `Applied` 记下它接受的 `state_version` 集合。契约：本成员可交回的每个 `Checkpoint`，其 `state_version` 都在本成员接受的集合内。核心在两处保证它：
 
@@ -430,7 +432,8 @@ flowchart TB
   - cursor 为 `At{pos}` 的流，`to` 不越过这批在该流上交出的最后一个位置；这批在该流上没有交出事件时不变。
   - cursor 为 `Start{from}` 的流，`to` 取这批在该流上交出的最后一个位置与 `from` 的前一位置中较大者。所以第一次提交的 `Advance` 总使它成为 `At`，即使这批在该流上什么也没交出：`from` 之下没有交出的位置在 cursor 建立之前已被删去，在这个订阅从 `from` 开始的承诺之外，不是损失。
 - **返回**：每次返回都带新 `Checkpoint`。
-- **没有时间输入**：`Advance` 只带投递事件与 `to`，不带时间；宿主只在有投递事件时被调度。程序规则里的时限（`DecisionStep::Expire`）在没有新记录时何时、按哪个时钟触发，现行设计没有定义，登记为 §5.6 的卡点；关闭它的决定写在本节。
+- **时间以记录到达** [设计]：`Advance` 只带投递事件与 `to`，不带时间输入；宿主进程不读时钟。宿主只在有投递事件时被调度，程序要在没有新输入时于某个时刻做事，靠的是定时器请求：`Expire(t, k)` 生效的那次输出里有一条 `EffectRequest{timer, {fire_at: t, tag}}`，核心墙钟到点之后请求流上出现它的 `EffectResponse{Fired}`，这条记录本身就是一个投递事件，于是有下一次 `Advance`。时间因此进入 cursor 的重放边界：`Fired` 已 append 而消费它的 `Advance` 未提交时崩溃，重启后从同一 cursor 重新交出它，结果与不崩溃时相同。
+- **等待窗口不向程序交出时间**：`InputDecl.wait` 由投递调度在核心侧按核心时钟执行，只决定一批含哪些记录（[delivery.md §3.1 三种消费方式（投递侧）](delivery.md#31-三种消费方式投递侧)）；它不产生时间事件，不进解释①，也不产生不带投递事件的 `Advance`。分批本就不在契约里（§3.3）。
 - **输出事务** [设计]：核心把下列各项在**同一事务**持久化。事务由本组件编排，参与者见 [core-process/design.md §4.3.5 同事务集合](design.md#435-同事务集合)：
   - `effects`：append 为 `EffectRequest` 记录，落该程序的请求流，每条记下这次 `Advance` 所属成员（开始它的 `Applied` 的位置）。由出站请求处理器 append（[core-process/design.md §4.3.4 执行事实的唯一写入口](design.md#434-执行事实的唯一写入口)）。
   - `derivations`：程序值 `outputs` 里每项所指节点在这批推进之后的值，按 §3.3“输出记录是节点的当前值”写在流 `(Program(id), name)` 上，可以一条也没有。
@@ -448,7 +451,7 @@ flowchart TB
 
 #### 4.6.4 预算
 
-- **预算语义**：CPU 时间与内存由 OS 进程限制（rlimit / job object）；意图速率、状态大小与 `checkpoint` 的版本由核心在 `Output` 上检查，检查不过的 `Output` 整个不持久化。预算值由开始成员的 `Applied` 钉住（P12），不是设计常量。
+- **预算语义**：CPU 时间与内存由 OS 进程限制（rlimit / job object）；意图速率、状态大小与 `checkpoint` 的版本由核心在 `Output` 上检查，检查不过的 `Output` 整个不持久化。意图速率按 `Output.effects` 计，定时器请求也在其中。预算值由开始成员的 `Applied` 钉住（P12），不是设计常量。
 - 超预算、`checkpoint` 的版本不被本成员接受（视同 trap）或 trap（宿主进程异常退出；trap 以有过宿主进程为前提）时：
   - 核心在同一事务 append `ProgramHalted{reason: Budget(kind) | Trap}` 与失败观察 `ProgramFailed{reason}`，然后终止宿主进程；
   - 程序停在失败抑制，直到控制面 `load_program` 重新装载（其 `Applied` 引用这条 `ProgramHalted`）；
@@ -608,6 +611,7 @@ stateDiagram-v2
 - **替换的 `Applied` 之前崩溃**：旧成员照旧。之后崩溃：新成员按它的 `Applied` 所记沿用或不携带装载，不重复 `Reset`。
 - **`Applied` 与 `ProgramHalted` 之间崩溃**（例如初次接纳被拒）：重启后读到的仍是这条被拒的项，程序同样失败，不等待也不装载。
 - **`ProgramHalted` 与 `ProgramFailed`**同事务，崩溃后要么都在、要么都不在。
+- **定时器请求**：已随输出事务提交、`Fired` 未 append 时崩溃：重启第 4 步由出站请求处理器重派重新挂上（[outbound-requests.md §4.4 重启重派](outbound-requests.md#44-重启重派)）；`Fired` 已 append、消费它的 `Advance` 未提交时崩溃：cursor 没有越过它，下一次 `Advance` 重新交出，回调不会执行两次，也不会漏执行。
 - **孤儿宿主**：上一实例的宿主进程由继任实例第 1 步按进程表回收（[core-process/design.md §4.7.3 启动五步](design.md#473-启动五步)），这次宿主执行与它的交出随之结束。
 
 崩溃窗口 #10、#16、#18、#19、#21 的矩阵行在 [core-process/design.md §5.2 崩溃矩阵（#1–#21）](design.md#52-崩溃矩阵121)，上面是它们在本组件内的恢复动作。
@@ -697,14 +701,19 @@ sequenceDiagram
 
 卡点：无。步骤 4 的“待接纳项转为接纳或被拒”由集成会话编排的握手事务完成，本组件在该事务提交之后读结果，不参与事务。
 
-### 5.6 卡点
+### 5.6 程序规则时限（W1、W17 的时限变体）
 
-**卡点 1：程序可见的时间推进**（分类：接口不够）。
+主 trace：[core-process/design.md §5.1 W1（Q1）正常下单闭环](design.md#w1q1正常下单闭环)、[core-process/design.md §5.1 W17 程序 Emit 读处理器（fetch.bars）闭环走观察侧](design.md#w17-程序-emit-读处理器fetchbars闭环走观察侧)。
 
-- **场景**：程序规则含 `Expire(Deadline, _)`（程序规则时限，[program-host/design.md §3.3 解释②：决策](../program-host/design.md#33-解释②决策)），而在 `Deadline` 到达前后该程序的输入上没有新记录。受影响的是带时限规则的程序：W1、W17 中程序的决策若带时限即落在这里（[core-process/design.md §5.3 卡点](design.md#53-卡点)）；W10 的预算隔离不受影响。
-- **依据**：`Advance(events, to)`（§4.6.2）只交投递事件，没有时间输入，宿主只在有投递事件时被调度；程序可见的时间只有记录上带的时间（事件时间与本地收到时间，[README.md §2.2 机器与域共享的现象](../../README.md#22-机器与域共享的现象)），没有“此刻”。宿主进程不得读时钟，否则同一批事件给出不同 `Output`、崩溃重放不再确定（[program-host/design.md §3.4 不变量](../program-host/design.md#34-不变量)）。
-- **卡在哪**：`Deadline` 按哪个时钟比较、没有事件时由谁触发，设计里没有定义；本文不自行补定。
-- **关闭事件**：在本文 §4.6 定出程序可见的时间推进（它由谁产生、以什么形式交给宿主、是否进 `Checkpoint`、怎样重放），并同步 [program-host/design.md](../program-host/design.md) 的解释②与 §4.2；或从值树里删去 `Expire` 构造子（[core-process/design.md §3.12 组合子值树与五个 fold](design.md#312-组合子值树与五个-fold)），同步本文 §3.1 的程序值。
+1. 程序 P 的一次 `Advance`：一条规则走到 `Expire(t, k)`，t 由记录时间访问器与时长相加求得。宿主返回的 `Output.effects` 里有一条定时器请求，`Checkpoint` 里记下它的待触发项（[program-host/design.md §3.3 解释②：决策](../program-host/design.md#33-解释②决策)）。本组件查预算（意图速率计入这条），编排输出事务：出站请求处理器 append `EffectRequest{timer, …, member}`，`Checkpoint` 与 cursor 同事务。
+2. 提交之后分派：定时器处理器挂上唤醒（[outbound-requests.md §4.2 读处理器](outbound-requests.md#42-读处理器)）。P 的输入此后没有新记录，宿主不被调度。
+3. 下一次 `Advance`：宿主收到请求流上 P 自己的 `EffectRequest`（按 tag 绑定位置）；这一步可以与第 1 步之后的其他事件同批或稍后。
+4. 核心墙钟到 t：请求流 append `EffectResponse{Fired}`。投递调度把它作为请求流上的记录交给本组件，本组件组成 `Advance`；解释②从待触发集合移除该项并执行 k，k 的输出与新 `Checkpoint`、cursor 同一输出事务提交。
+5. 扩展路径：第 4 步的 `Advance` 输出事务提交之前核心崩溃：重启第 5 步从最近 `Checkpoint`（仍含待触发项）`Load`，cursor 在 `Fired` 之前，下一次 `Advance` 重新交出它，k 执行一次。
+6. 扩展路径：第 2 步之后、到点之前 P 被不沿用旧状态的替换：旧状态丢弃；`Fired` 在替换之后才 append，新成员收到它而没有待触发项，忽略。沿用的替换：新成员从 `Checkpoint` 继承待触发项，照常执行 k。
+7. 扩展路径：请求载荷里的 `fire_at` 解析不出 UTC 时刻（解释器写出的载荷不会如此，t 求不出值时这一步不生效、不发请求，[program-host/design.md §3.3 解释②：决策](../program-host/design.md#33-解释②决策)；这里是处理器对不可信载荷的判定）：`NotCalled(InvalidRequest)`，解释②移除该项，不执行 k。
+
+卡点：无。宿主进程不读时钟，时间只以请求流上的记录进入程序（§4.6.2）。
 
 ## 6 评估
 
@@ -713,6 +722,7 @@ sequenceDiagram
 - **敏感点：装载期的等待没有超时。** 卸载、替换与受控停止等子系统对交出的回答，核心不设超时（§4.4.2、§4.4.3）。子系统挂死时，卸载或替换不完成，受控停止以失败报告。这是有意的：结论的源头是子系统。影响 Q25 的运维可用性。
 - **权衡：执行事实输入投来作用域内全部 principal 的记录**（§3.4）。换来“宿主不做关联”；代价是预算消耗随作用域活跃度上升。
 - **权衡：输出只写值的变化**（§3.3）。订阅者看到的是当前值及其每次变化，值未变的 `Advance` 不额外写记录（每次都写的做法会让订阅者收到并未发生的变化，还让记录序列随分批而变；中间值的记录序列本就可以随分批不同，§3.3）；代价是写“值变了”的记录要读当前流 epoch 的最新一条值记录。
+- **权衡：程序规则时限走请求流**（§4.6.2）。换来宿主协议不带时间输入、重放确定、注册跨崩溃持久；代价是每个定时器在请求流上永久留两条记录、无取消（失效的照样触发并唤起一次 `Advance`），代价的细节在 [outbound-requests.md §6.1 权衡](outbound-requests.md#61-权衡)。
 - **非风险：可选子系统的跨平台验收**。本组件的接口只读“本实例有没有子系统”“已安装 op 集合”“交出是否被接受”三样，不依赖子系统内部的任何结果；子系统本身的验收在它自己的文档。
 
 ### 6.2 替代方案
@@ -752,7 +762,9 @@ sequenceDiagram
     - 在 `Advance` 输出持久化前崩溃，则该批记录整批重放，且无重复 `Emit`；
     - 在 `EffectRequest` 提交后、`EffectResponse` 持久化前崩溃，重启后每条请求恰得一条 `EffectResponse`，写请求至多一张 `Draft`；
     - 读结论记录被压缩后重启，不重派（崩溃矩阵 #21）；
-    - 替换时新程序不接受旧 `state_version`：同一 `Applied` 事务显式记录 `ProgramReset{Replace}`，而非静默丢失；`Output` 交出不被本成员接受的 `state_version` 按 trap 处理（#86），`Load` 从不因版本 `Reset`。
+    - 替换时新程序不接受旧 `state_version`：同一 `Applied` 事务显式记录 `ProgramReset{Replace}`，而非静默丢失；`Output` 交出不被本成员接受的 `state_version` 按 trap 处理（#86），`Load` 从不因版本 `Reset`；
+    - 程序规则时限：程序在 `Expire(t, k)` 生效之后没有任何新输入：核心墙钟到 t 之后请求流上恰有一条该定时器请求的 `EffectResponse{Fired}`，它的记录时间不早于 t；随后恰一次 `Advance` 交出它，k 恰执行一次；到 t 之前重启核心，重启本身不产生响应，到点照常 `Fired`；重启时已过 t 则重派即 `Fired`；`Fired` 已 append、消费它的 `Advance` 提交之前注入崩溃，重启后 k 仍只执行一次；
+    - 程序规则时限与替换：定时器未触发时做不沿用的替换（`ProgramReset`），之后的 `Fired` 仍 append、交给新成员而被忽略，不执行旧回调；沿用的替换之后，新成员执行旧成员发出的定时器的回调；宿主进程在全程没有读取时钟（以 fixture 宿主的时钟注入验证：改变宿主进程看到的时钟不改变任何 `Output`）。
 76. **`await-all` 只等证据**（§4.2.2）（对应 Q23/Q31）：一个程序以 `await-all` 声明两个输入的覆盖要求，其一的流没有 `joinable_venue_seq`：装载被拒，错误指出该输入；改为要求核心日志位置或声明等待窗口的同一程序可装载；两条流都有序号覆盖时，程序只在两者的覆盖都越过要求点后推进，事件时间与到达顺序都不使它提前。
 82. **程序的活动集合与失败抑制**（§3.2、§3.3、§4.1、§4.3、§4.4、§4.6）（对应 Q25）：
     - 超预算与 trap：同一事务 `ProgramHalted` + `ProgramFailed`（`ProgramHalted` 在控制流上），之后宿主被终止；核心重启后该程序不被装载；一条以位置引用该 `ProgramHalted` 的 `load_program` `Applied` 之后重新装载，从最近 `Checkpoint` `Load`；不引用它的控制记录不解除；

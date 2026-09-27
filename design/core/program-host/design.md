@@ -3,7 +3,7 @@
 - **层级与元素**：C4 L2 container：程序宿主进程（core 系统的第二个容器）。上级文档：[core/design.md §4.1 容器](../design.md#41-容器)。
 - **决定什么**：程序值在宿主进程里怎样被解释（派生与决策两种解释）、宿主进程内部拆成哪几个组件、宿主协议的每条消息在进程内怎样被满足、预算与 trap 在进程这一侧怎样成立。
 - **读者**：实现宿主二进制的人；审查程序隔离前提的人。审批者：维护者。
-- **状态**：评审中。程序规则时限的触发依赖宿主协议上一项尚未定义的时间输入（§5.4）；其余已定。
+- **状态**：已定。
 - **非目标**：
   - 宿主协议 `Load` / `Advance` / `Unload` 的规格、装载期两段校验、活动集合与失败抑制、`Advance` 输出事务、预算检查与状态迁移的核心侧：都在 [program-host-element.md §4.6 宿主协议](../core-process/program-host-element.md#46-宿主协议) 及同文相关节，本文把它们当输入。
   - 值树的构造子全集与五个 fold：[core-process/design.md §3.12 组合子值树与五个 fold](../core-process/design.md#312-组合子值树与五个-fold)。
@@ -72,11 +72,19 @@
 
 ### 3.3 解释②：决策
 
-- `rules`（`DecisionStep`：`On(Pattern, _)`、`Emit(EffectRequest)`、`Require(Guard, OnFail)`、`Expire(Deadline, _)`）解释为对日志的 fold。纯性由数据结构本身保证，不靠开发约定。[证据：fp-01 M7 Mercury Workflow]
+- `rules`（`DecisionStep`：`On(Pattern, _)`、`Emit(EffectRequest)`、`Require(Guard, OnFail)`、`Expire(Id, _)`）解释为对日志的 fold。纯性由数据结构本身保证，不靠开发约定。[证据：fp-01 M7 Mercury Workflow]
 - **唯一出口**：`Emit(EffectRequest{effect_kind, payload, basis})`。请求是值，不是调用；它随 `Output.effects` 交回，是否与何时被处理由核心的出站请求处理器决定（[outbound-requests.md §3.1 EffectRequest：唯一出口，请求是值](../core-process/outbound-requests.md#31-effectrequest唯一出口请求是值)）。请求不带调用方键。本进程没有任何写能力。
 - **解释②读的输入**：`facts` 声明的执行事实输入与该程序自己的请求流（隐含输入），另可读派生节点的值。解释①的节点不消费执行事实与请求流。
 - **请求进度跟踪**：程序对自己所发请求的记账——它发过哪些请求（在请求流上的位置由 `EffectRequest` 记录得知；程序按自己放进载荷的内容认出它们）、各自得到什么 `EffectResponse`、写请求之后的单据与尝试走到哪一步。解释②在进程内按自己的锚点（`Drafted(ticket_id)` 所指单据、`Close(Prepared(p))` 所给的 `p`）从执行事实输入里挑出属于自己的事实；请求流与 lane 流之间没有投递顺序，`Draft` 可能先于指向它的 `Drafted` 到达，按 `ticket_id` 两种次序都能匹配。本进程的投递接收不做关联，只按位置接收（[outbound-requests.md §6.1 权衡](../core-process/outbound-requests.md#61-权衡)）。
 - 这份记账只是程序自己的，写进 `Checkpoint`；放行与否仍由核心按执行事实判定，它不是任何门的输入。
+- **`Expire(t, k)` 的解释** [设计]：它按定义是一条定时器请求加一个等它响应的 `On`（[outbound-requests.md §3.1 EffectRequest：唯一出口，请求是值](../core-process/outbound-requests.md#31-effectrequest唯一出口请求是值)），决策解释用请求进度跟踪实现它，不另设机制：
+  - **生效**：这一步每生效一次，求出 t（派生节点的当前值，类型为 UTC 时刻）；t 求不出值时这一次不生效、不发请求。求得时发出一条 `EffectRequest{effect_kind: timer, payload: {fire_at: t, tag}, basis}`，并在待触发集合里记下 tag → k。
+  - **tag**：由解释器从 `Checkpoint` 里的一个计数确定性地生成，每发一条加一；作者不给 tag，两条规则的定时器不会撞号。
+  - **绑定位置**：请求流上该程序的 `EffectRequest` 记录到达时，按载荷里的 tag 认出它，把待触发项绑定到这条记录的位置。
+  - **触发**：请求流上 `EffectResponse.request` 指回已绑定位置、结果为 `Fired`，而该项仍在待触发集合里：先移除该项，再执行 k；移除、k 的输出与新 `Checkpoint` 随同一次 `Advance` 返回，由核心在同一输出事务里持久化。结果为 `NotCalled(InvalidRequest)`：移除该项，不执行 k。
+  - **回调是值**：k 以值存在 `Checkpoint` 里（去函数化的回调），触发时按当时的状态与派生节点的值求值。
+  - **没有取消**：已失效的定时器（例如它等的结果已先到）照样触发：待触发项还在，就照常移除并执行 k，由 k 自己判断是否还有事可做，“到时还没等到就放弃”写成 k = `Require(仍在等, …)`；待触发项已不在（不沿用旧状态的替换之后，状态里没有它）时，决策解释忽略它的 `Fired`。
+  - 待触发集合是请求进度跟踪的一部分，写进 `Checkpoint`，不进派生 DAG；时间只以 `Fired` 这条记录进入本进程，本进程不读时钟。
 
 ### 3.4 不变量
 
@@ -87,7 +95,7 @@
 | 本进程无写能力：Intent 是值，不是外部调用 | 进程只有一条通道，通向程序宿主元素；不持有凭据、不接触 SQLite 与集成 |
 | 本进程不做需要核心状态的校验，也不拒绝装载 | `Load` 只交来已通过两段校验的值（[program-host-element.md §4.2 装载期校验](../core-process/program-host-element.md#42-装载期校验)） |
 | 跨宿主执行的程序状态只经 `Checkpoint` | 进程内状态在进程退出时全部丢弃；`Load` 是唯一恢复入口 |
-| 同一批投递事件、同一 `Checkpoint` 给出同一 `Output` | 两种解释是纯语义；本进程不读时钟、不读随机源、不读投递事件之外的输入（时限触发的卡点见 §5.4） |
+| 同一批投递事件、同一 `Checkpoint` 给出同一 `Output` | 两种解释是纯语义；本进程不读时钟、不读随机源、不读投递事件之外的输入。程序看得到的时间只有记录上的：输入记录的记录时间，与请求流上定时器请求的 `Fired`（§3.3） |
 
 - 不选：**黑盒函数 `(State, Input) -> (State, Output)` 作程序**：见 [core-process/design.md §3.12 组合子值树与五个 fold](../core-process/design.md#312-组合子值树与五个-fold)；本容器因此只需一个解释器，不需要执行任意代码。
 
@@ -209,9 +217,17 @@ sequenceDiagram
 - 恢复者都是核心；本进程终止后没有要清理的持久状态。其他宿主进程是独立进程，不受影响。崩溃矩阵 #10、#16 的核心侧处置见 [core-process/design.md §5.2 崩溃矩阵（#1–#21）](../core-process/design.md#52-崩溃矩阵121)。
 - 走通，以 §1.2 的 [设计] 前提为条件：OS 能按进程限制 CPU / 内存并在超限时终止；它在三个目标 OS 上是否成立由验收 #15 实测，不成立即命中证伪 #3。
 
-### 5.4 卡点
+### 5.4 程序规则时限（W1、W17 时限变体的宿主细化）
 
-本进程对程序规则时限（`Expire(Deadline, _)`，§3.3）只能按宿主协议交来的输入推进：它不读时钟（§3.4），没有投递事件时不被调度。时限在没有新记录时怎样触发，是宿主协议缺一项时间输入的卡点，登记与关闭事件在 [program-host-element.md §5.6 卡点](../core-process/program-host-element.md#56-卡点)；那里定案之后，本文 §3.3 与 §4.2 随之写出进程内怎样消费这项输入。其余步骤没有卡点。
+主 trace：[core-process/design.md §5.1 W1（Q1）正常下单闭环](../core-process/design.md#w1q1正常下单闭环)、[core-process/design.md §5.1 W17](../core-process/design.md#w17-程序-emit-读处理器fetchbars闭环走观察侧)；程序宿主元素一侧的细化在 [program-host-element.md §5.6 程序规则时限（W1、W17 的时限变体）](../core-process/program-host-element.md#56-程序规则时限w1w17-的时限变体)。
+
+1. 一次 `Advance` 里决策解释走到 `Expire(t, k)`：向增量引擎读 t 的当前值（例如某输入最近一条记录的记录时间 + 30 s），得 UTC 时刻；从 `Checkpoint` 的计数取 tag 7，记下 7 → k，收集 `EffectRequest{timer, {fire_at: t, tag: 7}}` 进本批 `effects`。→ `Output` 带着新 `Checkpoint`（计数与待触发项都在里面）。
+2. 之后某批事件里有请求流上本程序 tag 7 的 `EffectRequest` 记录：决策解释把 7 绑定到它的位置。
+3. 之后没有任何输入，本进程不被调度，也不需要被调度。
+4. 核心墙钟到 t 之后，某批事件里有 `EffectResponse{request: 该位置, Fired}`：决策解释从待触发集合移除 7，执行 k，收集 k 的输出。→ `Output`。
+5. 变体：第 4 步之前 k 等的结果已先到：7 仍在待触发集合里，`Fired` 到达时照常移除 7、执行 k，k 里的 `Require(仍在等, …)` 不成立，这一步不再做事。本进程由不沿用旧状态的替换装载、集合为空时：`Fired` 到达时忽略。
+6. 变体：第 1 步 t 求不出值：这一步不生效，不发请求，不记待触发项。
+- 走通。本进程的每步都只用投递事件与 `Checkpoint`；改变本进程能读到的时钟不改变任何 `Output`。
 
 ## 6 评估
 

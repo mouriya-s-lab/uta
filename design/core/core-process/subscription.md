@@ -393,7 +393,7 @@ flowchart LR
 
 #### 覆盖检查点
 
-覆盖所依的记录会被保留边界推进删掉，所以保留边界推进要删掉当前 epoch 内的记录之前，本组件先把到新边界为止的 fold 状态作为健康观察 append：`{epoch, from, through, above, frozen, folded_below}`，键是逻辑流，按键保留（[observation-journal.md §2.4 保留：边界与删除规则](observation-journal.md#24-保留边界与删除规则)）。推进的判定与压缩的执行序列在 [observation-journal.md §3.2 控制动作 advance_retention(to: Set<LogPosition>)](observation-journal.md#32-控制动作-advance_retentionto-setlogposition)，其中压缩之前的一步就是请本组件写检查点。
+覆盖所依的记录会被保留边界推进删掉，所以保留边界推进要删掉当前 epoch 内的记录时，本组件把严格低于新边界的前缀的 fold 状态作为健康观察 append：`{epoch, from, through, above, frozen, folded_below}`，`folded_below` = 新边界，键是逻辑流，按键保留（[observation-journal.md §2.4 保留：边界与删除规则](observation-journal.md#24-保留边界与删除规则)）。它与新边界、`Applied` 和那次删除在同一个事务里提交，事务由观察 `Journal` 编排（[observation-journal.md §3.2 控制动作 advance_retention(to: Set<LogPosition>)](observation-journal.md#32-控制动作-advance_retentionto-setlogposition)），所以不存在边界已推进而检查点不在的持久状态。
 
 - `above` 是被删记录里序号不小于 `through` 的那些序号（按连续段记），缺口之后补到时 `through` 靠它越过。
 - `frozen` 记下到 `folded_below` 为止的计入状态：声明是否已撤去 `joinable_venue_seq`，以及被删的最近一条路由结论记录（带它的 `SessionEpoch`）是否确认整条流供给。R 在 e 之内，所以删 R 的就是这条规则里的删除，不另设触发。
@@ -440,7 +440,7 @@ flowchart LR
 | 集成会话 | 在它编排的握手事务里：重算需求与项的状态（§4.2）、待接纳项转为接纳或被拒、为开新 epoch 的逻辑流写 `None{epoch}`；在它编排的会话内上报 gap 的事务里：为该逻辑流写 `None{epoch}`，并为该流起或并入一项 `route` 义务 | 调用通道发 `route` 与 `backfill`、调用的封闭结果与计数观察的内容；最近声明（供给项接纳、配额）、历代声明出现过的流与作用域键（只投递项、执行事实 selector）、会话有效声明（回填判定、实际发出 `route`）；会话的建立与结束（义务的开始与丢弃） |
 | 程序宿主元素 | 各观察项的初次接纳结果；在它编排的 `Advance` 事务里写程序订阅的新 cursor、删被覆盖的投递缺口 | 历代开始成员的 `Applied` 所记的输出契约（流名与值类型），作 `Program(_)` 来源的接纳依据；本组件不读 `Applied` 本身 |
 | 控制面 | 在开始、替换、卸载成员的 `Applied` 事务里建立、沿用、重建与结束程序订阅及其项（§4.7）；`rewind_cursor` 的判定与写入（§4.1） | 控制动作的授权与控制记录（[control-plane.md §4.2 共同流程](control-plane.md#42-共同流程)） |
-| 观察 Journal | append 路由结论记录、回填记录与读结论记录、`backfill_incomplete`、回填进度与覆盖检查点的健康观察、回填的 `Gap{origin: Channel}` | 读路由结论记录、推送与回填记录上的序号、声明版本（序号覆盖的 fold）；保留边界（接纳时的 `BeyondRetention`）；推进保留边界之前被请求写覆盖检查点 |
+| 观察 Journal | append 路由结论记录、回填记录与读结论记录、`backfill_incomplete`、回填进度与覆盖检查点的健康观察、回填的 `Gap{origin: Channel}` | 读路由结论记录、推送与回填记录上的序号、声明版本（序号覆盖的 fold）；保留边界（接纳时的 `BeyondRetention`）；在它编排的保留边界推进事务里被请求写覆盖检查点 |
 | 会话入口 | 按 principal 重新挂接的订阅集合 | 消费方会话的 principal |
 | 读模型 | 订阅表的当前态（`subscriptions`，只列消费方订阅） | — |
 
@@ -495,7 +495,7 @@ flowchart LR
 
 ### 5.5 序号覆盖的压缩与重启
 
-`live_from = 10`，R（`All`，`refused` 空）已在 e 上。序号 10、12 到达并计入：`through = 11`。`advance_retention` 要删掉这两条记录：观察 Journal 在压缩之前请本组件写覆盖检查点 `{e, from = 10, through = 11, above = [12], frozen, folded_below}`。压缩之后序号 11 到达：fold 从检查点起接着读，`through` 越过 11 与 `above` 里的 12，为 13。重启核心：覆盖从检查点与 `folded_below` 及以上的记录重建，与压缩前相同，不读订阅表。
+`live_from = 10`，R（`All`，`refused` 空）已在 e 上。序号 10、12 到达并计入：`through = 11`。`advance_retention` 要删掉这两条记录：观察 Journal 编排的推进事务里，本组件写覆盖检查点 `{e, from = 10, through = 11, above = [12], frozen, folded_below}`，与新边界和删除一起提交。压缩之后序号 11 到达：fold 从检查点起接着读，`through` 越过 11 与 `above` 里的 12，为 13。重启核心：覆盖从检查点与 `folded_below` 及以上的记录重建，与压缩前相同，不读订阅表。
 
 ### 5.6 程序订阅：替换与 `Reset`
 
@@ -515,13 +515,13 @@ flowchart LR
 | 投递缺口写下之后、确认之前 | 缺口在订阅表里 | 重新挂接时先于 `to` 之后的记录交出 |
 | `Routed` 已返回、路由结论记录未提交 | 无记录 | 义务在内存里随实例结束；重启后会话建立时按需求重新起 `route` |
 | `Covered` 已返回、读结论未提交 | 无结果记录、无读结论、进度不变 | 从最近的读结论续；同 epoch 无重复 |
-| 保留边界推进时覆盖检查点已提交、压缩未完成 | 检查点在健康流上 | 检查点只说 `folded_below` 之下，与记录并存无矛盾；重启后是否继续这次压缩未定义（[observation-journal.md §5 走查](observation-journal.md#5-走查) 卡点 1） |
+| 保留边界推进的事务中途 | 边界、`Applied`、覆盖检查点与删除都不在 | 覆盖照旧从原记录 fold；动作没有结论、不生效（[observation-journal.md §5 走查](observation-journal.md#5-走查) 走查 4）。事务提交之后崩溃则四者都在，覆盖从检查点接着 fold |
 
 ### 5.8 卡点
 
 走查中核对了两处跨组件的衔接，均已由上级接口承担，不是本组件的卡点：
 
-- [设计] 观察 Journal 在压缩当前流 epoch 的记录之前请求本组件 append 覆盖检查点（§4.8）。这是旧设计“删行之前由持久订阅先写检查点”这一先后规则在组件协作上的落实：它定的是谁向谁请求，不改变覆盖的代数，也不解决推进之后、压缩完成之前的崩溃窗口（[observation-journal.md §5 走查](observation-journal.md#5-走查) 卡点 1）。[core-process/design.md §4.3.1 uses 图](design.md#431-uses-图) 里“观察 J → 持久订阅：请写覆盖检查点”一条与此一致。
+- [设计] 观察 Journal 在编排 `advance_retention` 生效事务时请求本组件在同一事务里 append 覆盖检查点（§4.8）。它保证被删的记录与留存它们 fold 结果的检查点同时成立：定的是谁向谁请求、在哪个事务里写，不改变覆盖的代数；推进没有中间态。[core-process/design.md §4.3.1 uses 图](design.md#431-uses-图) 里“观察 J → 持久订阅：请写覆盖检查点”一条与此一致。
 - 程序 `await-all` 输入的覆盖推进由本组件的序号覆盖给出、经投递调度组成投递事件；上级 uses 图里“程序宿主元素向投递调度取覆盖推进”一条已覆盖取得路径，本组件对投递调度提供覆盖当前值（§4.8）。
 
 ## 6 评估
@@ -581,7 +581,7 @@ flowchart LR
   - 会话内集成上报 `Gap{origin: Source}` 开新流 epoch：核心为它重发 `route`，新 epoch 有自己的路由结论记录，覆盖只计入其中确认之后的推送，上一 epoch 的路由结论记录不使新 epoch 的推送计入；
   - 流 epoch 以 `Gap{origin: Source}` 结束：该 epoch 的覆盖不再变化，`through` 处的缺口不被闭合，新 epoch 的覆盖从新的 `live_from` 起；
   - 一次性读、回执与取证结果上的序号不推进覆盖；
-  - `advance_retention` 删掉当前 epoch 的记录之前，健康流上出现该逻辑流的覆盖检查点；`live_from` = 10，序号 10、12 到达后二者都被删掉，之后序号 11 到达：`through` 为 13（检查点的 `above` 记着 12）；epoch 中途重握手去掉 `joinable_venue_seq` 后再压缩：覆盖仍停在当时的值；之后重启核心，覆盖与压缩前相同，对 `as_of ≥ folded_below` 的读与压缩前相等。
+  - `advance_retention` 删掉当前 epoch 的记录时，同一事务里健康流上出现该逻辑流的覆盖检查点；`live_from` = 10，序号 10、12 到达后二者都被删掉，之后序号 11 到达：`through` 为 13（检查点的 `above` 记着 12）；epoch 中途重握手去掉 `joinable_venue_seq` 后再压缩：覆盖仍停在当时的值；之后重启核心，覆盖与压缩前相同，对 `as_of ≥ folded_below` 的读与压缩前相等。
 - **验收 #70 投递缺口的生命周期**（对应 Q12/Q29）：一个 `latest` 订阅的投递缓冲耗尽，被停投、跳过一段：
   - 在持久订阅写下缺口 `{流, from, to, reason}` 之前注入崩溃：重启后没有被跳过的记录，投递从原 cursor 续；写下之后崩溃：缺口仍在订阅表里，重新挂接时先于 `to` 之后的记录交出；
   - 观察 `Journal` 上没有任何投递缺口记录，同一流的其他订阅者与 `read_model` 的 `gaps` 都看不到它；`subscriptions` 对该（订阅，流）列出它；

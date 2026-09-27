@@ -134,7 +134,7 @@ venue 词汇不越过集成 [域 B6]。
 
 | 链路 | 锚点 |
 |---|---|
-| 观察记录 | `StreamId(source, stream, epoch)`、`received_at`；`session_epoch`（记录到达的会话通道；一次性读的 `Gap{origin: Channel}` 由核心记下，取发出这次调用的会话，[one-shot-read.md §4.1 核心→集成：read](one-shot-read.md#41-核心集成readstream-request-range--answered--unavailable--refused)）与 `LogPosition` 由核心在接受时盖上，集成不填 |
+| 观察记录 | `StreamId(source, stream, epoch)`、`received_at`；`session_epoch`（记录到达的会话通道；一次性读的 `Gap{origin: Channel}` 由核心记下，取发出这次调用的会话，[one-shot-read.md §4.1 核心→集成：read](one-shot-read.md#41-核心集成readstream-request-range--answered--unavailable--refused)）、记录时间与 `LogPosition` 由核心在接受时盖上，集成不填 |
 | 意图 | `principal`、`WriteLaneKey`（不透明，由集成从上游账户结构对齐得出）、`OperationKind`、`basis`（可为空集，但必须存在） |
 | 撤单 / 改单意图 | 上述 + `target: VenueRef \| IdemKey`（构造前提，[ticket.md §4.5 交易协议：操作种类、目标、可执行性、检查目录](ticket.md#45-交易协议操作种类目标可执行性检查目录-交易协议)） |
 | 平仓意图 | 上述 + `target: PositionRef`（核心在接纳边界从 `basis` 中所指、属目标作用域的持仓观察记录构造） |
@@ -142,6 +142,7 @@ venue 词汇不越过集成 [域 B6]。
 | 订阅 | 选择器（观察流：来源、流、主体集；或执行事实：来源、作用域）、消费方式 |
 
 - 集成送来的记录走观察链路：本组件验证观察记录的锚点。意图、尝试与订阅链路的锚点由核心自己的入口构造（意图的构造前提见 [ticket.md §3.4 参数合规：意图参数 schema](ticket.md#34-参数合规意图参数-schema-设计)，订阅见 [subscription.md §4.1 核心↔解释层：订阅组与 rewind_cursor](subscription.md#41-核心解释层订阅组与-rewind_cursor)），同一张表给出它们的必填集合。
+- **记录时间**是每条记录（观察与执行事实）信封上的锚点，由核心 append 时按本地墙钟盖上，类型为 UTC 时刻（加单调计数）；它是核心自己的时间，与集成填写的 `received_at` 不是同一个字段（[core-process/design.md §3.8 基础值类型](design.md#38-基础值类型)）。程序值经记录时间访问器读它，不经 `payload_schema`（[core-process/design.md §3.12 组合子值树与五个 fold](design.md#312-组合子值树与五个-fold)）。
 - **边界拒绝**：缺锚点，或被路由的状态字段取了契约词表之外的值，这条记录是畸形记录：不 append、不分配位置、不触发任何处理器。它不是规则否决，也不是流的断代。
 
 ### 3.2 处理器字段注册表
