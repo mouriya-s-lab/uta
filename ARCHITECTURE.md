@@ -51,7 +51,7 @@ flowchart TB
 | `uta-effect` | [单据](design/core/core-process/ticket.md#单据含交易协议)、[STS 规则链](design/core/core-process/decision-chain.md#sts-规则链含规则文件内容)、[lane 驱动](design/core/core-process/lane.md#lane-驱动)、[IO 壳](design/core/core-process/io-shell.md#io-壳含对账放弃跟踪恢复)、[归因处理器](design/core/core-process/design.md#44-效应侧归因处理器)、[出站请求处理器](design/core/core-process/outbound-requests.md#出站请求处理器)、[读模型](design/core/core-process/read-model.md#读模型)、[控制面](design/core/core-process/control-plane.md#控制面)、[会话入口](design/core/core-process/session-entry.md#会话入口) | 效应侧，依赖 `uta-observe`、`uta-program`、`uta-session` |
 | `uta-api` | 核心↔解释层 IDL（各操作的规格见 [核心进程 §4.2 对外接口总表](design/core/core-process/design.md#42-对外接口总表)），只在本仓库内部使用 | 值层 |
 | `uta-cli` | 解释层（`design/downstream/design.md`） | 依赖 `uta-api`，不依赖核心内部 crate |
-| `uta-host` | [程序宿主进程](design/core/program-host/design.md#程序宿主进程)与值树解释器 | 外部进程 |
+| `uta-host` | [程序宿主进程](design/core/program-host/design.md#程序宿主进程)：值树解释器、派生 DAG 的增量引擎（[§3.2 解释①：派生](design/core/program-host/design.md#32-解释①派生)）、决策解释与 `Checkpoint` 序列化（[§4.1 组件](design/core/program-host/design.md#41-组件)） | 外部进程 |
 | `uta-mapping`、`uta-conformance` | 记录映射解释器、一致性测试与 fixture 上游（[集成部分 §4.3 发布物](design/integration/design.md#43-发布物)、[§5.2 一致性测试](design/integration/design.md#52-一致性测试)） | 随 release 发布 |
 
 [核心进程 §4.3.1 uses 图](design/core/core-process/design.md#431-uses-图)里有三对元素互相使用：持久订阅↔集成会话、持久订阅↔程序宿主元素、持久订阅↔投递调度。crate 之间不能循环依赖。所以规定：下层 crate 定义回调 trait，上层 crate 实现它。例如集成会话编排握手事务时，要请持久订阅写 `None{epoch}`，这个 trait 就定义在 `uta-session`，由 `uta-observe` 实现。每对元素里，两个方向经过的仍然只是公共值（[核心进程 §4.3.2 三对互用](design/core/core-process/design.md#432-三对互用)）。
@@ -80,7 +80,7 @@ flowchart TB
    - 一条通道由一个 peer 任务持有，同一个任务还持有该通道的在途调用表；其他任务只拿到 `PeerHandle`（mpsc 发送端）。
    - 不用 `Arc<Mutex<_>>` 包裹 I/O 或生命周期状态。
    - 跨线程只移动拥有所有权的值：`Command` 各变体只携带自有数据和 `oneshot` 回复端。
-6. **载荷字节不复制。** 收到的帧转成 `Bytes` 后，`params` / `result` 用 `Bytes::slice_ref` 从帧上切片交出；核心不解析的载荷一直以 `Bytes` 流转到存储和下游（[envelope.md §2.6 信封解析，载荷直通](design/core/core-process/envelope.md#26-信封解析载荷直通)）。
+6. **载荷字节不复制。** 收到的帧转成 `Bytes` 后，`params` / `result` 用 `Bytes::slice_ref` 从帧上切片交出；核心不解析的载荷一直以 `Bytes` 流转到存储和下游（[envelope.md §2.1 信封之于核心，如主键之于数据库](design/core/core-process/envelope.md#21-信封之于核心如主键之于数据库)、[§2.2 三部分](design/core/core-process/envelope.md#22-三部分-设计)）。
 7. **生命周期内层先结束。** 拥有者先结束自己的内层，再结束自己。例如 `CoreHandle::stop` 消费句柄，join 核心线程之后才返回，主线程随后才释放锁；peer 结束时先让全部在途调用以 `Closed` 完成，再丢掉传输。
 
 ## 5 状态所有权表
@@ -108,7 +108,7 @@ flowchart TB
 | 核心铸造的标识（`InstanceId`、将来的 `SessionEpoch`、`LogPosition`） | `Copy`、`Eq`、`Ord`、`Hash`、`Debug` | `Deserialize`、公开构造器 | 源头是核心；从自己的库里读回时，由铸造它的 crate 解码 |
 | 证明（`CurrentInstance`、`ExitConfirmed`、`Responder`、将来的 `SendBarrier`） | `Debug`，加 `#[must_use]` | `Clone`、`Copy`、`Default`、`Serialize`、`Deserialize` | 用一次即失效，不能伪造 |
 | 线缆 DTO（将来的 `uta-contract`、`uta-api`） | `Serialize`、`Deserialize`、`JsonSchema` | 在 DTO 上附加业务方法 | DTO 由 `TryFrom` 消费、转成领域类型；schema 从 DTO 生成，不另外手写 |
-| 值树（[core/design.md §3.2](design/core/design.md#32-组合子值树与五个-fold) `Program`、`DerivationNode`） | `Serialize`、`Deserialize`、`JsonSchema` | — | 值本身就是权威表示（[program-host-element.md §3.1](design/core/core-process/program-host-element.md#31-程序值)），装载期校验之后包成私有构造的已校验类型 |
+| 值树（[core-process/design.md §3.12 组合子值树与五个 fold](design/core/core-process/design.md#312-组合子值树与五个-fold) `Program`、`DerivationNode`） | `Serialize`、`Deserialize`、`JsonSchema` | — | 值本身就是权威表示（[program-host-element.md §3.1](design/core/core-process/program-host-element.md#31-程序值)），装载期校验之后包成私有构造的已校验类型 |
 | 结果与生命周期状态 | 闭合 enum，`match` 必须穷尽 | 用布尔组合或只在部分状态下有效的 `Option` 字段表示状态 | 例如 `InstanceEnd::{Stopped, NoEndAnchor}`、`CallError`、`PeerEnd` |
 
 ## 7 线缆约定
@@ -135,7 +135,7 @@ flowchart TB
 ## 8 存储
 
 - 单个 SQLite 文件，WAL 模式，`synchronous=FULL`：`COMMIT` 返回时 WAL 已经同步到磁盘。[io-shell.md §4.2](design/core/core-process/io-shell.md#42-发送屏障与发出前门) 要求 `SendBarrier` 先 durable 再发送，这一点由此成立。
-- 写命令对应一个 `BEGIN IMMEDIATE` 事务，读命令是一条语句。把多个命令合进一次提交（group commit）只作为验收 #19（[core/design.md §6.3](design/core/design.md#63-验收标准)）实测之后的优化，而且不能拆散设计里要求同事务的记录集合。
+- 写命令对应一个 `BEGIN IMMEDIATE` 事务，读命令是一条语句。把多个命令合进一次提交（group commit）只作为验收 #19（[core-process/design.md §6.3 验收标准](design/core/core-process/design.md#63-验收标准)）实测之后的优化，而且不能拆散设计里要求同事务的记录集合。
 - 格式版本记在 `schema_meta`。`MIGRATIONS[n]` 把 n 迁到 n+1，所有待执行的迁移在同一个事务里完成，所以文件只可能是旧版本或新版本（[storage.md §2.5](design/core/core-process/storage.md#25-格式版本只前进-设计)）。遇到版本更高的文件，拒绝打开。
 - SQLite 的访问只由构造保证：只有核心线程持有读写连接。没有使用 `locking_mode=EXCLUSIVE`：进程间的互斥已经由 OS 锁保证，而 EXCLUSIVE 会挡住后续投递要用的进程内只读连接。只读连接只能看到已提交的数据。
 

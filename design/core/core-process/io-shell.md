@@ -579,8 +579,8 @@ flowchart TB
 
 **W2 的 IO 壳细化（Q2+Q3）。**
 
-1. `SendBarrier(p)` fsync 后、回执前核心 `kill -9`。重启第 4 步：p 有 `SendBarrier` 无后继 → `Undetermined(CrashWindow)`，同事务回查已到达的归因观察。
-2. 新会话建立之前不取证、不记 `Gap`。会话建立后：by-key `query_by_key(K(p), key_role, scope, barrier_at)` → `Found` → 同事务观察记录 + `ResolutionEvidence{ByKey, Found}`；或 `Absent`（唯一期内）→ 结果确立；或 `Unavailable` → `Gap{Channel}`、同渠道再发。无 by-key：listing → fills → replay，未命中各 `Inconclusive`，穷尽停等。
+1. `SendBarrier(p)` fsync 后、回执前核心 `kill -9`。重启第 2 步：p 有 `SendBarrier` 无后继 → `Undetermined(CrashWindow)`，同事务回查已到达的归因观察；这一步不接触任何集成。
+2. 重启第 3 步为该集成建立新会话；会话建立之前不取证、不记 `Gap`。第 4 步起取证：by-key `query_by_key(K(p), key_role, scope, barrier_at)` → `Found` → 同事务观察记录 + `ResolutionEvidence{ByKey, Found}`；或 `Absent`（唯一期内）→ 结果确立；或 `Unavailable` → `Gap{Channel}`、同渠道再发。无 by-key：listing → fills → replay，未命中各 `Inconclusive`，穷尽停等。
 3. 停等中 principal `abandon(p, note)`：停发新取证 → 等在途调用完成并 append → 一个事务重查仍未知 → `Abandoned`。p 移出集合、保留钉释放。
 4. 迟到回执：集成在新会话上以观察记录重送、填 `FromAttempt(p)` → 同事务 `ResolutionEvidence{p, Attributed, Found}`；p 已 `Abandoned` 时只补结果。
 5. 脑裂变体：旧核心的集成进程 A 可能把 `submit` 送达 venue；A 的通道只通向已退出的旧核心，新核心不读它。安全性来自三条不变量：`SendBarrier` durable = 可能已发出；阻塞头集合非空时同 lane 无新普通写；对账经新会话独立收敛。fixture venue 调用 ≤ 1。

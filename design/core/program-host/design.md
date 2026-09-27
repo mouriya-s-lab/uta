@@ -3,10 +3,10 @@
 - **层级与元素**：C4 L2 container：程序宿主进程（core 系统的第二个容器）。上级文档：[core/design.md §4.1 容器](../design.md#41-容器)。
 - **决定什么**：程序值在宿主进程里怎样被解释（派生与决策两种解释）、宿主进程内部拆成哪几个组件、宿主协议的每条消息在进程内怎样被满足、预算与 trap 在进程这一侧怎样成立。
 - **读者**：实现宿主二进制的人；审查程序隔离前提的人。审批者：维护者。
-- **状态**：评审中。§5.4 有一条未关闭的卡点（程序可见的时间推进）；其余已定。
+- **状态**：评审中。程序规则时限的触发依赖宿主协议上一项尚未定义的时间输入（§5.4）；其余已定。
 - **非目标**：
   - 宿主协议 `Load` / `Advance` / `Unload` 的规格、装载期两段校验、活动集合与失败抑制、`Advance` 输出事务、预算检查与状态迁移的核心侧：都在 [program-host-element.md §4.6 宿主协议](../core-process/program-host-element.md#46-宿主协议) 及同文相关节，本文把它们当输入。
-  - 值树的构造子全集与五个 fold：[core/design.md §3.2 组合子值树与五个 fold](../design.md#32-组合子值树与五个-fold)。
+  - 值树的构造子全集与五个 fold：[core-process/design.md §3.12 组合子值树与五个 fold](../core-process/design.md#312-组合子值树与五个-fold)。
   - 程序值的类型（`Program`、`InputDecl`、`FactDecl`、`Output`）与输出记录的形状、`basis` 契约：[program-host-element.md §3.1 程序值](../core-process/program-host-element.md#31-程序值)、[program-host-element.md §3.3 输出契约与程序流](../core-process/program-host-element.md#33-输出契约与程序流)。
   - 可选行情派生计算子系统的内部；本文只写宿主进程怎样把 `Pooled` 与原生 op 当作值树里的节点求值。
 
@@ -27,7 +27,7 @@
 
 ### 1.2 本容器直接面对的域
 
-- **OS 进程机制** [证据：`investigation/rust-feasibility.md`]：CPU 时间与内存可按进程限制（POSIX 上 rlimit，Windows 上 job object）；超限时由 OS 终止进程；进程退出由 OS 确认。这是本容器能给出预算与 kill 语义的唯一依据，也是证伪 #3 所指的假设（§6.2）。
+- **OS 进程机制**：进程退出由 OS 确认，子进程可由父进程终止 [证据：`investigation/rust-feasibility.md` §9，`Child` wait/kill 与按进程组 / job object 管理子进程树]。CPU 时间与内存能按进程设上限（POSIX 上 rlimit，Windows 上 job object）、超限由 OS 终止进程，是沿用旧设计的 [设计] 前提，不是已证的域性质：现有调查没有给出三个目标 OS 上的 CPU / 内存配额 API、预算粒度与超限行为的实测。这一前提是本容器能给出预算与 kill 语义的依据，由证伪 #3（§6.3）与验收 #15（§6.4）检验。
 - **三个目标 OS**：macOS、Windows、Linux（[README.md §3.2 运行目标](../../README.md#运行目标)，H8）。宿主二进制是普通 Rust 程序，不依赖额外运行时。
 - **程序作者**：AI；它写的程序值可能在求值时不终止、分配无界内存、每批产出大量请求、给出无法序列化的状态（H2）。
 - **本进程接触不到的**：SQLite 文件、凭据封存文件与任何凭据、集成通道。它只经宿主协议与核心里的程序宿主元素交换值（C7、H2）。
@@ -46,7 +46,7 @@
 
 - **Q25（程序超预算隔离）**，定义见 [README.md §3.1 质量场景](../../README.md#31-质量场景)。本容器的响应度量：死循环、超内存的程序在装载时声明的 CPU / 内存预算内被 OS 终止；进程终止不影响任何其他宿主进程与核心进程的响应度量。超意图速率与超状态大小的判定不在本进程（核心在 `Output` 上检查），本进程只需在每次 `Advance` 返回里如实给出全部 `effects` 与完整 `checkpoint`。
 - **约束 K1**（独立进程、跨进程通讯为序列化文本或跨语言 RPC）：本容器是独立进程，与核心的消息走同一份 IDL（[core-process/design.md §4.2 对外接口总表](../core-process/design.md#42-对外接口总表)）。
-- **可预算、可静态检查**：程序是封闭值树，不是黑盒函数（[core/design.md §3.2 组合子值树与五个 fold](../design.md#32-组合子值树与五个-fold)）。本容器不得引入使预算或静态检查失效的机制（例如在解释器里执行程序作者提供的任意代码）。原生 op 的代码只在可选子系统里运行，不在本进程里（§3.2）。
+- **可预算、可静态检查**：程序是封闭值树，不是黑盒函数（[core-process/design.md §3.12 组合子值树与五个 fold](../core-process/design.md#312-组合子值树与五个-fold)）。本容器不得引入使预算或静态检查失效的机制（例如在解释器里执行程序作者提供的任意代码）。原生 op 的代码只在可选子系统里运行，不在本进程里（§3.2）。
 
 ## 3 模型
 
@@ -87,9 +87,9 @@
 | 本进程无写能力：Intent 是值，不是外部调用 | 进程只有一条通道，通向程序宿主元素；不持有凭据、不接触 SQLite 与集成 |
 | 本进程不做需要核心状态的校验，也不拒绝装载 | `Load` 只交来已通过两段校验的值（[program-host-element.md §4.2 装载期校验](../core-process/program-host-element.md#42-装载期校验)） |
 | 跨宿主执行的程序状态只经 `Checkpoint` | 进程内状态在进程退出时全部丢弃；`Load` 是唯一恢复入口 |
-| 同一批投递事件、同一 `Checkpoint` 给出同一 `Output` | 两种解释是纯语义；本进程不读时钟、不读随机源、不读投递事件之外的输入（参见 §5.4 卡点） |
+| 同一批投递事件、同一 `Checkpoint` 给出同一 `Output` | 两种解释是纯语义；本进程不读时钟、不读随机源、不读投递事件之外的输入（时限触发的卡点见 §5.4） |
 
-- 不选：**黑盒函数 `(State, Input) -> (State, Output)` 作程序**：见 [core/design.md §3.2 组合子值树与五个 fold](../design.md#32-组合子值树与五个-fold)；本容器因此只需一个解释器，不需要执行任意代码。
+- 不选：**黑盒函数 `(State, Input) -> (State, Output)` 作程序**：见 [core-process/design.md §3.12 组合子值树与五个 fold](../core-process/design.md#312-组合子值树与五个-fold)；本容器因此只需一个解释器，不需要执行任意代码。
 
 ## 4 结构
 
@@ -127,7 +127,7 @@ flowchart LR
 | 决策解释 | `rules` 的 fold 状态与请求进度跟踪 | 模式匹配与锚点关联的实现 | 执行事实与请求流按位置交来，两流之间无序 |
 | `Checkpoint` 序列化 | `Checkpoint{bytes, state_version}` 的格式 | 字节布局；`state_version` 与格式的对应 | 核心把 `bytes` 当作不透明值存取 |
 
-- 值树解释器与增量引擎是两件事：前者回答“一个节点对给定输入的值是什么”，后者回答“这批推进之后哪些节点要重新问”。把它们分开，求值 fold 就能与核心进程里规则、检查项、处理器的求值共用同一份解释器代码（[core/design.md §3.2 组合子值树与五个 fold](../design.md#32-组合子值树与五个-fold)），增量调度只属于本进程。
+- 值树解释器与增量引擎是两件事：前者回答“一个节点对给定输入的值是什么”，后者回答“这批推进之后哪些节点要重新问”。把它们分开，求值 fold 就能与核心进程里规则、检查项、处理器的求值共用同一份解释器代码（[core-process/design.md §3.12 组合子值树与五个 fold](../core-process/design.md#312-组合子值树与五个-fold)），增量调度只属于本进程。
 - `state_version` 标识 `bytes` 的格式。它由宿主二进制的版本决定；核心据装载成员的 `Applied` 所记的接受集合判定能否交回（[program-host-element.md §4.5 Reset 与状态迁移](../core-process/program-host-element.md#45-reset-与状态迁移)）。本进程在 `Loaded{state_version}` 与每个 `Output.checkpoint` 里如实给出，不自行迁移旧格式。
 
 ### 4.2 宿主协议在进程内怎样被满足
@@ -207,16 +207,11 @@ sequenceDiagram
 4. **`Advance` 迟迟不答**：核心的时限到，视同 trap 并终止本进程。
 5. **`Checkpoint` 版本不被本成员接受**：核心视同 trap。
 - 恢复者都是核心；本进程终止后没有要清理的持久状态。其他宿主进程是独立进程，不受影响。崩溃矩阵 #10、#16 的核心侧处置见 [core-process/design.md §5.2 崩溃矩阵（#1–#21）](../core-process/design.md#52-崩溃矩阵121)。
-- 走通（前提：证伪 #3 所指的 OS 能力在三个目标 OS 上成立，由验收 #15 实测）。
+- 走通，以 §1.2 的 [设计] 前提为条件：OS 能按进程限制 CPU / 内存并在超限时终止；它在三个目标 OS 上是否成立由验收 #15 实测，不成立即命中证伪 #3。
 
 ### 5.4 卡点
 
-**卡点 1：程序可见的时间推进**（分类：缺概念）。
-
-- **场景**：程序规则含 `Expire(Deadline, _)`（程序规则时限），而在 `Deadline` 到达前后该程序的输入上没有新记录。受影响的是任何带时限规则的程序：W1、W17 中程序的决策若带时限即落在这里；W10 的预算隔离不受影响。
-- **依据**：`DecisionStep` 定义了 `Expire(Deadline, _)`（§3.3），词表只称它“程序规则时限”；宿主协议的 `Advance(events, to)`（[program-host-element.md §4.6.2 Advance](../core-process/program-host-element.md#462-advanceevents-to-cursor--outputeffects-derivations-checkpoint)）只交投递事件，没有时间输入，宿主只在有投递事件时被调度；程序可见的时间只有记录上带的时间（事件时间与本地收到时间，[README.md §2.2 机器与域共享的现象](../../README.md#22-机器与域共享的现象)），没有“此刻”。
-- **卡在哪**：本进程不得读时钟（§3.4 最后一条不变量，否则同一批事件给出不同 `Output`、崩溃重放不再确定），所以 `Deadline` 按哪个时钟比较、没有事件时由谁触发，设计里没有定义；本文不自行补定。
-- **关闭事件**：在 [program-host-element.md §4.6 宿主协议](../core-process/program-host-element.md#46-宿主协议) 定出程序可见的时间推进（它由谁产生、以什么形式交给程序、是否进 `Checkpoint`），并同步本文 §3.3、§4.2、§5.1；或从值树里删去 `Expire` 构造子（[core/design.md §3.2 组合子值树与五个 fold](../design.md#32-组合子值树与五个-fold)）。
+本进程对程序规则时限（`Expire(Deadline, _)`，§3.3）只能按宿主协议交来的输入推进：它不读时钟（§3.4），没有投递事件时不被调度。时限在没有新记录时怎样触发，是宿主协议缺一项时间输入的卡点，登记与关闭事件在 [program-host-element.md §5.6 卡点](../core-process/program-host-element.md#56-卡点)；那里定案之后，本文 §3.3 与 §4.2 随之写出进程内怎样消费这项输入。其余步骤没有卡点。
 
 ## 6 评估
 

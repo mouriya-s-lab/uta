@@ -3,10 +3,10 @@
 ## 0 定位
 
 - **层级与元素**：C4 L2（container），元素是 core 系统里的**核心进程**：独占状态库、持有两侧 `Journal`、单据、lane、IO 壳、订阅表与读模型的那一个 OS 进程。上级文档：[core/design.md §4.1 容器](../design.md#41-容器)。同一系统里的另一个容器是程序宿主进程（[program-host/design.md](../program-host/design.md)）。
-- **本文决定什么**：核心进程内部的模型（两类记录、两个类型宇宙与唯一边、位置与进度、gap 的分类、读写两类副作用、无锁定位）；它分解成哪些组件、每个组件拥有与隐藏什么；组件之间的接口（uses、同事务集合、调用结果与计数的提交、保留引用的登记与解除、执行事实的唯一写入口）；持久化、统一路径文件、进程生命周期（启动五步与受控停止）三个视图；W1–W20 的组件级走查与崩溃矩阵 #1–#21。
+- **本文决定什么**：核心进程内部的模型（两类记录、两个类型宇宙与唯一边、位置与进度、gap 的分类、读写两类副作用、无锁定位，以及本进程定义、程序宿主进程与集成部分共用的组合子值树与五个 fold）；它分解成哪些组件、每个组件拥有与隐藏什么；组件之间的接口（uses、同事务集合、调用结果与计数的提交、保留引用的登记与解除、执行事实的唯一写入口）；持久化、统一路径文件、进程生命周期（启动五步与受控停止）三个视图；W1–W20 的组件级走查与崩溃矩阵 #1–#21。
 - **不在本文**：任何组件的内部（状态机、转移表、每个对外操作的规格），它们写在各组件文档，本文以链接指过去；对外操作的完整规格也在实现它的组件文档（本文 §4.2 只给总表）；全局原则、问题域登记与需求编号（[README.md §2 问题域](../../README.md#2-问题域)）；程序宿主进程内部（[program-host/design.md](../program-host/design.md)）；集成与解释层两个部分的内部（[integration/design.md](../../integration/design.md)、[downstream/design.md](../../downstream/design.md)）；可选行情派生计算子系统（只在它与程序宿主元素的接口处出现，[program-host-element.md §4.7 核心↔可选行情派生计算子系统](program-host-element.md#47-核心可选行情派生计算子系统)）。
 - **读者**：核心的实现者与评审者；写组件文档与改组件契约的人。审批者：维护者。
-- **状态**：已定。
+- **状态**：评审中。§5.3 登记了五项未关闭的卡点（程序规则时限的触发、保留边界推进的崩溃窗口、留存窗口下界的换算、决定冲突的记录、`request_snapshot` 的结论），各自的关闭事件在所属组件文档；其余已走通。
 - **阅读约定**：证据标签 `[证据]`/`[设计]`/`[推断]`、编号前缀与跨文档引用写法见 [README.md §0.4 阅读约定](../../README.md#04-阅读约定)。“观察 J”= 观察 `Journal`，“执行 J”= 执行事实 `Journal`。
 
 ## 1 问题域
@@ -351,6 +351,89 @@ UTA 唯一的锁是单据；执行阶段与观察侧没有锁。
 | “快照” | 核心快照：`fold_state` 的重启加速点，只供重启恢复，不对外读 | 读模型 `Snapshot`：`read_model` 的一次读取结果，带 `as_of` | 段池也称“运行期快照”；旧 UTA 的账户快照是组合视图，属业务，UTA 不提供 | 存储、读模型 |
 | `Starting` | 操作结果：启动第 5 步开放下游会话之前，除 `handshake` 外的操作一律返回它 | 流 readiness：会话已建立、该流在当前流 epoch 里尚未声明 `live_from` | 前者按整个核心、只在启动期；后者按集成 × 流；开放之后某流处在 `Starting` 不使任何操作返回 `Starting` | 会话入口、读模型 |
 
+### 3.12 组合子值树与五个 fold
+
+规则守卫、程序节点、处理器触发、单据检查项、记录映射的换算共用**同一个派生机制**。前三处与检查项在本进程里构造、校验或求值，程序节点在程序宿主进程里求值，换算在集成进程里求值、不属 core 的任一类记录；这个表示由本进程定义并装载期 / 启动期 / 握手期校验，随 core 发布给集成作者与程序作者（容器之间为何共用它见 [core/design.md §3.2 共用的值树表示](../design.md#32-共用的值树表示)）。
+
+谓词可以处理任意协议，因为它们是底层无关的纯组合子。组合子的核心意义是**让类型可以顺利派生**。[证据：fp-01 案例 3 Composing Contracts；fp-03 条目 5 Servant]
+
+#### 值树
+
+组合子树在 Rust 里是**一个 enum 值**（deep embedding），不是泛型类型：
+
+```rust
+// 值树 = 一个 enum（deep embedding）。判断的共同底层表示。
+enum DerivationNode {
+    Const(V),
+    Field(FieldName),                 // field::<T>(name)：带类型标签的访问器叶子，读树隐含的那条记录（处理器、检查项）；协议差异压在这一层
+    Input(InputName),                 // 程序的观察输入：指名 Program.inputs 里的一项，值是该输入流 cursor 之后的记录
+    Pred(PredOp, Vec<Id>),            // 谓词/比较算子：InBand / Eq / Lt / And / Or / Not …，输出 bool
+    Op1(Op1, Id), Op2(Op2, Id, Id),   // 一元/二元值算子；Op1 含访问器 Field(FieldName)，程序值里读一个 Input 节点给出的记录的字段
+    Scan(ScanOp, Id),                 // 状态累加节点（即 Fold）
+    Window(Id, W),                    // 核心内按位置产出值的滑动窗口节点
+    Join(JoinOp, Vec<Id>),
+    Pooled { input: Id, window: Window },  // 读侧组合子；输出段视图，交可选子系统
+}
+```
+
+- `Field::<T>(name)` 是带类型标签的访问器，类型随访问器进入表达式，启动 / 装载期校验。处理器与检查项的树有一条隐含的记录，叶子 `Field(name)` 读它，启动期按字段注册（[envelope.md §3.2 处理器字段注册表](envelope.md#32-处理器字段注册表)）校验。
+- 程序值有多个具名输入、没有隐含记录 [设计]：访问器写作 `Op1(Field(name), i)`，`i` 是一个 `Input(name)` 节点，读该输入给出的记录的字段；类型由访问器的类型标签给出，装载期与该输入流在最近声明里的 `payload_schema` 核对；含 `Field` 叶子的程序值在装载期被拒（[program-host-element.md §4.2 装载期校验](program-host-element.md#42-装载期校验)）。理由：访问器与它所读的输入之间的绑定就是树里的一条边，两个实现者从同一棵树读出同一个绑定；类型取标签，程序的输出类型才能不等声明就从程序值求出。不选：给 `Field` 叶子加上所读的节点，处理器与检查项的树就要为隐含的记录另造一个节点。
+- 组合子从不提 venue，只接受三种输入：锚点、注册表里的具名字段（带类型）、经 `payload_schema` 访问器取得的载荷值。记录映射的换算是唯一例外的输入：它的输入是上游字段值，但树里仍不出现上游字段名，字段名只在记录映射的处置表里（[integration-session.md §3.4 记录映射](integration-session.md#34-记录映射-设计)）。
+- 协议差异被压在访问器一层，谓词之上一律纯组合：`InBand(field("px"), lo, hi)` 对任何注册了 `px: Price` 的 venue 都成立。
+- 程序值是一组节点加决策步、输入声明与输出声明：`Program { nodes, rules, inputs, facts, outputs }`（[program-host-element.md §3.1 程序值](program-host-element.md#31-程序值)）。`InputDecl`、`FactDecl` 与 `Output` 都不是节点构造子。
+
+类型别名视图（把已隐含的关系写明，不是四个独立类型）：`Pred<X>` = 对输入 X 输出 `bool` 的树；`Comb<X, Y>` = 输入 X、输出 Y 的树，`Pred<X>` 即 `Comb<X, bool>`；`Scan` = 状态累加节点，`Fold` 在此表示为 `Scan`。
+
+值树是权威表示。类型化的 builder API 可以叠在值树之上，但 builder 只是构造糖。[证据：fp-01 M9 Marlowe 闭合构造子]
+
+#### 五个 fold
+
+五种“派生”是对这同一棵树的 fold，在**装载 / 启动期**求出，而不是编译期。
+
+| fold | 结果 | 替代的旧做法 |
+|---|---|---|
+| `required_inputs` | 树里所有 `Field` 叶子的 stream kind 之并；启动期与所引用集成来源的最近声明比对，缺失即 fail-closed。程序值不用它：程序的输入就是 `inputs` 声明，装载期逐项与所引用集成来源的最近声明比对 | 登记 → 字面意义的推导 |
+| 输出类型 | 每节点值类型：`Field::<T>` 给基类型，`Input` 节点给该输入流 `payload_schema` 所定的记录类型，`Op`/`Scan`/`Join` 按算子推导，对原生 op 的引用取它在值树里带的声明结果类型；`Pooled` 节点输出类型即段布局；程序的输出契约取 `outputs` 各项所指节点的这个类型 | 手写的布局 / 输出类型 |
+| 求值 | `Pred` → `bool`；`Comb` → 值；`Scan`/`Fold` → 状态 | — |
+| 失败 | **单一 kind enum + 路径上下文**（`InBand{field, lo, hi, actual}`、`FieldAbsent(kind)`…，附树中路径） | 组合子层失败不再是各组合子变体的类型级并集 |
+| 说明 | 为审批人生成“为何否决”；静态检查“引用了没有集成提供的字段” | 每条规则各写一遍 |
+
+组合子层的失败是单一 kind enum。规则层的 `Rejection` 是具名 enum，包装本层的 kind enum（[decision-chain.md §3.1 规则是 STS，不是订单对象](decision-chain.md#31-规则是-sts不是订单对象)）。两层各自封闭，不是同一个类型。
+
+`required_inputs` 的唯一定义：对值树整体做上表第一个 fold 的结果 = 树中 `Field` 叶子引用的 `StreamKind` 集。处理器与检查项都是组合子树，“处理器的 `required_inputs`”就是对其树做同一个 fold；程序的输入不由它求，而是程序值的 `inputs` 声明（程序值里没有 `Field` 叶子）。检查项的 `required_inputs` 与字段注册只引用此定义，不重新定义。
+
+#### 同一 enum 的五处使用
+
+| 使用点 | 求值所在 | 该处的树形状 | 谁构造 / 何时校验 |
+|---|---|---|---|
+| 处理器触发、订阅过滤 | 本进程 | `Pred<Envelope>` | 集成注册 / 启动期 |
+| 规则守卫 | 本进程 | `Pred<(Context, RuleState, Input)>` | 实现者 / 启动期 |
+| 单据检查项 | 本进程 | `Comb<Observed, CheckResult>` | 由 (意图类型 × venue 能力) 解析 / 评估期 |
+| 程序节点（解释①派生、解释②决策）；读模型对记录的 `Fold` | 程序宿主进程；读模型在本进程 | `Comb` / `Scan` / `Fold` | 程序作者 / 装载期 |
+| 记录映射的换算 | 集成部分 | `Comb<上游值, 契约值>` | 集成作者 / 握手期由本进程静态校验，集成侧由本仓库发布的解释器求值 |
+
+核心与程序的区别**只在谁构造、何时校验**：核心规则由实现者构造、启动期校验；AI 程序由程序作者构造、装载期校验；记录映射由集成作者构造、握手期校验。校验相同、表示相同、解释器相同。
+
+**不统一的**：组合子是**判断**的底层，不是**控制流**的底层。规则链的顺序固定链是对组合子结果的顺序消费，IO 壳的阶段链是协议驱动器，单据锁是责任持有；它们各有自己的模型。
+
+#### 不变量
+
+- `required_inputs` 是启动期可算的确定集。引用了没有集成提供字段的树 **fail-closed**：规则、处理器、检查项由启动期 `required_inputs` fold + 与所引用集成来源的最近声明比对保证；程序值由装载期把 `inputs` 声明与其上的字段访问器逐项同所引用集成来源的最近声明比对保证。
+- 组合子层失败与规则层 `Rejection` 是两个封闭类型，互不塌陷。由两层各自 enum 保证。
+- 值树是权威表示，builder / 文本糖必须编译到同一值。由装载期按 schema 校验保证（程序值的规范序列化形式，[program-host-element.md §3.1 程序值](program-host-element.md#31-程序值)）。
+
+#### 为什么 / 不选
+
+核心规则、处理器、检查项与程序共享一个表示，直接动因是 Rust 缺口：没有类型级和 / 积的自动构造，`required_inputs` 与失败变体之并无法从关联类型派生。程序已经选了值树（它要可静态检查、可预算、状态显式可序列化，Q25）；规则 / 处理器 / 检查项复用同一表示，即可让这四处的类型顺利派生，Q22/Q23/Q31 的五处共用同一校验。[证据：fp-01 M9/M10；fp-03 条目 2/4]
+
+- 不选 **泛型关联类型派生（cardano 式 `Embed`）**：Rust 无类型级和 / 积自动构造，泛型嵌套是 O(N²) 样板或退化到 `BoxError` catch-all。
+- 不选 **黑盒函数 `(State,Input)->(State,Output)` 作程序**：无法预算、无法静态检查，状态可序列化仅依赖作者承诺。
+- 不选 **builder API 作权威表示**：会让“引用了没有集成提供的字段”这类静态检查失去单一 fold 入口。
+
+#### 扩展
+
+构造子全集即上面的 `enum DerivationNode`；程序值另带的 `inputs` 与 `outputs` 是对输入与节点的声明，不增加构造子。表达力不足时的扩展轴是**显式加构造子**：改这个 enum，五个 fold 随之各加一臂，编译器指出全部遗漏。这与加规则同一纪律：显式接受，不做泛型逃生口。求值开销与 `dyn` 分发成本是实现期 profiling 的对象，落点变化不改本节。会推翻本节的观测见证伪 #1（§6.2）。
+
 ## 4 结构
 
 ### 4.1 组件指南
@@ -596,18 +679,13 @@ flowchart TB
 
 #### 4.3.7 保留引用的登记与解除
 
-保留边界的推进规则、引用登记表、基线、留存窗口与 `advance_retention` 的判定在 [observation-journal.md §2.4 保留：边界与删除规则](observation-journal.md#24-保留边界与删除规则)；本节只定哪些组件的哪条 append 登记或解除引用。登记与解除不是独立的写者动作：它们在触发它的那条记录的事务里自动写入。
+哪些位置被登记为引用、何时登记、何时解除、未登记与已在边界之下的引用怎样处理，规则只在 [observation-journal.md §2.5 引用登记](observation-journal.md#25-引用登记-设计)；推进判定在 [observation-journal.md §2.6 推进判定](observation-journal.md#26-推进判定-设计)。本节只定触发登记与解除的 append 由哪个组件编排、落在哪个事务：登记与解除不是独立的写者动作，观察 `Journal` 在这些事务里写登记表。
 
-| 引用 | 登记于（持有者的 append） | 解除于 | 持有者 |
-|---|---|---|---|
-| 单据 `basis` 中的观察位置 | `Prepared` 的事务 | 该尝试的等待结束（结果确立、`Expired`、`Abandoned`） | 单据交出、IO 壳持有 |
-| 取证与归因引用的观察位置 | 等待仍 `Active` 时 append 的 `ResolutionEvidence`（IO 壳或效应侧归因处理器） | 同上 | IO 壳 |
-| 程序 cursor | 进入活动集合之后每个 `Checkpoint`（与 cursor 同事务），取代上一个 | 下一个 `Checkpoint` 取代它；`unload_program` 的 `Applied`，或不沿用旧状态的替换 `Applied`（在宿主 OS 确认退出之后）；沿用的替换原样转给新成员；宿主的 `Unload` 与失败抑制不解除 | 程序宿主元素 |
-
-- 程序 `Checkpoint` 的 cursor 引用登记时可能已在边界之下（第一次提交的 cursor 可以是 `from` 的前一位置，或一段被删位置的末位）；这样的引用此后照样阻止边界推进，直到下一个 `Checkpoint` 取代它。
-- 未登记而落到边界之下的位置不静默失真：只把重放承诺缩小到 `AS OF ≥ 保留边界`，读得 `BeyondRetention`（`basis` 上见 [ticket.md §3.5 第一层：依据有效性 basis_validity](ticket.md#35-第一层依据有效性-basis_validity)）。
-- `Pooled` 窗口从 `Journal` 重洗历史但不登记，越界只得 `BeyondRetention`（[program-host-element.md §4.7 核心↔可选行情派生计算子系统](program-host-element.md#47-核心可选行情派生计算子系统)）。
-- 执行事实侧不压缩，没有边界；取证与回执的证据字节在执行 J 里。
+| 引用 | 触发登记的事务（编排者） | 触发解除的事务（编排者） |
+|---|---|---|
+| 单据 `basis` 中的观察位置 | `Close(Prepared)` + `Prepared`（单据） | 结束该尝试等待的记录的事务（IO 壳） |
+| 取证与归因引用的观察位置 | 等待仍 `Active` 时的 `ResolutionEvidence`（IO 壳或效应侧归因处理器） | 同上（IO 壳） |
+| 程序 `Checkpoint` 依赖的 cursor | `Advance` 输出事务（程序宿主元素） | 下一个 `Advance` 输出事务；`unload_program` 或不沿用旧状态的替换的 `Applied` 事务（程序宿主元素） |
 
 ### 4.4 效应侧归因处理器
 
@@ -810,7 +888,7 @@ sequenceDiagram
 | 直接 | 增量 DAG | `salsa`（cycle panic 与 fp-05 案例 9⑤ 同形）；运行在程序宿主进程 |
 | 直接 | 唯一单向边（§3.4） | crate 依赖方向，反向不编译 |
 | 直接 | SQLite 单写者 | `rusqlite`，事务即函数 |
-| 变形 | 组合子多种解释 | 一个 enum 值树 + 五个 fold（启动/装载期），不是泛型关联类型派生（[core/design.md §3.2 组合子值树与五个 fold](../design.md#32-组合子值树与五个-fold)） |
+| 变形 | 组合子多种解释 | 一个 enum 值树 + 五个 fold（启动/装载期），不是泛型关联类型派生（§3.12） |
 | 变形 | 规则组合 | 具名 struct + 具名 enum `#[from]`，不是泛型 `Embed` |
 | 变形 | 处理器注册表 | `HashMap<Kind, Box<dyn Handler>>` + 元数据（schema、`required_inputs`、读/写）；启动期求并集与握手比对；不宣称全局穷尽 |
 | 变形 | 发送屏障 | move-semantics token（私有构造器 + 内含 fsync），不是泛型 typestate |
@@ -821,7 +899,7 @@ sequenceDiagram
 - 增量引擎按指标是否可撤回，选节点图（Incremental 式）或 differential；具体库由实现期 profiling 定。二者不是任选，都不能承载外部 unknown Write。不选：只用其一并强制承载外部 unknown Write。
 - 不迁移 tagless-final 多态与 Haxl `<*>` 违反 `ap` 的技巧。
 
-**Rust 形状不反向决定模型。** 若实测只推翻某个落点（如 `salsa` vs 手写节点图、`dyn` vs 静态分发、文本 JSON-RPC vs 同一 IDL 的二进制编码），改的是落点而非模型。模型由本文 §3 与各组件文档的推导与不变量决定，不由 Rust 表达能力反推。唯一例外是证伪 #1（[core/design.md §6.2 证伪条件](../design.md#62-证伪条件)）：若规则 / 程序 / 处理器需要不同代数或生命周期，或同一树得不到稳定规范化描述，改的是表示，而不只是落点。
+**Rust 形状不反向决定模型。** 若实测只推翻某个落点（如 `salsa` vs 手写节点图、`dyn` vs 静态分发、文本 JSON-RPC vs 同一 IDL 的二进制编码），改的是落点而非模型。模型由本文 §3 与各组件文档的推导与不变量决定，不由 Rust 表达能力反推。唯一例外是证伪 #1（§6.2）：若规则 / 程序 / 处理器需要不同代数或生命周期，或同一树得不到稳定规范化描述，改的是表示，而不只是落点。
 
 ## 5 走查
 
@@ -847,7 +925,9 @@ sequenceDiagram
 - 扩展（venue 专有 / 未列举状态，Q5）：集成按枚举映射表落到契约词表，表外值输出 `Unmapped(raw)` 并附原始负载；核心的信封解析入口只验证（[envelope.md §2.2 三部分](envelope.md#22-三部分-设计)）。
 - 变体（`NotSent`）：步 6 改为 `submit` 返回 `NotSent`：IO 壳同事务 append `NotSent{reason, evidence}` 与计数观察，等待结束、lane 解除，不进对账；冷却照常从 `SendBarrier` 起算。
 
-**走通。**
+- 变体（程序规则时限）：程序的决策含 `Expire(Deadline, _)`，而到时限前后它的输入上没有新记录：步 1 之前的程序求值没有输入推进，时限何时触发未定义，走不通（§5.3 卡点 1）。
+
+**走通**（不含程序规则时限的路径；时限变体阻塞，§5.3）。
 
 #### W2（Q2+Q3）SendBarrier 后崩溃、三渠道收敛、放弃跟踪、脑裂变体
 
@@ -861,7 +941,7 @@ sequenceDiagram
 4. 迟到回执收敛：旧会话的通道随会话结束关闭，其消息读不到。集成在新会话上以观察记录重新送达带可关联身份的回执；集成会话 → 信封解析入口 → 观察 J；效应侧归因处理器见 `attribution: FromAttempt(r)` 且 r 结果未知，同事务 append `ResolutionEvidence{Attributed, Found}`（§4.4），不产生第二次下单。
 - 脑裂变体（Q2③）：旧核心退出前已把 `submit` 交给集成进程 A；A 作为孤儿仍可能送达 venue。安全性由三条共同保证，不依赖 A 的回执：`SendBarrier` durable = “可能已发出”；阻塞头集合非空时同 lane 无新普通写；对账驱动经新会话 B 独立取证。A 的通道只通向已退出的旧核心，新核心不读它；A 在第 1 步被回收。对外可见：fixture venue 调用 ≤ 1；该意图恰一条 `SendBarrier`。
 
-**走通**（验收 #8；取证记录模型 [io-shell.md §6.3 验收](io-shell.md#63-验收) #17）。
+**走通**（[验收 #8（崩溃矩阵可测项），§6.3 验收标准](#63-验收标准)；取证记录模型 [io-shell.md §6.3 验收](io-shell.md#63-验收) #17）。
 
 #### W3（Q4）Prepared 未发前崩溃
 
@@ -954,7 +1034,7 @@ sequenceDiagram
 3. 决定版本冲突：STS 规则链对同一 `(ticket, current_version)` 的第二个 Decision 返回 `Conflict(AlreadyDecided)`，不执行、不改状态（[decision-chain.md §4.3 审批步](decision-chain.md#43-审批步)）。
 4. 负责人失联：STS 过期步 `Close(Expired)`；或持控制授权的 principal `transfer`，单据在 `AwaitingDecision` 时 STS 链按新负责人从授权步重过（[decision-chain.md §4.7 移交](decision-chain.md#47-移交-设计)）。
 
-**走通。**
+**走通**（第 3 步只到“冲突返回、状态不变”，Q10 要求的冲突记录见 §5.3 卡点 4）。
 
 #### W12（Q27）Replace：原子改单，或由调用方组合撤单与下单
 
@@ -972,7 +1052,7 @@ sequenceDiagram
 3. 要删掉某流当前 epoch 的记录时，持久订阅先为它 append 覆盖检查点，序号覆盖不因压缩改变（[subscription.md §4.6 序号覆盖与覆盖检查点](subscription.md#46-序号覆盖与覆盖检查点)）；压缩只作用于观察 J，执行 J 不删。
 4. 落到边界下的 `basis` 位置在单据放行前的校验里为 `BeyondRetention`（[ticket.md §3.5 第一层：依据有效性 basis_validity](ticket.md#35-第一层依据有效性-basis_validity)）。对外可见：边界推进从不越过仍被登记引用的最早位置；执行事实无记录被删。
 
-**走通**（[observation-journal.md §6.2 验收](observation-journal.md#62-验收) #4）。
+**走通**（正常路径；窗口下界的换算与推进之后的崩溃窗口见 §5.3 卡点 2、3；[observation-journal.md §6.2 验收](observation-journal.md#62-验收) #4）。
 
 #### W14（Q29）下游（Alice）断连重连
 
@@ -1010,7 +1090,9 @@ sequenceDiagram
 3. 程序经投递调度按位置看到结果项与读结论：闭环走观察侧，不进单据 / STS / IO 壳。
 4. 未调用集成的情形（无会话 / 不支持 / 未确认 / 请求不合法）：不 append 观察记录，`EffectResponse` 记下这一结论；不返回看似成功的空数组。崩溃于响应持久化前按 #21 重派。
 
-**走通。**
+5. 变体（程序规则时限）：程序以 `Expire(Deadline, _)` 等待读结果，而结果与其他输入都没有到达：没有投递事件就没有 `Advance`，时限何时触发未定义，走不通（§5.3 卡点 1）。
+
+**走通**（不含程序规则时限的路径；时限变体阻塞，§5.3）。
 
 细化：[one-shot-read.md §5.1 W17 的一次性读细化（读处理器）](one-shot-read.md#51-w17-的一次性读细化读处理器)、[program-host-element.md §5.1 一轮 Advance（W17 的程序宿主元素细化）](program-host-element.md#51-一轮-advancew17-的程序宿主元素细化)、[program-host/design.md §5.1 一轮 Advance（W17 的宿主细化）](../program-host/design.md#51-一轮-advancew17-的宿主细化)、[core/design.md §5.2 W17 程序发出读请求（fetch.bars）闭环走观察侧](../design.md#52-w17-程序发出读请求fetchbars闭环走观察侧)。
 
@@ -1022,7 +1104,7 @@ sequenceDiagram
 4. 过期：STS 过期步在 `deadline` 到时 `Close(Expired)`，不补偿、不递送。
 5. 决定版本冲突：同 W11 步 3。
 
-**走通**（[decision-chain.md §6.3 验收](decision-chain.md#63-验收) #11、#32；[ticket.md §6.3 验收](ticket.md#63-验收) #30）。
+**走通**（第 5 步同 W11 步 3，Q10 的冲突记录见 §5.3 卡点 4；[decision-chain.md §6.3 验收](decision-chain.md#63-验收) #11、#32；[ticket.md §6.3 验收](ticket.md#63-验收) #30）。
 
 #### W19（Q19）会话身份与未授权控制
 
@@ -1080,6 +1162,11 @@ sequenceDiagram
 
 - **已解决的归属卡点（归属不明）**：旧设计的观察 J 写者里有“集成推送入口”，模块指南里却没有这个元素；推送的接受（经当前通道读入、盖 `SessionEpoch`、分配 `LogPosition`、会话内上报 gap 的事务）落到哪里不明。按新划分走 W1 步 7、W6、#13：集成会话读当前通道（接受条件“经当前会话的通道读入”是它的），信封解析入口在边界处解析验证，观察 J 分配位置并 append；会话内上报 `Gap{origin: Source}` 的事务由集成会话编排。三处各自的规格在 [integration-session.md §4.3.2 集成→核心的推送](integration-session.md#432-集成核心的推送)、[envelope.md §2.2 三部分](envelope.md#22-三部分-设计)、[observation-journal.md](observation-journal.md)。这一分配没有新增概念。
 - **已解决的描述卡点**：旧 W10 写“宿主隔离该程序并产出失败记录”，与宿主不接触存储相矛盾；按新划分，失败记录只由程序宿主元素 append（W10 步 2）。
+- **卡点 1：程序可见的时间推进**（接口不够）。W1、W17 的时限变体：程序规则含 `Expire(Deadline, _)` 而没有新输入推进时，宿主协议没有时间输入，时限何时触发未定义。登记与关闭事件在 [program-host-element.md §5.6 卡点](program-host-element.md#56-卡点)。
+- **卡点 2：保留边界推进之后、压缩完成之前的崩溃窗口**（缺概念）。W13 的崩溃变体：新边界与 `Applied` 已提交、覆盖检查点未写时崩溃，重启后的处置未定义，本文 §5.2 崩溃矩阵因此没有这一行。登记在 [observation-journal.md §5 走查](observation-journal.md#5-走查) 卡点 1。
+- **卡点 3：留存窗口下界换算为每流位置**（缺概念）。W13 步 1 的 `InsideWindow` 判定所需的换算未定义。登记在 [observation-journal.md §5 走查](observation-journal.md#5-走查) 卡点 2。
+- **卡点 4：决定版本冲突没有记录**（归属不明）。W11 步 3、W18 步 5：Q10 的响应度量“冲突记录存在”没有记录种类与写者，这两步只能走到“第二次决定得冲突返回、状态不变”。登记在 [decision-chain.md §5 走查](decision-chain.md#5-走查) 卡点 1。
+- **卡点 5：`request_snapshot` 的结论与快照提交的先后**（接口不够）。控制组的这一动作 `Applied` 是否蕴含快照已持久、写失败得哪种结论未定义。登记在 [storage.md §5 走查](storage.md#5-走查) 卡点 1。
 - 其余每步的行动者、恢复归属与对外可见结论都能由本文与所指组件文档推出。需要实测才能给出数字的步（崩溃注入、宿主预算、秒级负载）是验收项，不是卡点；可选子系统的实现期数字不在核心范围，核心接口不依赖其结果。
 
 ## 6 评估
@@ -1088,12 +1175,15 @@ sequenceDiagram
 
 组件级的风险、敏感点与权衡（单写者吞吐、快照周期、保留时长、lane 阻塞半径、`basis` 窗口、IO 壳体量、取证日志体积、`responsible` 与互斥、拒绝粒度、程序经 facts 看自己的结果等）在各所有者组件文档。核心进程级：
 
-- **权衡点：JSON-RPC 可读可回放 vs 高频吞吐**（§4.7.1）：默认文本编码换来跨语言、可读、可录制回放；代价是高频推送流吞吐可能不达标，需另加二进制编码作同一 IDL 的另一种编码。影响 Q22；由 [storage.md §6.2 验收](storage.md#62-验收) #19 的负载测量决定是否启用。
+- **权衡点：JSON-RPC 可读可回放 vs 高频吞吐**（§4.7.1）：默认文本编码换来跨语言、可读、可录制回放；代价是高频推送流吞吐可能不达标，需另加二进制编码作同一 IDL 的另一种编码。影响 Q22；由验收 #19（§6.3）的负载测量决定是否启用。
 - **风险：受控停止依赖 OS 确认子进程退出**（§4.7.4）：某 OS 上得不到确认时停止总是失败、退化为崩溃路径。影响 Q20/Q21 的“停止后无孤儿”响应，不影响正确性（崩溃路径照常收敛）。证伪 #35。
 - **敏感点：启动失败的两级划分**（§4.7.3）：把单元级失败提升为核心级，Q15/Q18 的隔离即失效；把核心级失败降为单元级（例如重建失败仍启动），核心就无法判定哪些写可能已经发出。
+- **风险：同一 enum 类型视图**（§3.12，证伪 #1）：若真实策略需要超出 `DerivationNode` 的代数，扩展轴是加构造子；若需要不同代数或生命周期，则统一表示被推翻，规则层与字段注册表的下游序列化一并受影响。影响 Q22/Q23/Q31。
+- **权衡：值树启动 / 装载期校验 vs 编译期**（§3.12）：装载期 fold 让 AI 程序与核心规则共用一套校验与表示；代价是“引用了没有集成提供的字段”这类检查落在启动 / 装载期而非编译期。
 
 ### 6.2 证伪条件
 
+- **#1 同一 enum 类型视图**（§3.12）：实现表明规则、程序、处理器、记录映射的换算需要不同代数或不同生命周期，或同一组合子树不能得到稳定规范化描述 → “一个 enum 值树 + 五个 fold”被推翻，五处使用（§3.12 的使用表）须拆分。加构造子不算推翻（扩展轴）。
 - **#4 三种进度互不替代**（§3.1）：某来源的完备进度可由消费位置或保留边界之一确定性算出，即存在一个标量在全部质量场景下同时正确表达三者 → 三种进度模型可塌为单一进度，`await-all` 触发条件（[delivery.md §3.1 三种消费方式（投递侧）](delivery.md#31-三种消费方式投递侧)）与保留协议（[observation-journal.md §2.4 保留：边界与删除规则](observation-journal.md#24-保留边界与删除规则)）须重写。
 - **#35 受控停止能确认全部内层结束**（§4.7.4）：某个目标 OS 上核心在停止时无法确认子进程已退出（例如服务管理器在超时后直接结束核心、不留确认时间），使受控停止在实践中总是失败 → 受控停止退化为崩溃路径，结束锚点与“停止后无孤儿”的验收在该 OS 上须重定，或改由 OS 的作业对象 / 进程组保证子进程随核心结束。
 
@@ -1113,11 +1203,14 @@ sequenceDiagram
    - (c) 同一尝试不重复投放，fixture venue 调用 ≤ 1；
    - (d) 追加 / 替换中途崩溃后无半条记录、同事务原子回滚、订阅者可按游标恢复。
 - **#9 两故障面唯一判别**（§3.2、[io-shell.md §4.9 崩溃恢复与集成崩溃两故障面](io-shell.md#49-崩溃恢复与集成崩溃两故障面)）：集成崩溃的观察流侧（`Gap{origin: Source}`）与写提交侧（`NoResponse`→`Undetermined`）的判别边界唯一 = 是否落在写调用（`submit`/`cancel`）路径上。（对应 Q11/Q18/Q2）
-- **#10 fail-closed 与效应路径唯一**（[core/design.md §3.2 组合子值树与五个 fold](../design.md#32-组合子值树与五个-fold)、[outbound-requests.md](outbound-requests.md)、[ticket.md](ticket.md)）：（对应 Q8/Q25/Q26）
+- **#10 fail-closed 与效应路径唯一**（§3.12、[outbound-requests.md](outbound-requests.md)、[ticket.md](ticket.md)）：（对应 Q8/Q25/Q26）
     - 引用了握手未提供字段的树在装载 / 启动期被拒（无运行期 fail-open）；
     - 注册为写处理器的 `EffectRequest` 只能经单据 → STS → IO 壳到达集成写接口（`submit`/`cancel`），代码中不存在第二条到集成写接口的调用路径；
     - 一张单据在 `Close(Prepared)` 后拒绝任何 `TicketAction`。
 - **#12 外部变更与状态保真**（§4.4、[integration-session.md §3.3 投影 Projection](integration-session.md#33-投影-projection)、§3.8、[read-model.md §3.2 成交的计数身份](read-model.md#32-成交的计数身份-设计)）：对不上任何本地 Attempt 的观察记录归因为 `External`/`Unattributed` 且无意图引用；记录映射的枚举映射表中不存在“其他 → rejected”，未列举值以 `Unmapped(raw)` 保留。（对应 Q5/Q6）
+- **#19 秒级负载不落后**（§3.12、§4.7.1；[storage.md §2.1 一个文件、一个写者](storage.md#21-一个文件一个写者-设计)、[program-host/design.md §4.1 组件](../program-host/design.md#41-组件)）：以 Q24 沟通场景规模（约 1500 流选 15、24 h 逐秒）构造 Q22 负载：（对应 Q22、B1）
+    - 秒级 bar 的清洗 + 增量指标在下一根 bar 到达前完成，积压不随时间增长，分发不阻塞清洗；
+    - 推送流的文本 JSON-RPC 在同一负载下不丢记录、`latest` 订阅不触发 `slow_consumer`（`ordered` 订阅只背压）；否则启用同一 IDL 的二进制编码（§4.7.1）后须达标。
 - **#21 一次性读与配额**（[one-shot-read.md §4.1 核心→集成：read](one-shot-read.md#41-核心集成readstream-request-range--answered--unavailable--refused)、[subscription.md §4.1 核心↔解释层：订阅组与 rewind_cursor](subscription.md#41-核心解释层订阅组与-rewind_cursor)）：（对应 Q13/Q15/Q16）
     - 多 target `read` 中一个来源不可用时，其余 target 独立返回，不可用项在 `deadline` 内可见；
     - 能力 `Unsupported` 的读返回 typed `Unsupported`，而非空结果；

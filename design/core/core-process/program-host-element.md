@@ -57,7 +57,7 @@
 
 ### 3.1 程序值
 
-程序是 **deep embedding 的小闭合值**，节点即值树（[core/design.md §3.2 组合子值树与五个 fold](../design.md#32-组合子值树与五个-fold)）。程序值的五个部分：
+程序是 **deep embedding 的小闭合值**，节点即值树（[core-process/design.md §3.12 组合子值树与五个 fold](design.md#312-组合子值树与五个-fold)）。程序值的五个部分：
 
 ```rust
 struct Program   { nodes: Vec<DerivationNode>, rules: Vec<DecisionStep>, inputs: Vec<InputDecl>, facts: Vec<FactDecl>, outputs: Vec<Output> }
@@ -73,13 +73,13 @@ struct FactDecl  { source: IntegrationId, scope: Option<WriteScope>, start: Star
 struct Output    { name: StreamName, node: Id }               // 输出声明：节点 node 的值导出到该程序的流 name
 ```
 
-- `DerivationNode` 与 `Field`、`Input(name)`、`Op1(Field(name), i)` 等构造子，以及“输出类型”fold，定义在 [core/design.md §3.2 组合子值树与五个 fold](../design.md#32-组合子值树与五个-fold)。`DecisionStep` 与 `EffectRequest` 的形状在 [outbound-requests.md §3.1 EffectRequest：唯一出口，请求是值](outbound-requests.md#31-effectrequest唯一出口请求是值)。
+- `DerivationNode` 与 `Field`、`Input(name)`、`Op1(Field(name), i)` 等构造子，以及“输出类型”fold，定义在 [core-process/design.md §3.12 组合子值树与五个 fold](design.md#312-组合子值树与五个-fold)。`DecisionStep` 与 `EffectRequest` 的形状在 [outbound-requests.md §3.1 EffectRequest：唯一出口，请求是值](outbound-requests.md#31-effectrequest唯一出口请求是值)。
 - 三种消费方式与等待窗口的语义在 [delivery.md §3.1 三种消费方式（投递侧）](delivery.md#31-三种消费方式投递侧)。`await-all` 的覆盖证据在 [subscription.md §3.6 序号覆盖](subscription.md#36-序号覆盖)。
 - 程序自己的请求流是隐含的输入，不在任何声明里，起点为 `Tail`（§3.4）。
-- **规范序列化形式** [设计]：程序值不编译。“编译单元”就是值代数的规范序列化形式：按 schema 校验的 JSON 值树，与 `Program { nodes, rules, inputs, facts, outputs }` 一一对应。节点对 `DerivationNode`，决策步对 `DecisionStep`，观察输入声明对 `InputDecl`，执行事实输入声明对 `FactDecl`，输出声明对 `Output`。任何面向 AI 的文本糖都编译到同一值，且不是核心的一部分。表达力不足时加构造子（[core/design.md §3.2 组合子值树与五个 fold](../design.md#32-组合子值树与五个-fold)）。
+- **规范序列化形式** [设计]：程序值不编译。“编译单元”就是值代数的规范序列化形式：按 schema 校验的 JSON 值树，与 `Program { nodes, rules, inputs, facts, outputs }` 一一对应。节点对 `DerivationNode`，决策步对 `DecisionStep`，观察输入声明对 `InputDecl`，执行事实输入声明对 `FactDecl`，输出声明对 `Output`。任何面向 AI 的文本糖都编译到同一值，且不是核心的一部分。表达力不足时加构造子（[core-process/design.md §3.12 组合子值树与五个 fold](design.md#312-组合子值树与五个-fold)）。
 - 同一个程序值有两种解释：解释①（派生）与解释②（决策），在宿主进程里求值（[program-host/design.md §3.2 解释①：派生](../program-host/design.md#32-解释①派生)、[program-host/design.md §3.3 解释②：决策](../program-host/design.md#33-解释②决策)）。两种解释的消费约束在 [core-process/design.md §3.4 两个类型宇宙与唯一边](design.md#34-两个类型宇宙与唯一边)。
 
-**为什么是值而不是黑盒函数。** 值代数可预算、可静态检查，状态由结构本身保证可序列化（[core/design.md §3.2 组合子值树与五个 fold](../design.md#32-组合子值树与五个-fold)）。不选：黑盒函数 `(State, Input) -> (State, Output)`：无法预算、无法静态检查，状态可序列化只靠作者承诺。
+**为什么是值而不是黑盒函数。** 值代数可预算、可静态检查，状态由结构本身保证可序列化（[core-process/design.md §3.12 组合子值树与五个 fold](design.md#312-组合子值树与五个-fold)）。不选：黑盒函数 `(State, Input) -> (State, Output)`：无法预算、无法静态检查，状态可序列化只靠作者承诺。
 
 ### 3.2 成员、活动集合与失败抑制
 
@@ -430,7 +430,7 @@ flowchart TB
   - cursor 为 `At{pos}` 的流，`to` 不越过这批在该流上交出的最后一个位置；这批在该流上没有交出事件时不变。
   - cursor 为 `Start{from}` 的流，`to` 取这批在该流上交出的最后一个位置与 `from` 的前一位置中较大者。所以第一次提交的 `Advance` 总使它成为 `At`，即使这批在该流上什么也没交出：`from` 之下没有交出的位置在 cursor 建立之前已被删去，在这个订阅从 `from` 开始的承诺之外，不是损失。
 - **返回**：每次返回都带新 `Checkpoint`。
-- **没有时间输入**：`Advance` 只带投递事件与 `to`，不带时间；宿主只在有投递事件时被调度。程序规则里的时限（`DecisionStep::Expire`）在没有新记录时何时、按哪个时钟触发，现行设计没有定义，登记为卡点，见 [program-host/design.md §5.4 卡点](../program-host/design.md#54-卡点)。
+- **没有时间输入**：`Advance` 只带投递事件与 `to`，不带时间；宿主只在有投递事件时被调度。程序规则里的时限（`DecisionStep::Expire`）在没有新记录时何时、按哪个时钟触发，现行设计没有定义，登记为 §5.6 的卡点；关闭它的决定写在本节。
 - **输出事务** [设计]：核心把下列各项在**同一事务**持久化。事务由本组件编排，参与者见 [core-process/design.md §4.3.5 同事务集合](design.md#435-同事务集合)：
   - `effects`：append 为 `EffectRequest` 记录，落该程序的请求流，每条记下这次 `Advance` 所属成员（开始它的 `Applied` 的位置）。由出站请求处理器 append（[core-process/design.md §4.3.4 执行事实的唯一写入口](design.md#434-执行事实的唯一写入口)）。
   - `derivations`：程序值 `outputs` 里每项所指节点在这批推进之后的值，按 §3.3“输出记录是节点的当前值”写在流 `(Program(id), name)` 上，可以一条也没有。
@@ -565,7 +565,7 @@ quote / bar / tick 及其指标满足；余额 / 持仓 / 订单状态 / 新闻�
 - **持久状态**：
   - `ProgramHalted`：控制流，与 `ProgramFailed` 观察同事务。
   - **程序状态（`Checkpoint`）**：宿主进程按宿主协议交出 `Checkpoint{bytes, state_version}`；本组件写在 `Checkpoint` 自己的表里，与持久订阅写在程序订阅上的该程序 cursor 同一事务提交。状态与 cursor 原子对应，重放边界由此确定。`state_version` 不在本成员接受集合内的不持久化，视同 trap。`Load` 交回本成员可交回的最近 `Checkpoint`。字节形状由宿主解释器定义，核心不解释；`state_version` 是核心可比对的整数。它同时承载解释①的 `Scan`/`Window` 累加器与解释②对自己所发请求的进度跟踪（[program-host/design.md §3.4 不变量](../program-host/design.md#34-不变量)）。
-  - **`Checkpoint` 的保留引用**：进入活动集合之后的第一个 `Checkpoint` 持久化时登记（此前没有登记），由下一个 `Checkpoint` 取代；在 `unload_program` 的 `Applied`，或不沿用旧状态的替换 `Applied` 时解除；沿用旧状态的替换原样转给新成员。宿主的 `Unload`（含受控停止）与失败抑制都不解除它。它登记时可能已在保留边界之下（第一次提交的 cursor 例如为 `from` 的前一位置，或一段被删位置的末位），此后照样阻止边界推进，直到被取代或解除。登记与解除的协议总述在 [core-process/design.md §4.3.7 保留引用的登记与解除](design.md#437-保留引用的登记与解除)，规则与表在 [observation-journal.md §2.4 保留：边界与删除规则](observation-journal.md#24-保留边界与删除规则)。
+  - **`Checkpoint` 的保留引用**：本组件在 `Advance` 输出事务里交出 `Checkpoint` 依赖的 cursor 位置作为锚点，并在 `unload_program` 与替换的 `Applied` 事务里参与解除或转交；登记、取代、解除与转交的规则只在 [observation-journal.md §2.5 引用登记](observation-journal.md#25-引用登记-设计)。
 
 ### 4.10 成员的状态
 
@@ -699,9 +699,12 @@ sequenceDiagram
 
 ### 5.6 卡点
 
-| 卡点 | 分类 | 说明 |
-|---|---|---|
-| 程序规则的时限在没有新记录时怎样触发 | 接口不够 | `DecisionStep::Expire(Deadline, _)` 要求时限，而宿主协议 `Advance(events, to)` 不带时间输入，宿主只在有投递事件时被调度（§4.6.2）。卡点登记与待定的时间推进在 [program-host/design.md §5.4 卡点](../program-host/design.md#54-卡点)；本组件的宿主协议在那里定案后随之修改。 |
+**卡点 1：程序可见的时间推进**（分类：接口不够）。
+
+- **场景**：程序规则含 `Expire(Deadline, _)`（程序规则时限，[program-host/design.md §3.3 解释②：决策](../program-host/design.md#33-解释②决策)），而在 `Deadline` 到达前后该程序的输入上没有新记录。受影响的是带时限规则的程序：W1、W17 中程序的决策若带时限即落在这里（[core-process/design.md §5.3 卡点](design.md#53-卡点)）；W10 的预算隔离不受影响。
+- **依据**：`Advance(events, to)`（§4.6.2）只交投递事件，没有时间输入，宿主只在有投递事件时被调度；程序可见的时间只有记录上带的时间（事件时间与本地收到时间，[README.md §2.2 机器与域共享的现象](../../README.md#22-机器与域共享的现象)），没有“此刻”。宿主进程不得读时钟，否则同一批事件给出不同 `Output`、崩溃重放不再确定（[program-host/design.md §3.4 不变量](../program-host/design.md#34-不变量)）。
+- **卡在哪**：`Deadline` 按哪个时钟比较、没有事件时由谁触发，设计里没有定义；本文不自行补定。
+- **关闭事件**：在本文 §4.6 定出程序可见的时间推进（它由谁产生、以什么形式交给宿主、是否进 `Checkpoint`、怎样重放），并同步 [program-host/design.md](../program-host/design.md) 的解释②与 §4.2；或从值树里删去 `Expire` 构造子（[core-process/design.md §3.12 组合子值树与五个 fold](design.md#312-组合子值树与五个-fold)），同步本文 §3.1 的程序值。
 
 ## 6 评估
 

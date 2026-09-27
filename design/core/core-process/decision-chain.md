@@ -4,7 +4,7 @@
 - **上级文档**：[core-process/design.md §4.1 组件指南](design.md#41-组件指南)。
 - **决定什么**：一张 `AwaitingDecision` 的单据怎样被放行进 `Prepared` 或被否决：规则的形状（STS `step`）、五步顺序固定链（授权 → 输入约束 → 审批 → lane → 过期）与放行门、冷却、规则判断所用的状态从哪来、等待与重入、规则版本变更与移交；以及统一路径里策略 / 审批规则文件的内容与合法性。
 - **读者**：核心实现者；写规则文件的运维者与 Alice；下游自动决定者的作者。
-- **状态**：已定。
+- **状态**：评审中。§5 登记了一项卡点（Q10 要求的冲突记录没有写者）；其余已定。
 - **非目标**：单据的状态字段怎样求出（参数合规、两层对账、检查目录，[ticket.md §3.4 参数合规：意图参数 schema](ticket.md#34-参数合规意图参数-schema-设计)、[ticket.md §4.5 交易协议：操作种类、目标、可执行性、检查目录](ticket.md#45-交易协议操作种类目标可执行性检查目录-交易协议)）；阻塞头集合的定义与绕过（[lane.md §3.3 阻塞头集合](lane.md#33-阻塞头集合)）；规则文件怎样被读入与重载（[control-plane.md §4.4 reload_config(kind)](control-plane.md#44-reload_configkind)、[core-process/design.md §4.6 统一路径文件](design.md#46-统一路径文件)）；会话 principal 的建立（[session-entry.md §3 模型](session-entry.md#3-模型)）。
 
 证据标签与编号前缀的约定见 [README.md §0.4 阅读约定](../../README.md#04-阅读约定)。
@@ -51,7 +51,7 @@ trait Rule {
 }
 ```
 
-- **规则独立、组合具名。** [证据：fp-01 M8 cardano STS；fp-04 命题 5] 授权、输入约束、审批、期限、lane、fail-closed 各为独立规则，各有自己的 `RuleState`/`Outcome`/`Rejection`，不共同修改单一全局对象。组合状态是**具名 struct**；组合 rejection 是**具名 enum**，每个变体 `From` 一条子规则的 rejection。子规则内部的守卫失败是组合子层的 kind enum（[core/design.md §3.2 组合子值树与五个 fold](../design.md#32-组合子值树与五个-fold)），由规则层包装，两层各自封闭。扩展轴是 venue 与协议，不是规则。加规则改这两个具名类型，显式接受。
+- **规则独立、组合具名。** [证据：fp-01 M8 cardano STS；fp-04 命题 5] 授权、输入约束、审批、期限、lane、fail-closed 各为独立规则，各有自己的 `RuleState`/`Outcome`/`Rejection`，不共同修改单一全局对象。组合状态是**具名 struct**；组合 rejection 是**具名 enum**，每个变体 `From` 一条子规则的 rejection。子规则内部的守卫失败是组合子层的 kind enum（[core-process/design.md §3.12 组合子值树与五个 fold](design.md#312-组合子值树与五个-fold)），由规则层包装，两层各自封闭。扩展轴是 venue 与协议，不是规则。加规则改这两个具名类型，显式接受。
 - **执行解耦。** 规则计算“允许执行” ≠ 调用 venue。所有决定先持久化为记录，再由 IO 壳执行（[io-shell.md §3.2 IO 壳是效应侧的解释器](io-shell.md#32-io-壳是效应侧的解释器)）。
 - **核心状态最小化。** 核心只持有规则运行所需的状态。订单、持仓等读模型只是对记录的非权威 fold，**不作权威、不被规则引用**（[read-model.md](read-model.md)）。[证据：fp-03 命题 1]
 - **记录类型按 stream 参数化。** 每条 lane / 账户 stream 拥有独立的 Input 集与 decider（Equinox `Category`/`StreamId` 模式），核心不定义全局 effect enum。[证据：fp-03 条目 7]
@@ -80,7 +80,7 @@ AI 发请求、程序满足规则、审批人作决定，都是“读的副作�
 
 ### 3.4 `RuleState` 是记录的 fold，不另存 [设计]
 
-`step` 读的 `RuleState` 是一个值，每次求值时从执行事实与规则文件求出；`step` 的输出是记录（Decision、`Outcome`、`Rejection`、`Close`、`Prepared`），不是对某张状态表的更新。
+`step` 读的 `RuleState` 是一个值，每次求值时从执行事实与规则文件求出；`step` 的输出是记录，不是对某张状态表的更新：本组件写 Decision、`Outcome`、`Rejection`；放行或否决时请单据在同一事务写 `Close` 与 `Prepared`（写者是单据，[core-process/design.md §4.3.4 执行事实的唯一写入口](design.md#434-执行事实的唯一写入口)）。
 
 | 成员 | 源头（fold 的输入） |
 |---|---|
@@ -127,7 +127,8 @@ AI 发请求、程序满足规则、审批人作决定，都是“读的副作�
 | 方向 | 对方 | 交换 |
 |---|---|---|
 | 读 | 单据 | `responsible`、`current_version`、`parameter_validity`、`basis_validity`、`alignment`、`TicketAction`、Decision |
-| 写 | 单据 / 存储 | Decision、`Outcome`、`Rejection`（带 `rule_version` 与 `checked_as_of`）、`Close(DecisionRejected \| Expired)`、放行时同事务的 `Prepared` + `Close(Prepared)`；授权否决时的安全事件 |
+| 写 | 存储 | Decision、`Outcome`、`Rejection`（带 `rule_version` 与 `checked_as_of`）；授权否决时的安全事件 |
+| 请求 | 单据 | 否决或过期时执行 `Close(DecisionRejected \| Expired)`；放行时执行 `Close(Prepared)` 并同事务写 `Prepared`。这些 `TicketAction` 的写者是单据，与本组件的记录同一事务提交 |
 | 读 | lane 驱动 | 该 `WriteLaneKey` 的阻塞头集合、对某版本有效的 `bypass_lane` 覆盖 |
 | 读 | 集成会话 | 会话有效声明（能力未确立的判定、能力项） |
 | 读 | 规则文件（经控制面载入的当前版本） | §4.9 的全部取值与 `rule_version` |
@@ -230,7 +231,7 @@ flowchart TB
 - 等待期间已呈 `Diverged` 的单据，可由审批人在放行前 `SendBack`。
 - 规则**不自己算**这三项：它们是单据 fold 已经算好的状态字段。
 - 此门即只读校验边界在 STS 链上的读取点，不参与两阶段。
-- 满足时同一事务 append `Prepared` + `Close(Prepared(position))` + 本步的 `Outcome`。
+- 满足时本组件 append 本步的 `Outcome`，并请单据在同一事务 append `Close(Prepared(position))` 与 `Prepared`。
 
 **审计字段。** 每条 Decision / `Outcome` / `Rejection` 记录携带它所依据的 `checked_as_of`（该次 `alignment` 评估实际消费的位置集，[ticket.md §3.6 第二层：意图专属对账 alignment；偏离是状态](ticket.md#36-第二层意图专属对账-alignment偏离是状态)）与 `rule_version`。审计由此重放这次判断。
 
@@ -306,7 +307,14 @@ flowchart TB
 
 **重启。** 删去全部快照后重启：每张 `AwaitingDecision` 单据按记录重新求值（启动第 4 步）；冷却时钟由 `SendBarrier` fold 出，阻塞头由 lane 流 fold 出，计时器按 `deadline` 重装；每张单据停在与不重启时相同的点。
 
-**卡点。** 无停在本组件之内的步骤。
+**卡点 1：决定版本冲突没有记录**（分类：归属不明）。
+
+- **场景**：W18 第 5 步、W11 第 3 步：两个 principal 以同一期望版本 `decide`，第二个得 `Conflict(AlreadyDecided)`（§4.3）。
+- **依据**：Q10 的响应度量要求“冲突记录存在；意图状态不变”（[README.md §3.1 质量场景](../../README.md#31-质量场景)）。本组件对冲突只返回 `Conflict(AlreadyDecided)`、不 append；执行事实的唯一写入口表里没有“冲突记录”这一种记录，也没有它的写者（[core-process/design.md §4.3.4 执行事实的唯一写入口](design.md#434-执行事实的唯一写入口)）。
+- **卡在哪**：“冲突记录存在”这一度量找不到写者与记录种类；返回值不是记录，读模型与审计读不到它。本文不自行补定。
+- **关闭事件**：要么定出冲突记录的种类、写者（本组件或单据）与所在流并加入唯一写入口表，要么把 Q10 的度量改为“第二次决定得冲突返回、意图状态不变”，并同步验收 #11。
+
+其余步骤没有停在本组件之内的卡点。
 
 ## 6 评估
 
@@ -316,7 +324,7 @@ flowchart TB
 
 ### 6.2 证伪条件
 
-28. **规则状态不需要缓存**（§3.4）：实测放行时对 lane、冷却与待决集合的 fold 使 STS 求值超过 [core/design.md §6.3 验收 #19](../design.md#63-验收标准) 的负载预算 → 为 `RuleState` 增一个派生缓存，写清派生自哪些记录、依赖什么、何时失效与由谁刷新；它只加速读取，不成为源头，重启时从记录重建。
+28. **规则状态不需要缓存**（§3.4）：实测放行时对 lane、冷却与待决集合的 fold 使 STS 求值超过验收 #19（[core-process/design.md §6.3 验收标准](design.md#63-验收标准)）的负载预算 → 为 `RuleState` 增一个派生缓存，写清派生自哪些记录、依赖什么、何时失效与由谁刷新；它只加速读取，不成为源头，重启时从记录重建。
 
 ### 6.3 验收
 

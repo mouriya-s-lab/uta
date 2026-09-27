@@ -5,12 +5,12 @@
 - **层级与元素**：L3 component，核心进程内的“观察 `Journal`”组件：观察侧记录的载体、撤回代数、位置分配、保留边界与引用登记。上级文档：[核心进程](design.md)。
 - **本文决定**：观察记录怎样得到位置并落盘；派生内容怎样撤回；程序流怎样 fold；每条观察流保留什么、删什么；哪些位置被登记为引用、何时解除；保留边界怎样推进，以及控制动作 `advance_retention` 的规格。
 - **读者**：实现观察侧存储、压缩与保留的实现者；审查 Q28 与重建等价性的评审者。
-- **状态**：已定。
+- **状态**：评审中。§5 登记了两项卡点（推进之后、压缩完成之前的崩溃窗口；留存窗口下界换算为每流位置的规则）；其余已定。
 - **非目标**：
   - 位置、三种进度与 `StreamId` 的定义：[core-process/design.md §3.1 流、位置与三种进度](design.md#31-流位置与三种进度)。本文只实现“位置归核心”中观察侧的那一半。
   - gap 的三种来源与各 `reason` 的写者：[core-process/design.md §3.2 gap 的三种来源](design.md#32-gap-的三种来源)。
   - 各种观察记录的内容与写入时机：归写它的组件（[core-process/design.md §4.5 持久化视图](design.md#45-持久化视图)）。健康观察的字段与 fold 规则归 [read-model.md §3.5 健康面](read-model.md#35-健康面-设计)；程序流记录的形状归 [program-host-element.md §3.3 输出契约与程序流](program-host-element.md#33-输出契约与程序流)。
-  - 登记与解除的**触发**：由单据、IO 壳、程序宿主元素各自的 append 产生，协议总述在 [core-process/design.md §4.3.7 保留引用的登记与解除](design.md#437-保留引用的登记与解除)；本文只写登记表与推进判定。
+  - 触发登记与解除的那些 append 本身（`Prepared`、结束等待的记录、`Checkpoint`、控制记录）的内容与事务编排：归写它们的组件；它们在同事务集合里的位置见 [core-process/design.md §4.3.7 保留引用的登记与解除](design.md#437-保留引用的登记与解除)。登记与解除的规则只在本文 §2.5。
   - cursor、前导与投递缺口：[subscription.md §3.2 cursor 与确认](subscription.md#32-cursor-与确认)、[delivery.md §4.2 前导与缺口的排列（按 cursor 的两支投递）](delivery.md#42-前导与缺口的排列按-cursor-的两支投递)。本文只说明压缩给它们留下什么。
   - `basis` 落到边界之下的判定 `BeyondRetention`：[ticket.md §3.5 第一层：依据有效性 basis_validity](ticket.md#35-第一层依据有效性-basis_validity)。
   - 执行事实 `Journal`：它不压缩、没有保留边界，“只追加”由 [存储](storage.md) §2.3 保证。
@@ -146,13 +146,14 @@ fn compact_below_retention<Record, D: RetractableDelta>(journal: &mut Journal<Re
 
 **登记方 = 核心**：引用在产生时由核心自动登记，随持有者的生命周期自动解除，消费者不手工登记。
 
-| 引用 | 何时登记 | 何时解除 |
-|---|---|---|
-| 意图的 `basis` | `Prepared` 持久化时 | 该尝试的等待结束后（结果确立、`Expired` 或 `Abandoned`） |
-| 程序 `Checkpoint` 依赖的 cursor 位置 | 程序进入活动集合后的每个 checkpoint 持久化时（第一个 checkpoint 之前没有登记） | 下一个 checkpoint 持久化即替换；`unload_program` 的 `Applied`，或不沿用旧 checkpoint 的替换 `Applied` 时解除；沿用的替换原样转给新成员；宿主 `Unload`、受控停止与失败抑制不解除 |
-| 对账 `ResolutionEvidence` 引用的观察位置 | 等待仍 `Active` 时 append 的，append 时 | 该尝试的等待结束后 |
+| 引用 | 持有者 | 何时登记 | 何时解除 |
+|---|---|---|---|
+| 意图的 `basis` 中的观察位置 | 单据交出、IO 壳持有 | `Prepared` 持久化时 | 该尝试的等待结束后（结果确立、`Expired` 或 `Abandoned`） |
+| 程序 `Checkpoint` 依赖的 cursor 位置 | 程序宿主元素 | 程序进入活动集合后的每个 checkpoint 持久化时（与 cursor 同事务；第一个 checkpoint 之前没有登记） | 下一个 checkpoint 持久化即替换；`unload_program` 的 `Applied`，或不沿用旧 checkpoint 的替换 `Applied` 时解除（在宿主 OS 确认退出之后）；沿用的替换原样转给新成员；宿主 `Unload`、受控停止与失败抑制不解除 |
+| 对账与归因 `ResolutionEvidence` 引用的观察位置 | IO 壳（由 IO 壳或效应侧归因处理器 append） | 等待仍 `Active` 时 append 的，append 时 | 该尝试的等待结束后 |
 
-- 登记与解除在触发它们的 append 的同一事务里写进登记表（[core-process/design.md §4.3.7 保留引用的登记与解除](design.md#437-保留引用的登记与解除)）。
+- 登记与解除不是独立的写者动作：它们在触发它们的 append 的同一事务里写进登记表；哪条 append 由哪个组件编排见 [core-process/design.md §4.3.7 保留引用的登记与解除](design.md#437-保留引用的登记与解除)。
+- `Pooled` 窗口从 `Journal` 重洗历史但不登记，越界只得 `BeyondRetention`（[program-host-element.md §4.7 核心↔可选行情派生计算子系统](program-host-element.md#47-核心可选行情派生计算子系统)）。
 - 已解除的引用仍可读作审计。它落到边界之下时读得 `BeyondRetention`，不再阻止压缩。
 - **未解除的引用即使已在边界之下也照样阻止推进**。程序 `Checkpoint` 的 cursor 引用登记时可能已在边界之下：第一次提交的 cursor 可以是 `from` 的前一位置，或一段被删位置的末位（[program-host-element.md §4.6.2 Advance](program-host-element.md#462-advanceevents-to-cursor--outputeffects-derivations-checkpoint)）；这样的引用此后阻止该流边界推进，直到下一个 `Checkpoint` 取代它。
 
@@ -165,7 +166,7 @@ fn compact_below_retention<Record, D: RetractableDelta>(journal: &mut Journal<Re
 
 **留存时长 = 配置参数**：派生历史与原始观察的保留窗口由运行期参数给出（[core-process/design.md §4.6 统一路径文件](design.md#46-统一路径文件)）；窗口内的历史必须保留。
 
-每条流的边界可推进上限 = `min(该流配置窗口下界, 该流已登记引用最早位置)`。
+每条流的边界可推进上限 = `min(该流配置窗口下界, 该流已登记引用最早位置)`。留存窗口是时长，窗口下界怎样换算为每条流上的位置，设计没有定（§5 卡点 2）。
 
 ### 2.7 不变量
 
@@ -200,7 +201,7 @@ fn compact_below_retention<Record, D: RetractableDelta>(journal: &mut Journal<Re
   - 越权 → `Unauthorized`（共同规则）。
 - **生效**：各流都通过时，写各流的新边界并 append `Applied(position)`；然后对每条流按 §2.4 的删除规则执行压缩（§4.1），压缩之前先完成覆盖检查点。
 - **可见结果**：控制记录可读；此后低于新边界的读得 `BeyondRetention`；订阅者按 §2.4 最后一段收到前导或压缩缺口；执行事实侧没有记录被删。
-- **崩溃**：`Applied` 之前实例结束，动作随实例结束、不生效。`Applied` 已提交而压缩未完成时，边界已是新值，边界之下的删除是按规则可重做的清理：重启后继续按同一规则删，结果相同（删除只取决于边界与留下的记录，§4.1）。
+- **崩溃**：没有结论就随实例结束的动作，按控制组的共同规则不生效。`Applied` 已提交而覆盖检查点或压缩尚未完成时崩溃，重启后怎样处置设计没有定（§5 卡点 1）。
 
 ## 4 内部结构
 
@@ -222,7 +223,7 @@ flowchart TB
 ```
 
 - 判定与写新边界在一个事务里：判定所读的 `min(s)` 与写入之间没有别的登记插入（核心单写者，[存储](storage.md) §2.1）。
-- 删除按行集调用 [存储](storage.md) 的 `delete_below`；“删哪些”只取决于新边界与同键 / 同流 epoch 的后续记录，所以中断后重做得到同一结果。
+- 删除按行集调用 [存储](storage.md) 的 `delete_below`；“删哪些”只取决于新边界与同键 / 同流 epoch 的后续记录。
 
 ### 4.2 引用登记的状态
 
@@ -263,7 +264,7 @@ stateDiagram-v2
 4. 再次 `advance_retention({s: q})`，q 不越过窗口下界：`Applied`；s 为一般观察流，q 之下全部删去。
 5. 之后以 p 为 `basis` 的新校验得 `BeyondRetention`；执行事实侧没有记录被删。
 6. 程序变体：程序 `Origin` 输入第一次提交的 cursor 是 `from` 的前一位置，低于当前边界；它的 `Checkpoint` 登记这一位置，此后该流的 `advance_retention` 得 `ReferencedBelow`，直到下一个 `Checkpoint` 取代它。
-7. 卡点：无。
+7. 卡点：第 4 步“不越过窗口下界”所需的换算未定义（本节卡点 2）；其余各步无卡点。
 
 **2. 程序流压缩与收敛（§2.3、§2.4）**
 
@@ -281,6 +282,18 @@ stateDiagram-v2
 3. 回填进度键：新 epoch 的 `None{epoch}` 与起点的 gap 同事务写下，旧 epoch 的 `Closed` 被取代，压缩后只留最新一条，不会被当成新 epoch 的进度。
 4. 覆盖检查点：压缩删去当前流 epoch 内的记录之前已 append，之后的覆盖从它起 fold，与压缩前相等。
 5. 卡点：无。
+
+**4. 推进之后、压缩完成之前崩溃**
+
+1. `advance_retention({s: q})` 通过判定，新边界与 `Applied` 同事务提交；s 是当前流 epoch 里有序号覆盖的流，下一步要由持久订阅 append 覆盖检查点（[subscription.md §4.6 覆盖检查点](subscription.md#覆盖检查点)），再删行。
+2. 在 `Applied` 提交之后、覆盖检查点提交之前 `kill -9`。
+3. 重启：边界已是 q，q 之下的原始记录还在，覆盖检查点不存在；s 上快照位置低于 q 的部分按 [存储](storage.md) §2.4 从边界重建。
+4. 卡在这里：设计只规定了“先写检查点、后删行”的先后，没有规定检查点与边界 / `Applied` 是否同事务，也没有规定重启后是否继续这次压缩、由谁在什么时候补写检查点；从边界起 fold 的覆盖与压缩前是否相等，因此推不出（见卡点 1）。
+
+**卡点**
+
+- **卡点 1：推进之后、压缩完成之前的崩溃窗口**（分类：缺概念）。场景是走查 4；依据是 §3.2、§4.1 与 [subscription.md §4.6 覆盖检查点](subscription.md#覆盖检查点) 只规定先后，不规定原子单位与重启处置。关闭事件：定出覆盖检查点与新边界、`Applied` 的原子单位（或重启时从尚未删除的边界以下记录补写检查点、提交之后才允许删行的规则），使快照失效后的重建遵循同一规则，并加一条注入这一窗口崩溃、核对覆盖结果不变的验收。
+- **卡点 2：留存窗口下界换算为每流位置**（分类：缺概念）。场景是 W13 步 1 的 `InsideWindow` 判定；依据是 §2.6 只写“该流配置窗口下界”，运行期参数给的是时长（[core-process/design.md §4.6 统一路径文件](design.md#46-统一路径文件)），而位置与时钟无关（[core-process/design.md §3.1 流、位置与三种进度](design.md#31-流位置与三种进度)）。关闭事件：定出时长怎样在每条流上换算为位置（按哪种时间、以哪个时钟），写进 §2.6 与运行期参数条目。
 
 ## 6 评估
 

@@ -10,7 +10,7 @@
   - 投影 `Projection`、记录映射与握手静态校验：[integration-session.md §3.3 投影 Projection](integration-session.md#33-投影-projection)、[integration-session.md §3.4 记录映射](integration-session.md#34-记录映射-设计)、[integration-session.md §3.4 记录映射](integration-session.md#34-记录映射-设计)。
   - 推送怎样经当前会话的通道读入、盖上 `SessionEpoch`：[integration-session.md §4.3.2 集成→核心的推送](integration-session.md#432-集成核心的推送)。记录的位置分配与 append：[观察 `Journal`](observation-journal.md) §2.2。
   - 各处理器触发之后的业务效果：效应侧归因见 [core-process/design.md §4.4 效应侧归因处理器](design.md#44-效应侧归因处理器)，按执行计数与最近观察见 [read-model.md §3.2 成交的计数身份](read-model.md#32-成交的计数身份-设计)，输入约束与过期见 [decision-chain.md §4.2 顺序固定链：授权 → 输入约束 → 审批 → lane → 过期](decision-chain.md#42-顺序固定链授权--输入约束--审批--lane--过期)，按主体投递见 [delivery.md §3.3 按主体投递](delivery.md#33-按主体投递)。本文只登记“字段 → 处理器”。
-  - 值树与 `required_inputs` 的定义：[core/design.md §3.2 组合子值树与五个 fold](../design.md#32-组合子值树与五个-fold)。
+  - 值树与 `required_inputs` 的定义：[core-process/design.md §3.12 组合子值树与五个 fold](design.md#312-组合子值树与五个-fold)。
   - 出站处理器（程序发出的请求出现 → 做什么）：[outbound-requests.md §3.2 处理器注册表：出现了什么，则做什么](outbound-requests.md#32-处理器注册表出现了什么则做什么)。
 - 证据标签与编号前缀的约定见 [README.md §0.4 阅读约定](../../README.md#04-阅读约定)。
 
@@ -146,7 +146,7 @@ venue 词汇不越过集成 [域 B6]。
 
 ### 3.2 处理器字段注册表
 
-处理器的定义见 §2.3；`required_inputs` 的定义见 [core/design.md §3.2 组合子值树与五个 fold](../design.md#32-组合子值树与五个-fold)。注册表按两侧分开：
+处理器的定义见 §2.3；`required_inputs` 的定义见 [core-process/design.md §3.12 组合子值树与五个 fold](design.md#312-组合子值树与五个-fold)。注册表按两侧分开：
 
 | 字段出现 | 侧 | 处理器 |
 |---|---|---|
@@ -186,7 +186,7 @@ venue 词汇不越过集成 [域 B6]。
   - **公共请求 schema**：有公共 schema 的种类随 IDL 发布一次性读的公共请求 schema；来源专有的请求参数写在该集成的扩展 schema 里。订单状态的公共请求 schema 带一个订单身份字段，取值 `VenueOrder(venue_order_id) | CallerKey(idempotency_key)`；某流的 `request_schema` 可以只接受其中一种（以它为基础的扩展 schema 收窄即可）。消费方的读与检查项的“先查后判”按这个字段写入订单身份，能否表达由该流 `request_schema` 的校验决定。
 - **公共意图 schema**：交易协议的每种操作种类（下单、撤单、改单、平仓）各有一份意图参数 schema，随 IDL 发布，写成 JSON Schema，含类型相关的必填与互斥约束。集成在该 `(scope, OperationKind)` 的 `CapabilityProof` 里声明它接受的 schema 身份：公共意图 schema，或以它为基础只增加字段与约束的扩展 schema（[integration-session.md §3.3 投影 Projection](integration-session.md#33-投影-projection)）；意图按声明的 schema 在输入约束步校验（[ticket.md §3.4 参数合规：意图参数 schema](ticket.md#34-参数合规意图参数-schema-设计)）。意图参数 schema 是 UTA 的契约，不是上游请求格式。
 - **交易协议检查读的公共字段**（[ticket.md §4.5 交易协议：操作种类、目标、可执行性、检查目录](ticket.md#45-交易协议操作种类目标可执行性检查目录-交易协议)）：持仓记录的带符号数量与作用域内稳定的持仓身份；报价记录的一个指定参考价字段；目录记录的合约乘数、计价币种与按 (instrument, `OperationKind`) 的写资格；余额记录的权益及其币种；公共意图 schema 的限价字段。
-- **扩展 schema**：venue 特有、公共 schema 容纳不下的内容，由集成在声明中给出 schema 文本，以单独的流输出；需要与公共流关联时，程序按记录上的身份字段 `Join`（[core/design.md §3.2 组合子值树与五个 fold](../design.md#32-组合子值树与五个-fold)）。扩展 schema 同样属于契约，不是上游消息格式。
+- **扩展 schema**：venue 特有、公共 schema 容纳不下的内容，由集成在声明中给出 schema 文本，以单独的流输出；需要与公共流关联时，程序按记录上的身份字段 `Join`（[core-process/design.md §3.12 组合子值树与五个 fold](design.md#312-组合子值树与五个-fold)）。扩展 schema 同样属于契约，不是上游消息格式。
 - 核心不解释 schema 内容：程序与钩子的解释器按 schema 注册；schema 身份随声明交给解释层，解释层据此判断该来源专有字段此刻能否使用（来源专有字段本身在构建期从集成发布制品生成，[downstream/design.md §4.3 命令与参数从哪里来](../../downstream/design.md#43-命令与参数从哪里来)）。
 - 理由：载荷若是上游形状，程序就成了 UTA 内第二个消费上游的地方，只能按 venue 分别写，跨渠道组合做不成（§2.7 最后一条不选）。
 
@@ -218,7 +218,7 @@ flowchart LR
 
 - **解析入口**：每种链路一个智能构造器；构造器私有，已验证的信封类型只能由它产出，下游组件信任它，不再防御。
 - **注册表**：字段种类 → 处理器（触发条件、`required_inputs`、读 / 写侧、效果）。按两侧分区：观察侧分区只产出派生记录与进度；效应侧分区由效应侧组件在读观察记录时使用，这是效应侧读观察侧的方向（[core-process/design.md §3.4 两个类型宇宙与唯一边](design.md#34-两个类型宇宙与唯一边)）。
-- **启动期校验**：启动时求全部处理器与检查项的 `required_inputs` 之并，与所引用集成来源的最近声明比对；引用了没有集成提供字段的树 fail-closed（[core/design.md §3.2 组合子值树与五个 fold](../design.md#32-组合子值树与五个-fold)）。注册表不宣称全局穷尽：它是开放的、按协议增长的映射，Rust 形状见 [core-process/design.md §4.8 Rust 映射](design.md#48-rust-映射)。
+- **启动期校验**：启动时求全部处理器与检查项的 `required_inputs` 之并，与所引用集成来源的最近声明比对；引用了没有集成提供字段的树 fail-closed（[core-process/design.md §3.12 组合子值树与五个 fold](design.md#312-组合子值树与五个-fold)）。注册表不宣称全局穷尽：它是开放的、按协议增长的映射，Rust 形状见 [core-process/design.md §4.8 Rust 映射](design.md#48-rust-映射)。
 
 ## 5 走查
 

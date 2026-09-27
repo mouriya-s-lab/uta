@@ -41,6 +41,7 @@ flowchart LR
 | core（核心进程） | 解释层为每个下游连接开一个核心会话 | 核心↔解释层操作集 | core 拥有，只在本仓库内部 [core-process/design.md §4.2 对外接口总表](../core/core-process/design.md#42-对外接口总表) |
 
 - Alice 是下游之一，不是核心的父进程或守护者；下游只经解释层接触核心（[README.md §4.1 划分与理由](../README.md#41-划分与理由)）。
+- **容器与部署**：一次性命令在 `uta` CLI 进程里运行；长连接端点由 CLI 自身提供，或在核心进程内部转发，两种部署都允许，外部行为相同，所以解释层不必是一个独立进程（§4.1）。
 
 ### 1.3 分配给解释层的需求
 
@@ -303,17 +304,17 @@ flowchart LR
 
 ## 5 走查
 
-场景定义与端到端成败标准见 [README.md §5 场景（W1–W20）](../README.md#5-场景w1w20)、[README.md §5 场景（W1–W20）](../README.md#5-场景w1w20)、[README.md §5 场景（W1–W20）](../README.md#5-场景w1w20)；核心内部的组件级 trace 见 [core-process/design.md §5.1 W14（Q29）下游（Alice）断连重连](../core/core-process/design.md#w14q29下游alice断连重连) 等。本节只走解释层内部的组件。
+场景定义与端到端成败标准见 [README.md §5 场景（W1–W20）](../README.md#5-场景w1w20)；核心内部的组件级 trace 见 [core-process/design.md §5.1 W14（Q29）下游（Alice）断连重连](../core/core-process/design.md#w14q29下游alice断连重连) 等。本节只走解释层内部的组件。
 
 ### 5.1 W14（Q29）下游断连重连
 
 主 trace：[core-process/design.md §5.1 W14](../core/core-process/design.md#w14q29下游alice断连重连)。
 
 1. Alice 或解释层崩溃 / 重启。→ 长连接端点随进程消失；它开的核心会话随传输关闭而结束，核心不为此写记录。解释层没有要恢复的状态（§3.2）。
-2. Alice 凭续传令牌重连。→ 长连接端点以下游自报的 actor 开核心会话；同一 principal 的持久订阅由核心自动重新挂接，投递从令牌所编码的已确认进度之后继续（[session-entry.md §4.6 已定事实](../core/core-process/session-entry.md#46-已定事实)）。
+2. Alice 凭续传令牌重连。→ 长连接端点以下游自报的 actor 开核心会话；同一 principal 的持久订阅由核心自动重新挂接，投递从核心持久化的已确认 cursor 之后继续（[session-entry.md §4.6 已定事实](../core/core-process/session-entry.md#46-已定事实)）。续传令牌是客户保存的、对核心侧确认进度的不透明编码（§4.5），不是第二份进度源头：续投的起点只由核心的已确认 cursor 决定。
 3. 端点读当前状态（读模型的 `Snapshot`），先收到断连期间未确认的投递缺口，再收到记录。→ 翻译把投递缺口翻成“本订阅漏收了这一段”的缺失通知，排在后续推送之前；未确认区间可能重复，端点按位置去重或原样标出。
 4. 执行事实订阅同样续投：断连期间的待审事项、结果未知与取证终结都补到，没有缺失通知。
-- 对外可见：当前状态、断连之后的推送、缺失通知；续传令牌与位置只在解释层与核心之间比对。走通。
+- 对外可见：当前状态、断连之后的推送、缺失通知；`as_of` 与 cursor 只在解释层与核心之间比对，不出现在对外说法里。走通。
 
 ### 5.2 W19（Q19）会话身份与未授权控制
 

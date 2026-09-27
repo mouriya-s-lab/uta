@@ -29,7 +29,7 @@ UTA 由四个部分组成，每个部分是一棵独立的 C4 树：
 - **读者：** 实现 UTA 的人。
 - **审批者：** 无。K3 原话为“读者是以后实现uta的人，没有审批”。
 - **维护者：** 范围与状态确认者。
-- **状态：已定。** 本文与 core、集成、解释层三棵树的文档为已定，只有两份例外为“评审中”：程序宿主进程与程序宿主元素，原因是走查登记了一项未关闭的卡点（程序规则的时限在没有新记录时怎样触发，[core/program-host/design.md §5.4 卡点](core/program-host/design.md#54-卡点)）。依赖假设 H 的决定有证伪条件；需要实测的量是验收项，不是设计未决（§6.3）。
+- **状态：已定。** 本文与集成、解释层两棵树的文档、core 的系统上下文为已定；core 里登记了未关闭卡点的文档为“评审中”：核心进程、程序宿主进程、程序宿主元素、观察 `Journal`、存储、STS 规则链。卡点清单见 §6.3。依赖假设 H 的决定有证伪条件；需要实测的量是验收项，不是设计未决（§6.3）。
 
 ### 0.3 非目标
 
@@ -71,7 +71,7 @@ UTA 由四个部分组成，每个部分是一棵独立的 C4 树：
 
 **状态词。** `已定`：走查卡点归零、替代方案与风险写全；`评审中`：走查登记了未关闭的卡点，文档写明卡点与关闭它的事件。
 
-**跨文档引用。** 链接到文件，正文写节号，例如“[core/design.md §3.2](core/design.md#32-组合子值树与五个-fold)”。
+**跨文档引用。** 链接到文件，正文写节号，例如“[core-process/design.md §3.12 组合子值树与五个 fold](core/core-process/design.md#312-组合子值树与五个-fold)”。
 
 **图。** 图一律是内嵌在所画元素文档里的 Mermaid，只画本层元素与直接相邻的外部元素。图只画正文已定的内容；图上出现正文没有的东西即图错。
 
@@ -129,14 +129,7 @@ flowchart LR
 
 订单的状态、持仓、审批流、策略行为都是这四步的组合结果，不是核心实体。UTA 中不存在任何同时承载 provider 字段与业务状态的对象：那样的对象就是上游原值的拷贝（§1.1）。写侧基本类型“订单”是意图的类型，只含核心代数实际读取的字段，不是这样的对象。[证据：fp-00 §1 五十三案例无一以大对象为中心；fp-02 命题 12]
 
-四步都在 core 里，各对应一个机制，机制之间只通过位置、键与日志记录关联；机制本身写在 core 的文档里：
-
-| 步 | 机制 | 所在 |
-|---|---|---|
-| 看到了什么 | 观察日志，派生侧可撤回 | [observation-journal.md](core/core-process/observation-journal.md) |
-| 可以做什么 | 程序 = 封闭值代数，两种解释；出口是效应请求 | [core/design.md §3.2](core/design.md#32-组合子值树与五个-fold)、[outbound-requests.md](core/core-process/outbound-requests.md) |
-| 受控执行一次 | 单据 → 规则链 → 唯一 IO 壳 | [ticket.md](core/core-process/ticket.md)、[decision-chain.md](core/core-process/decision-chain.md)、[io-shell.md](core/core-process/io-shell.md) |
-| 证据确认发生了什么 | 结果未知的证据门与恢复协议 | [io-shell.md §4.5 对账驱动](core/core-process/io-shell.md#45-对账驱动) |
+四步都在 core 里，机制之间只通过位置、键与日志记录关联；四步各由 core 的哪些元素承担，见 [core/design.md](core/design.md) 与它分解出的核心进程文档。
 
 四步落在四个部分上的样子：
 
@@ -162,7 +155,7 @@ flowchart LR
 
 | 词 / 概念对 | 甲 | 乙 | 区分依据 |
 |---|---|---|---|
-| 解释层 / 解释器 | 解释层：core 之外把 core 清洗成对外接口的部分，面向下游 | 解释器：core 内对值树的解释，包括五个 fold、程序的两种解释与宿主 | 前者是接口清洗，不含抽象；后者属设计中心（[core/design.md §3.2](core/design.md#32-组合子值树与五个-fold)） |
+| 解释层 / 解释器 | 解释层：core 之外把 core 清洗成对外接口的部分，面向下游 | 解释器：core 内对值树的解释，包括五个 fold、程序的两种解释与宿主 | 前者是接口清洗，不含抽象；后者属设计中心（[core-process/design.md §3.12 组合子值树与五个 fold](core/core-process/design.md#312-组合子值树与五个-fold)） |
 | 两种“下游” | core 内的“交给下游”：解释载荷的程序、钩子与消费方 | core 之外的下游：Alice、CLI 使用者、外部客户程序，只经解释层接触 core | 前者说的是载荷的解释权，后者说的是接触 core 的途径 |
 
 ## 2 问题域
@@ -277,8 +270,8 @@ flowchart LR
 
 **P3 gap / 控制的三类**（P3 分类的是连续性与损失现象；渠道失败 `Gap{origin: Channel}` 是一次读调用的结果，不是 P3 现象，[one-shot-read.md §3.7 术语：读的“拿不到”](core/core-process/one-shot-read.md#37-术语读的拿不到)）：
 
-- **来源 gap**：某范围断代。它要么是新 epoch 首条记录，含前一范围与其最后 Seq（该流的第一个 epoch 无前驱）；要么（`backfill_incomplete`）是当前 epoch 内标出回填未覆盖区间的记录，不结束也不开 epoch，不重置 readiness、路由与 `generation`（[subscription.md §4.5 实时边界、回填任务与回填进度](core/core-process/subscription.md#45-实时边界回填任务与回填进度)）。原因 ∈ {start, disconnect, quota, ingress_overflow, credential_rotated, schema_change, backfill_incomplete, program_upgrade}。
-- **投递 gap**：某订阅对某范围的损失，是订阅的状态，不是流上的记录（流本身不缺这些记录）。字段为所属订阅与流（与该流的游标同一粒度，不属于该流上的某一项）、from/to 位置、原因 ∈ {slow_consumer, compacted, conflated}；自跳过时起存在，结束于四种情形之一：订阅方确认不低于 to 的游标；该流离开订阅；`Reset` 重建该流的游标；`rewind_cursor` 把游标退回到低于它的 from（[subscription.md §3.3 投递缺口 Gap{origin: Delivery}](core/core-process/subscription.md#33-投递缺口-gaporigin-delivery)）。只有 latest 消费会因慢被停投、跳过（slow_consumer），ordered 与 await-all 只背压；程序的 latest 输入滞后被跳过的区间也是投递 gap。
+- **来源 gap**：某范围断代（新 epoch 首条记录，含前一范围与其最后 Seq；该流的第一个 epoch 无前驱），或当前 epoch 内回填未覆盖的区间。原因 ∈ {start, disconnect, quota, ingress_overflow, credential_rotated, schema_change, backfill_incomplete, program_upgrade}；各原因的写者与它是否开新 epoch 见 [core-process/design.md §3.2 gap 的三种来源](core/core-process/design.md#32-gap-的三种来源)。
+- **投递 gap**：某订阅对某范围的损失，是订阅的状态，不是流上的记录（流本身不缺这些记录）。原因 ∈ {slow_consumer, compacted, conflated}；它何时产生、何时结束见 [subscription.md §3.3 投递缺口 Gap{origin: Delivery}](core/core-process/subscription.md#33-投递缺口-gaporigin-delivery)，哪种消费方式会因慢而产生它见 [delivery.md §3.1 三种消费方式（投递侧）](core/core-process/delivery.md#31-三种消费方式投递侧)。
 - **状态通知**：readiness 与回填进度的变化（等待实时 / 实时；补齐中 / 已闭合 / 已到达而衔接未证明 / 未能补齐）、订阅挂起 / 恢复（附挂起原因）。它不是损失，不需确认，由健康观察或订阅状态派生。
 
 ### 2.3 需求
@@ -424,7 +417,8 @@ SDK 缺口（`getCapabilities` 空、`getPendingOrderIds` 空、historical 可�
 - Venue 官方 URL 尚未逐条重开；表格中保留的能力、重复语义和 10 分钟缓存仍需按 `venue-capabilities.md:167` 重新核实。
 - 旧 UTA 服务端真实路由、运行时错误体、实际状态转移、超时和 retry 语义未从运行环境核实；SDK 路径是调用方证据，不是服务端实现证据。
 - `/api/simulator/*`（A39）到模拟器注入方法（A40–A46）的路由级对应关系未从调查报告取得；报告只记录了路由族与方法各自的存在。
-- 质量场景的容量数字（Q22、Q24、Q30）来自沟通场景与内部预算假设，不是产品 SLO；core 侧以验收 #19（[core/design.md §6.3](core/design.md#63-验收标准)）验收，子系统侧以 `hpc-derivation/design.md` §10 #7/#10 验收。
+- 质量场景的容量数字（Q22、Q24、Q30）来自沟通场景与内部预算假设，不是产品 SLO；core 侧以验收 #19（[core-process/design.md §6.3 验收标准](core/core-process/design.md#63-验收标准)）验收，子系统侧以 `hpc-derivation/design.md` §10 #7/#10 验收。
+- 程序宿主进程的 CPU / 内存预算由 OS 按进程限制（POSIX rlimit、Windows job object）并在超限时终止进程：`investigation/rust-feasibility.md` §9 只给出子进程的等待、终止与进程组 / job object 管理，没有给出三个目标 OS 上的配额 API、预算粒度与超限行为，也未在三 OS 上实测（同报告 “Unknowns” 第 7 条）。设计把它作为 [设计] 前提沿用，由证伪 #3 与验收 #15 检验（[program-host/design.md §1.2 本容器直接面对的域](core/program-host/design.md#12-本容器直接面对的域)）。
 
 ## 3 驱动
 
@@ -634,7 +628,15 @@ flowchart LR
 
 ### 6.3 未决
 
-一项：程序规则的时限（`DecisionStep::Expire`）在没有新记录时何时、按哪个时钟触发，现行宿主协议没有时间输入，登记为卡点（缺概念），关闭事件写在 [core/program-host/design.md §5.4 卡点](core/program-host/design.md#54-卡点)。除此之外，设计层面的每个问题都已在各部分的文档里作了决定；设计不为自己登记待做实验。以下三类内容不是设计未决：
+走查登记了五项未关闭的卡点，每项的场景、依据与关闭事件写在所属文档，汇总在 [core-process/design.md §5.3 卡点](core/core-process/design.md#53-卡点)：
+
+- 程序规则的时限（`DecisionStep::Expire`）在没有新记录时何时、按哪个时钟触发：宿主协议没有时间输入（[program-host-element.md §5.6 卡点](core/core-process/program-host-element.md#56-卡点)）；
+- 保留边界推进之后、覆盖检查点与压缩完成之前崩溃，重启后的处置（[observation-journal.md §5 走查](core/core-process/observation-journal.md#5-走查) 卡点 1）；
+- 留存窗口下界怎样由时长换算为每条流上的位置（同上，卡点 2）；
+- Q10 要求的“冲突记录”没有记录种类与写者（[decision-chain.md §5 走查](core/core-process/decision-chain.md#5-走查) 卡点 1）；
+- `request_snapshot` 的 `Applied` 与快照提交的先后、写失败的结论（[storage.md §5 走查](core/core-process/storage.md#5-走查) 卡点 1）。
+
+除此之外，设计层面的每个问题都已在各部分的文档里作了决定；设计不为自己登记待做实验。以下三类内容不是设计未决：
 
 - **实现期才能量的数字**：fold 求值开销、`dyn` 分发、增量引擎的 cutoff 粒度、两侧是否物理共表、文本编码吞吐、秒级 K 线负载。由实现 profiling 定落点，落点变化不改模型；能写成可测标准的是验收项（验收 #19）。
 - **会推翻决定的观测**：它们是各文档评估节里的证伪条件；设计已按当前决定写完，命中时改决定而非打补丁。

@@ -145,7 +145,7 @@ enum ParameterValidity { Valid, Invalid(NonEmpty<Violation>), CapabilityNotEstab
 - **交给集成拒绝**：见理由，`SendBarrier` 之后的本地拒绝只能是 `NotSent`，批准、屏障与冷却都已发生。
 - **能力未确立即否决（`Unknown` 视同 `Unsupported`，或离线时按最近声明判定）**：来源没有给出否定，否决记录却说“来源不提供”；瞬断就关闭送审中的单据。
 - **另设等待标志**：等待是记录的 fold（[decision-chain.md §3.4 RuleState 是记录的 fold，不另存](decision-chain.md#34-rulestate-是记录的-fold不另存-设计)）。
-- **把参数约束写成组合子值树**（与规则、检查同一表示，[core/design.md §3.2 组合子值树与五个 fold](../design.md#32-组合子值树与五个-fold)）：值树不能同时充当下游在构建期生成参数的来源，同一份约束就要写两遍；JSON Schema 既是生成来源又是校验依据，钉住版本与参考校验器后两实现结论相同。
+- **把参数约束写成组合子值树**（与规则、检查同一表示，[core-process/design.md §3.12 组合子值树与五个 fold](design.md#312-组合子值树与五个-fold)）：值树不能同时充当下游在构建期生成参数的来源，同一份约束就要写两遍；JSON Schema 既是生成来源又是校验依据，钉住版本与参考校验器后两实现结论相同。
 
 ### 3.5 第一层：依据有效性 `basis_validity`
 
@@ -182,7 +182,7 @@ enum BasisValidity { Fresh, Stale(Lag), Retracted(LogPositions), BeyondRetention
 
 ### 3.6 第二层：意图专属对账 `alignment`；偏离是状态
 
-**偏离是状态，不是动作。** `basis_validity` 与 `alignment` 均为单据 fold 的一部分，在**效应侧**评估。评估用组合子（`AlignmentCheck.eval` 是 `Comb<Observed, CheckResult>`，[core/design.md §3.2 组合子值树与五个 fold](../design.md#32-组合子值树与五个-fold)）与 `fold_state` 机制。
+**偏离是状态，不是动作。** `basis_validity` 与 `alignment` 均为单据 fold 的一部分，在**效应侧**评估。评估用组合子（`AlignmentCheck.eval` 是 `Comb<Observed, CheckResult>`，[core-process/design.md §3.12 组合子值树与五个 fold](design.md#312-组合子值树与五个-fold)）与 `fold_state` 机制。
 
 ```rust
 /// 一组检查，每项声明它需要哪些观察输入（required_inputs 由值树 fold 求出）。
@@ -281,7 +281,7 @@ type IntentAlignment = Map<CheckName, Aligned | Diverged(Divergence) | Undecidab
 |---|---|---|---|
 | 被用 | 会话入口（单据组） | `draft`/`revise`/…（§4.3） | 消费方意图的入口 |
 | 被用 | 出站请求处理器 | `Draft` + `SubmitForDecision`（同一事务） | 程序意图的入口，负责人 = 发出成员的装载 principal |
-| 被用 | STS 规则链 | 读单据 fold：`responsible`、`current_version`、`parameter_validity`、`basis_validity`、`alignment`、Decision 与 `TicketAction`；写 `Close(Prepared)` 与同事务的 `Prepared`、`Close(DecisionRejected \| Expired)` | 链的输入与放行出口；单据只提供状态，判定在链里 |
+| 被用 | STS 规则链 | 读单据 fold：`responsible`、`current_version`、`parameter_validity`、`basis_validity`、`alignment`、Decision 与 `TicketAction`；链判定放行或否决后，请求单据执行 `Close(Prepared)`（单据在同一事务写 `Prepared`）或 `Close(DecisionRejected \| Expired)`，这些 `TicketAction` 的写者是单据；链自己只写 Decision / `Outcome` / `Rejection` | 链的输入与放行出口；单据只提供状态并执行关闭，判定在链里 |
 | 交出 | IO 壳 | `Prepared` 记录 | **写向**：单据 → `Prepared` → IO 壳，唯一交出点；IO 壳不知道单据的存在 |
 | 读 | IO 壳的记录 | 能力证据、`VenueAccepted`/`SendBarrier` 位置、归因后的订单观察 | **读向**：作 `basis` 与检查项的依据 |
 | 使用 | 一次性读 | “先查后判”的 `read`，发起方 `Ticket(TicketId)` | 每个送审版本至多一次 |

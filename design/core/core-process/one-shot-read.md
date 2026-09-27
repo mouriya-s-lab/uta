@@ -219,11 +219,16 @@ sequenceDiagram
   opt 某发起方 deadline 先到
     R-->>O: Pending{from = dispatch_end, request, instance_id}
   end
+  alt 集成作答
+    I-->>S: 回答（经当前会话的通道）
+    S-->>R: 封闭返回值
+  else 会话结束
+    S-->>R: 强制完成为 Unavailable
+  end
   alt Answered / Refused 且发出 epoch 仍是当前 epoch
-    I-->>R: 回答
-    R->>J: 同一事务：item（one_shot）+ 读结论 + 计数观察 [+ EffectResponse]
-  else Unavailable / 会话结束强制完成 / 结果越过发出 epoch
-    R->>J: 同一事务：Gap{Channel}（当前 epoch，带 provenance、dispatch_end、session_epoch）+ 计数观察 [+ EffectResponse]
+    R->>J: 本组件编排的同一事务：item（one_shot）+ 读结论 + 计数观察 [+ EffectResponse]
+  else Unavailable / 强制完成 / 结果越过发出 epoch
+    R->>J: 本组件编排的同一事务：Gap{Channel}（当前 epoch，带 provenance、dispatch_end、session_epoch）+ 计数观察 [+ EffectResponse]
   end
   R-->>O: Answered{conclusion, items} / Refused{conclusion, reason} / Unavailable{gap}（未得 Pending 的发起方）
 ```
