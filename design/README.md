@@ -264,7 +264,7 @@ flowchart LR
 - 来源：账户、公共 feed、或程序。程序输出的指标 / alert 是派生观察，与外部观察同一形状。
 - 主体：instrument / 账户 / 子账户 / feed。
 - 种类：quote / book / bar / clock / 余额 / 持仓 / 订单状态 / 成交 / 目录 / 连接状态 / 健康 / 汇率 / 派生。
-- venue 事件时间（可无）、venue 序号（可无）、venue 续传游标（可无）、集成在本机的收到时间（`received_at`，由集成填写；不是核心盖的记录时间）、Seq、原始负载（订单状态 / 成交必有，其余种类可无，[envelope.md §2.2 三部分](core/core-process/envelope.md#22-三部分-设计)）、质量标记。
+- venue 事件时间（可无）、venue 序号（可无）、venue 续传游标（可无）、集成在本机的收到时间（`received_at`，由集成填写，只在集成来源的观察上；程序派生的观察不合成它，只与其他记录一样有核心盖的记录时间与位置）、Seq、原始负载（订单状态 / 成交必有，其余种类可无，[envelope.md §2.2 三部分](core/core-process/envelope.md#22-三部分-设计)）、质量标记。
 - 订单状态 / 成交观察带归因（某尝试 / 外部 / 未定）。
 - 成交观察带执行身份（在来源 × 作用域内唯一，跨渠道不变）与可选的修订号；数量与价格是本笔执行的量；订单状态带该订单的累计量（[read-model.md §3.2 成交的计数身份](core/core-process/read-model.md#32-成交的计数身份-设计)，F12）。
 

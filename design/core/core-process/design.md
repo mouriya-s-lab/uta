@@ -237,18 +237,19 @@ LogPosition = (StreamId, Seq)           // 一条记录的顺序身份
 - **读副作用**：“读进来”这个动作本身就改变了系统内部：多一条记录、进度推进、程序被唤醒。它不改变外部世界。
 - **写副作用**：改变世界。
 
-读的两条推论：
+读的推论：
 
-- **读即观察记录**：读本身是带 `LogPosition` 的观察记录。一次性查询也写入观察 J：每个结果项一条记录，与推送观察同形，再加一条读结论记录，使空回答与“还没回答”可区分。操作是核心→集成的 `read`（[one-shot-read.md §4.1 核心→集成：read](one-shot-read.md#41-核心集成readstream-request-range--answered--unavailable--refused)），记录带 `provenance: OneShot{origins, request}` 与质量标记 `one_shot`。
+- **向外部来源的读即观察记录**：经集成向来源读（一次性读、回填、取证），读本身就是带 `LogPosition` 的观察记录。一次性查询也写入观察 J：每个结果项一条记录，与推送观察同形，再加一条读结论记录，使空回答与“还没回答”可区分。操作是核心→集成的 `read`（[one-shot-read.md §4.1 核心→集成：read](one-shot-read.md#41-核心集成readstream-request-range--answered--unavailable--refused)），记录带 `provenance: OneShot{origins, request}` 与质量标记 `one_shot`。
 - **发起者是任何人**：集成推送、程序、单据检查项的“先查后判”、消费方、IO 壳的对账取证都可发起读。
+- **程序的定时器是由核心时钟作答的读**：它是一个读处理器（不另设处理器类别），不经集成、不向外部来源读；结果只是请求流上的 `EffectResponse{Fired}`（执行事实），不写观察记录。它同样不改变世界、重做无害、结果总可判定；但已提交的定时器请求不丢：重启由重派重新挂上（[outbound-requests.md §4.2.1 定时器处理器](outbound-requests.md#421-定时器处理器-设计)）。
 
 | | 读副作用 | 写副作用 |
 |---|---|---|
-| 对外 | 不改变世界；可重复、可批处理、可并发、可丢 | 改变世界；一次；不可批、不可去重、不可重放 |
+| 对外 | 不改变世界；可重复、可批处理、可并发；向外部来源的读可丢（丢了就再读或标 gap） | 改变世界；一次；不可批、不可去重、不可重放 |
 | 结果 | 总是可判定（拿到了或没拿到） | 可能不可判定（`Undetermined`） |
 | 失败处理 | 重试、换渠道、标 gap | 对账，永不重试 |
-| 对内的副作用 | append 观察记录、推进进度、触发处理器与 DAG 重算、唤醒程序、更新单据 `alignment`；对账取证另 append 执行事实侧的 `ResolutionEvidence` | append 执行事实（`SendBarrier`/回执/`Undetermined`/`Expired`）、推进 lane、关闭单据 |
-| 时间 | 事件时间 + 集成的收到时间（`received_at`）；核心另在每条记录上盖记录时间（§3.8） | 只有发出时间（venue 的时间是回执的观察） |
+| 对内的副作用 | 向外部来源的读：append 观察记录、推进进度、触发处理器与 DAG 重算、唤醒程序、更新单据 `alignment`；对账取证另 append 执行事实侧的 `ResolutionEvidence`。定时器：只在请求流上 append `EffectResponse{Fired}`、唤醒程序 | append 执行事实（`SendBarrier`/回执/`Undetermined`/`Expired`）、推进 lane、关闭单据 |
+| 时间 | 事件时间 + 集成的收到时间（`received_at`，只在集成来源的观察上）；每条记录另有核心盖的记录时间（§3.8） | 每条执行事实同样有核心盖的记录时间（§3.8）；写特有的时间是发出时间，即 `SendBarrier` 的记录时间（冷却按它计）；venue 的时间是回执里的观察 |
 | 发起者 | 任何人 | 只有 IO 壳 |
 | 机制 | 进度、保留、去重、批处理 | 单据锁、STS 链、lane、两阶段、证据 gate |
 
@@ -259,7 +260,7 @@ LogPosition = (StreamId, Seq)           // 一条记录的顺序身份
 - 调用方先撤后下是两张单据、两次写：各自一次，中间看目标是否已结束的读由调用方自己做。撤单的回执或取证 `Found` 只说这次撤单请求的结果，不证明目标已结束；核心不把两次写拼成一个复合操作（[ticket.md §4.5 交易协议：操作种类、目标、可执行性、检查目录](ticket.md#45-交易协议操作种类目标可执行性检查目录-交易协议)）。
 - `replay_by_key` 形式是写、语义是读。分类边界上的操作必须显式声明属于哪边（[io-shell.md §4.6 replay_by_key](io-shell.md#replay_by_keykey-key_role-scope-barrier_at--original--unavailable)）。
 - `Undetermined` 只属于写：读没有 in-doubt，只有“没拿到”。这就是为什么检查项的 `Unavailable` 可行动（再发一次读），而 IO 壳的 `inconclusive` 只能停等：读已穷尽，写的结果仍未知，只由新到的来源证据终结；principal 可以放弃等待（`Abandoned`），但那不改写结果（[io-shell.md §4.8 结果未知组（核心↔解释层）：放弃跟踪与重开](io-shell.md#48-结果未知组核心解释层放弃跟踪与重开)）。
-- 程序的定时器是读副作用：它不改变世界，只让系统里多一条记录（请求流上的 `EffectResponse{Fired}`）并唤醒程序；作答来源是核心时钟，不经集成，重做无害，结果总可判定（[outbound-requests.md §4.2 读处理器](outbound-requests.md#42-读处理器)）。
+- 定时器的作答来源是核心时钟，所以它不需要集成会话；它的结论只由核心自己的墙钟复核给出，这是核心作为源头的事实（[outbound-requests.md §4.2.1 定时器处理器](outbound-requests.md#421-定时器处理器-设计)）。
 
 不变量：
 
@@ -283,7 +284,7 @@ money/quantity 是交易协议处理器的值类型（[envelope.md §2.4 推论]
 
 - **身份**出现在四处：投影里的 `WriteLaneKey`/`StreamId`（[integration-session.md §3.3 投影 Projection](integration-session.md#33-投影-projection)）、意图的 `target`（[ticket.md §4.5 交易协议：操作种类、目标、可执行性、检查目录](ticket.md#45-交易协议操作种类目标可执行性检查目录-交易协议)）、观察记录的 `attribution`（§4.4）、成交记录的 `execution_id`（[read-model.md §3.2 成交的计数身份](read-model.md#32-成交的计数身份-设计)）。instrument 只在 venue 作用域内有意义。换名不是安全，隐藏构造器才是。
 - **时间**：`deadline` 以 UTC 时刻持久化，所以发出前门与过期步跨重启仍可比。
-- **记录时间** [设计]：核心在 append 每条记录（观察与执行事实）时盖上的本地墙钟 UTC 时刻，加一个单调计数区分同一时刻的记录。它是核心自己的事实，不是来源给的 `received_at`（集成填写的锚点）或事件时间。它在两处被读：观察侧留存窗口的下界换算（[observation-journal.md §2.6 推进判定](observation-journal.md#26-推进判定-设计)）；程序值经记录时间访问器读一条输入记录的记录时间（§3.12）。
+- **记录时间** [设计]：核心在 append 每条记录（观察与执行事实）时盖上的本地墙钟 UTC 时刻，加一个单调计数区分同一时刻的记录。它是核心自己的事实，不是来源给的 `received_at`（集成填写的锚点，只在集成来源的观察上）或事件时间。读它的地方：观察侧留存窗口的下界换算（[observation-journal.md §2.6 推进判定](observation-journal.md#26-推进判定-设计)）；程序值经记录时间访问器读一条输入记录的记录时间，作截止时刻（§3.12）；定时器请求的 `Fired` 以自己的记录时间作触发时刻（[outbound-requests.md §4.2.1 定时器处理器](outbound-requests.md#421-定时器处理器-设计)）；冷却时钟取 `SendBarrier` 的记录时间（[decision-chain.md §4.4 lane 步、冷却与过期步](decision-chain.md#44-lane-步冷却与过期步)）。
 - **值树里的时间值** [设计]：UTC 时刻与时长两种值类型；时刻 + 时长得时刻。它们只从记录（记录时间）或常量得出，程序值里没有“此刻”。
 - **计时器的复核规则** [设计]：STS 的 `deadline` 计时器（[decision-chain.md §4.4 lane 步、冷却与过期步](decision-chain.md#44-lane-步冷却与过期步)）与定时器处理器（[outbound-requests.md §4.2 读处理器](outbound-requests.md#42-读处理器)）共用这一条：单调钟只负责唤醒；醒来之后、做到点动作之前按 UTC 墙钟复核，墙钟未到点就重新挂上。所以到点动作只会迟、不会早：墙钟回拨时醒得早，复核后重新等待；墙钟前跳时单调钟仍按原来的间隔唤醒，到点动作可能晚于墙钟到点的时刻。停止、崩溃与故障期间的时间都只推迟到点动作。
 
@@ -383,6 +384,7 @@ enum DerivationNode {
 - `Field::<T>(name)` 是带类型标签的访问器，类型随访问器进入表达式，启动 / 装载期校验。处理器与检查项的树有一条隐含的记录，叶子 `Field(name)` 读它，启动期按字段注册（[envelope.md §3.2 处理器字段注册表](envelope.md#32-处理器字段注册表)）校验。
 - 程序值有多个具名输入、没有隐含记录 [设计]：访问器写作 `Op1(Field(name), i)`，`i` 是一个 `Input(name)` 节点，读该输入给出的记录的字段；类型由访问器的类型标签给出，装载期与该输入流在最近声明里的 `payload_schema` 核对；含 `Field` 叶子的程序值在装载期被拒（[program-host-element.md §4.2 装载期校验](program-host-element.md#42-装载期校验)）。理由：访问器与它所读的输入之间的绑定就是树里的一条边，两个实现者从同一棵树读出同一个绑定；类型取标签，程序的输出类型才能不等声明就从程序值求出。不选：给 `Field` 叶子加上所读的节点，处理器与检查项的树就要为隐含的记录另造一个节点。
 - **记录时间访问器** [设计]：`Op1(RecordTime, i)` 读 `Input(name)` 节点 i 给出的记录的记录时间（§3.8），值类型为 UTC 时刻。它读的是信封锚点，不读载荷，不经 `payload_schema` 核对；结构校验按锚点表给它定型（[envelope.md §3.1 锚点表 × 链路](envelope.md#31-锚点表--链路)）。它与一个时长经 `Op2` 相加得出截止时刻，是程序规则时限 `Expire` 的截止时刻的来源（[outbound-requests.md §3.1 EffectRequest：唯一出口，请求是值](outbound-requests.md#31-effectrequest唯一出口请求是值)）。
+  - 在五个 fold 里 [设计]：`required_inputs`：`RecordTime` 与“时刻 + 时长”都不贡献 `StreamKind`（记录时间是每条记录都有的信封锚点，不依赖任何声明字段），`RecordTime` 所读的 `Input` 仍由 `inputs` 声明约束；输出类型：`RecordTime` 给 UTC 时刻，“时刻 + 时长”要求两边分别是 UTC 时刻与时长、给 UTC 时刻，两边类型不符时这个节点的输出类型无定义；求值：`RecordTime` 取该 `Input` 节点当前给出的那条记录的记录时间，该输入还没有交来记录时没有值；“时刻 + 时长”在两边都有值时相加；失败：相加越出 UTC 时刻的可表示范围得失败 kind `TimeOverflow`（附树中路径），与“没有值”一样使依赖它的节点没有值，用作 `Expire` 的截止时刻时这一步不生效；说明：生成“截止时刻 = 输入 x 的记录时间 + d”这样的文字，供审批人与程序作者读。
 - 组合子从不提 venue，只接受三种输入：锚点、注册表里的具名字段（带类型）、经 `payload_schema` 访问器取得的载荷值。记录映射的换算是唯一例外的输入：它的输入是上游字段值，但树里仍不出现上游字段名，字段名只在记录映射的处置表里（[integration-session.md §3.4 记录映射](integration-session.md#34-记录映射-设计)）。
 - 协议差异被压在访问器一层，谓词之上一律纯组合：`InBand(field("px"), lo, hi)` 对任何注册了 `px: Price` 的 venue 都成立。
 - 程序值是一组节点加决策步、输入声明与输出声明：`Program { nodes, rules, inputs, facts, outputs }`（[program-host-element.md §3.1 程序值](program-host-element.md#31-程序值)）。`InputDecl`、`FactDecl` 与 `Output` 都不是节点构造子。
@@ -1067,7 +1069,7 @@ sequenceDiagram
 
 #### W13（Q28）保留边界推进与被引用位置
 
-1. 运维经控制面 `advance_retention(to)`，每条流一个新边界；观察 `Journal` 逐流判定：越过该流已登记引用最早位置 → `Rejected(ReferencedBelow{min})`；越过留存窗口下界（该流上记录时间 ≥ `now − D` 的最小位置，`now` 为结论记录自身的记录时间）→ `Rejected(InsideWindow{bound})`（[observation-journal.md §2.6 推进判定](observation-journal.md#26-推进判定-设计)）。
+1. 运维经控制面 `advance_retention(to)`，每条流一个新边界；观察 `Journal` 对核心墙钟采样一次得 `now`，逐流判定：越过该流已登记引用最早位置 → `Rejected(ReferencedBelow{min})`；越过留存窗口下界（该流上记录时间 ≥ `now − D` 的最小位置；没有这样的记录时取该流下一个待分配的位置）→ `Rejected(InsideWindow{bound})`；结论记录以这个 `now` 作自身的记录时间（[observation-journal.md §2.6 推进判定](observation-journal.md#26-推进判定-设计)、[observation-journal.md §3.2 控制动作 advance_retention(to: Set<LogPosition>)](observation-journal.md#32-控制动作-advance_retentionto-setlogposition)）。
 2. 引用来自单据 `basis`（`Prepared` 时登记）、程序 `Checkpoint` cursor、等待仍 `Active` 时的 `ResolutionEvidence`（§4.3.7）。程序 `Window` 节点的累加器随 `Checkpoint` 持久化，不回读历史；`Pooled` 窗口不登记。
 3. 各流都通过：观察 `Journal` 编排一个事务，写新边界、控制面写 `Applied`、持久订阅为要删当前 epoch 记录的流写覆盖检查点、删去边界之下应删的行，一起提交（§4.3.5；[subscription.md §4.6 序号覆盖与覆盖检查点](subscription.md#46-序号覆盖与覆盖检查点)）；序号覆盖不因压缩改变；压缩只作用于观察 J，执行 J 不删。提交之前崩溃则四者皆无，之后崩溃则四者皆有。
 4. 落到边界下的 `basis` 位置在单据放行前的校验里为 `BeyondRetention`（[ticket.md §3.5 第一层：依据有效性 basis_validity](ticket.md#35-第一层依据有效性-basis_validity)）。对外可见：边界推进从不越过仍被登记引用的最早位置；执行事实无记录被删。
@@ -1178,11 +1180,11 @@ sequenceDiagram
 
 ### 5.3 卡点
 
-按组件划分逐个走完 W1–W20 与 #1–#21，卡点为无：每步的行动者、恢复归属与对外可见结论都能由本文与所指组件文档推出。
+按组件划分逐个走完 W1–W20 与 #1–#21，每步的行动者、恢复归属与对外可见结论都能由本文与所指组件文档推出，卡点：无。走查所依赖的几处归属：
 
-- 推送的接受落在三个组件上：集成会话读当前通道（接受条件“经当前会话的通道读入”是它的），信封解析入口在边界处解析验证，观察 J 分配位置并 append；会话内上报 `Gap{origin: Source}` 的事务由集成会话编排（W1 步 7、W6、#13；[integration-session.md §4.3.2 集成→核心的推送](integration-session.md#432-集成核心的推送)、[envelope.md §2.2 三部分](envelope.md#22-三部分-设计)、[observation-journal.md §2.2 位置的分配与记录的接受](observation-journal.md#22-位置的分配与记录的接受-设计)）。没有单独的“推送入口”元素。
+- 推送的接受由三个组件分担：集成会话读当前通道（接受条件“经当前会话的通道读入”属于它），信封解析入口在边界处解析验证，观察 J 分配位置并 append；会话内上报 `Gap{origin: Source}` 的事务由集成会话编排（W1 步 7、W6、#13；[integration-session.md §4.3.2 集成→核心的推送](integration-session.md#432-集成核心的推送)、[envelope.md §2.2 三部分](envelope.md#22-三部分-设计)、[observation-journal.md §2.2 位置的分配与记录的接受](observation-journal.md#22-位置的分配与记录的接受-设计)）。
 - 程序的失败记录只由程序宿主元素 append（W10 步 2）；宿主进程不接触存储。
-- 需要实测才能给出数字的步（崩溃注入、宿主预算、秒级负载）是验收项，不是卡点；可选子系统的实现期数字不在核心范围，核心接口不依赖其结果。
+- 需要实测才能给出数字的步（崩溃注入、宿主预算、秒级负载）是验收项；可选子系统的实现期数字不在核心范围，核心接口不依赖其结果。
 
 ## 6 评估
 
@@ -1223,9 +1225,10 @@ sequenceDiagram
     - 注册为写处理器的 `EffectRequest` 只能经单据 → STS → IO 壳到达集成写接口（`submit`/`cancel`），代码中不存在第二条到集成写接口的调用路径；
     - 一张单据在 `Close(Prepared)` 后拒绝任何 `TicketAction`。
 - **#12 外部变更与状态保真**（§4.4、[integration-session.md §3.3 投影 Projection](integration-session.md#33-投影-projection)、§3.8、[read-model.md §3.2 成交的计数身份](read-model.md#32-成交的计数身份-设计)）：对不上任何本地 Attempt 的观察记录归因为 `External`/`Unattributed` 且无意图引用；记录映射的枚举映射表中不存在“其他 → rejected”，未列举值以 `Unmapped(raw)` 保留。（对应 Q5/Q6）
-- **#19 秒级负载不落后**（§3.12、§4.7.1；[storage.md §2.1 一个文件、一个写者](storage.md#21-一个文件一个写者-设计)、[program-host/design.md §4.1 组件](../program-host/design.md#41-组件)）：以 Q24 沟通场景规模（约 1500 流选 15、24 h 逐秒）构造 Q22 负载：（对应 Q22、B1）
+- **#19 秒级负载不落后**（§3.12、§4.7.1；[storage.md §2.1 一个文件、一个写者](storage.md#21-一个文件一个写者-设计)、[program-host/design.md §4.1 组件](../program-host/design.md#41-组件)、[observation-journal.md §6.1 敏感点](observation-journal.md#61-敏感点)）：以 Q24 沟通场景规模（约 1500 流选 15、24 h 逐秒）构造 Q22 负载：（对应 Q22、B1）
     - 秒级 bar 的清洗 + 增量指标在下一根 bar 到达前完成，积压不随时间增长，分发不阻塞清洗；
-    - 推送流的文本 JSON-RPC 在同一负载下不丢记录、`latest` 订阅不触发 `slow_consumer`（`ordered` 订阅只背压）；否则启用同一 IDL 的二进制编码（§4.7.1）后须达标。
+    - 推送流的文本 JSON-RPC 在同一负载下不丢记录、`latest` 订阅不触发 `slow_consumer`（`ordered` 订阅只背压）；否则启用同一 IDL 的二进制编码（§4.7.1）后须达标；
+    - 同一负载运行期间，对观察流执行若干次 `advance_retention`，每次的删除量与该负载下一个留存窗口推进一步应删的行数相当（生效事务同时写边界、`Applied`、覆盖检查点并删行，[observation-journal.md §3.2 控制动作 advance_retention(to: Set<LogPosition>)](observation-journal.md#32-控制动作-advance_retentionto-setlogposition)）：在这些事务执行期间，秒级 bar 仍在下一根到达前完成、积压不增长，`latest` 订阅不因此触发 `slow_consumer`，`ordered` 订阅只背压、不丢记录。
 - **#21 一次性读与配额**（[one-shot-read.md §4.1 核心→集成：read](one-shot-read.md#41-核心集成readstream-request-range--answered--unavailable--refused)、[subscription.md §4.1 核心↔解释层：订阅组与 rewind_cursor](subscription.md#41-核心解释层订阅组与-rewind_cursor)）：（对应 Q13/Q15/Q16）
     - 多 target `read` 中一个来源不可用时，其余 target 独立返回，不可用项在 `deadline` 内可见；
     - 能力 `Unsupported` 的读返回 typed `Unsupported`，而非空结果；

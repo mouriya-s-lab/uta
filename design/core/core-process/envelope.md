@@ -134,7 +134,7 @@ venue 词汇不越过集成 [域 B6]。
 
 | 链路 | 锚点 |
 |---|---|
-| 观察记录 | `StreamId(source, stream, epoch)`、`received_at`（集成在本机收到上游数据的时刻，由集成填写）；`session_epoch`（记录到达的会话通道；一次性读的 `Gap{origin: Channel}` 由核心记下，取发出这次调用的会话，[one-shot-read.md §4.1 核心→集成：read](one-shot-read.md#41-核心集成readstream-request-range--answered--unavailable--refused)）、记录时间与 `LogPosition` 由核心在接受时盖上，集成不填 |
+| 观察记录（集成来源的流） | `StreamId(source, stream, epoch)`、`received_at`（集成在本机收到上游数据的时刻，由集成填写）；`session_epoch`（记录到达的会话通道；一次性读的 `Gap{origin: Channel}` 由核心记下，取发出这次调用的会话，[one-shot-read.md §4.1 核心→集成：read](one-shot-read.md#41-核心集成readstream-request-range--answered--unavailable--refused)）、记录时间与 `LogPosition` 由核心在接受时盖上，集成不填。程序来源 `Program(_)` 的流上的记录由核心产出，只有 `StreamId`、记录时间与 `LogPosition`，不合成 `received_at` |
 | 意图 | `principal`、`WriteLaneKey`（不透明，由集成从上游账户结构对齐得出）、`OperationKind`、`basis`（可为空集，但必须存在） |
 | 撤单 / 改单意图 | 上述 + `target: VenueRef \| IdemKey`（构造前提，[ticket.md §4.5 交易协议：操作种类、目标、可执行性、检查目录](ticket.md#45-交易协议操作种类目标可执行性检查目录-交易协议)） |
 | 平仓意图 | 上述 + `target: PositionRef`（核心在接纳边界从 `basis` 中所指、属目标作用域的持仓观察记录构造） |
