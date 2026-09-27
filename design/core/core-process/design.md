@@ -249,7 +249,7 @@ LogPosition = (StreamId, Seq)           // 一条记录的顺序身份
 | 结果 | 总是可判定（拿到了或没拿到） | 可能不可判定（`Undetermined`） |
 | 失败处理 | 重试、换渠道、标 gap | 对账，永不重试 |
 | 对内的副作用 | 向外部来源的读：append 观察记录、推进进度、触发处理器与 DAG 重算、唤醒程序、更新单据 `alignment`；对账取证另 append 执行事实侧的 `ResolutionEvidence`。定时器：只在请求流上 append `EffectResponse{Fired}`、唤醒程序 | append 执行事实（`SendBarrier`/回执/`Undetermined`/`Expired`）、推进 lane、关闭单据 |
-| 时间 | 事件时间 + 集成的收到时间（`received_at`，只在集成来源的观察上）；每条记录另有核心盖的记录时间（§3.8） | 每条执行事实同样有核心盖的记录时间（§3.8）；写特有的时间是发出时间，即 `SendBarrier` 的记录时间（冷却按它计）；venue 的时间是回执里的观察 |
+| 时间 | 事件时间 + 集成的收到时间（`received_at`，只在集成交来的观察记录上）；每条记录另有核心盖的记录时间（§3.8） | 每条执行事实同样有核心盖的记录时间（§3.8）；写特有的时间是发出时间，即 `SendBarrier` 的记录时间（冷却按它计）；venue 的时间是回执里的观察 |
 | 发起者 | 任何人 | 只有 IO 壳 |
 | 机制 | 进度、保留、去重、批处理 | 单据锁、STS 链、lane、两阶段、证据 gate |
 
@@ -278,13 +278,13 @@ money/quantity 是交易协议处理器的值类型（[envelope.md §2.4 推论]
 | 金额 | 精确有理数/定点数 + 货币索引；离散化返回余数，不静默丢钱 | fp-04 命题 1 safe-money |
 | 数量 | 精确数值；**不**做“数量带 instrument 尺度”（无证据） | — |
 | 身份 | 上游身份一律 `(venue, native_id)` opaque + 智能构造器 | fp-04 命题 16；域 F2 |
-| 时间 | `occurred_at` / `received_at` 分离；每条记录的信封另有**记录时间**（本地墙钟 UTC 时刻 + 单调计数，[README.md §2.2 机器与域共享的现象](../../README.md#22-机器与域共享的现象)），由核心 append 时盖上，是核心自己的时间；`deadline` 以 UTC 时刻声明并随记录持久化；运行期计时器用单调钟唤醒、到点之前按 UTC 墙钟复核；来源顺序只由来源给的定序证据（venue 序号等）给出，日志顺序只是 `(stream, seq)` 偏序，都不由任何时钟推导 | fp-04 命题 9/11；域 F11 |
+| 时间 | `occurred_at` / `received_at` 分离；每条记录的信封另有**记录时间**（写者为这次 append 采样的核心本地墙钟 UTC 时刻，加单调计数；写者可以先用同一次采样做自己的判定，再以它盖记录，[README.md §2.2 机器与域共享的现象](../../README.md#22-机器与域共享的现象)），是核心自己的时间；`deadline` 以 UTC 时刻声明并随记录持久化；运行期计时器用单调钟唤醒、到点之前按 UTC 墙钟复核；来源顺序只由来源给的定序证据（venue 序号等）给出，日志顺序只是 `(stream, seq)` 偏序，都不由任何时钟推导 | fp-04 命题 9/11；域 F11 |
 | 错误 | 每规则封闭 sum；venue 映射保留 `Unmapped` | fp-04 命题 8；域 C13 |
 | 外部写结果 | `Prepared \| SendBarrier \| VenueAccepted \| VenueRejected \| NotSent \| Undetermined \| Expired` + `ResolutionEvidence` 记录；另有 UTA 自己的 `Abandoned`（放弃等待，不是结果）；非 `Option`/字符串 | fp-06 命题 1（MongoDB `UnknownTransactionCommitResult`、Oracle in-doubt）；fp-01 M11 DAML 反例 |
 
 - **身份**出现在四处：投影里的 `WriteLaneKey`/`StreamId`（[integration-session.md §3.3 投影 Projection](integration-session.md#33-投影-projection)）、意图的 `target`（[ticket.md §4.5 交易协议：操作种类、目标、可执行性、检查目录](ticket.md#45-交易协议操作种类目标可执行性检查目录-交易协议)）、观察记录的 `attribution`（§4.4）、成交记录的 `execution_id`（[read-model.md §3.2 成交的计数身份](read-model.md#32-成交的计数身份-设计)）。instrument 只在 venue 作用域内有意义。换名不是安全，隐藏构造器才是。
 - **时间**：`deadline` 以 UTC 时刻持久化，所以发出前门与过期步跨重启仍可比。
-- **记录时间** [设计]：核心在 append 每条记录（观察与执行事实）时盖上的本地墙钟 UTC 时刻，加一个单调计数区分同一时刻的记录。它是核心自己的事实，不是来源给的 `received_at`（集成填写的锚点，只在集成来源的观察上）或事件时间。读它的地方：观察侧留存窗口的下界换算（[observation-journal.md §2.6 推进判定](observation-journal.md#26-推进判定-设计)）；程序值经记录时间访问器读一条输入记录的记录时间，作截止时刻（§3.12）；定时器请求的 `Fired` 以自己的记录时间作触发时刻（[outbound-requests.md §4.2.1 定时器处理器](outbound-requests.md#421-定时器处理器-设计)）；冷却时钟取 `SendBarrier` 的记录时间（[decision-chain.md §4.4 lane 步、冷却与过期步](decision-chain.md#44-lane-步冷却与过期步)）。
+- **记录时间** [设计]：写者为这次 append 采样的核心本地墙钟 UTC 时刻，加一个单调计数区分同一时刻的记录；写者可以先用同一次采样做自己的判定，再以它盖记录（例如 `advance_retention` 的结论记录，[observation-journal.md §3.2 控制动作 advance_retention(to: Set<LogPosition>)](observation-journal.md#32-控制动作-advance_retentionto-setlogposition)）。每条记录（观察与执行事实）都有它。它是核心自己的事实，不是来源给的 `received_at`（集成填写的锚点，只在集成交来的观察记录上）或事件时间。读它的地方：观察侧留存窗口的下界换算（[observation-journal.md §2.6 推进判定](observation-journal.md#26-推进判定-设计)）；程序值经记录时间访问器读一条输入记录的记录时间，作截止时刻（§3.12）；定时器请求的 `Fired` 以自己的记录时间作触发时刻（[outbound-requests.md §4.2.1 定时器处理器](outbound-requests.md#421-定时器处理器-设计)）；冷却时钟取 `SendBarrier` 的记录时间（[decision-chain.md §4.4 lane 步、冷却与过期步](decision-chain.md#44-lane-步冷却与过期步)）。
 - **值树里的时间值** [设计]：UTC 时刻与时长两种值类型；时刻 + 时长得时刻。它们只从记录（记录时间）或常量得出，程序值里没有“此刻”。
 - **计时器的复核规则** [设计]：STS 的 `deadline` 计时器（[decision-chain.md §4.4 lane 步、冷却与过期步](decision-chain.md#44-lane-步冷却与过期步)）与定时器处理器（[outbound-requests.md §4.2 读处理器](outbound-requests.md#42-读处理器)）共用这一条：单调钟只负责唤醒；醒来之后、做到点动作之前按 UTC 墙钟复核，墙钟未到点就重新挂上。所以到点动作只会迟、不会早：墙钟回拨时醒得早，复核后重新等待；墙钟前跳时单调钟仍按原来的间隔唤醒，到点动作可能晚于墙钟到点的时刻。停止、崩溃与故障期间的时间都只推迟到点动作。
 
