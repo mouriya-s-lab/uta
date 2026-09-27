@@ -1,6 +1,6 @@
 # UTA 代码架构
 
-本文规定代码层面的事：crate 怎样划分与依赖、进程里有哪些线程和任务、每份状态由谁持有、类型允许派生什么、线缆约定、库的选择，以及这些约定怎样被检查。每种状态和操作的语义在 `design/` 里，本文按章节号引用，不重述。设计 §0.3 不规定 crate 布局，所以代码布局写在这里。
+本文规定代码层面的事：crate 怎样划分与依赖、进程里有哪些线程和任务、每份状态由谁持有、类型允许派生什么、线缆约定、库的选择，以及这些约定怎样被检查。状态和操作的共同语义见[系统设计](design/uta.md)（§0、§1、§7.1、§8–§11），核心内部语义见[核心进程设计](design/core/design.md)（§2–§6、§7.2–§7.7）；本文只引用，不重述。设计 §0.3 不规定 crate 布局，所以代码布局写在这里。
 
 ## 1 进程、线程与任务
 
@@ -40,21 +40,21 @@ flowchart TB
 
 ### 后续切片的落点
 
-下表是设计 §7.3 各元素将来落在哪个 crate。某个元素的代码随它的实现切片一起创建，不预先建空 crate。创建时要同时在 `xtask` 的依赖表里登记它所在的层。
+下表是[核心进程设计 §7.3](design/core/design.md#73-模块指南)各元素将来落在哪个 crate。某个元素的代码随它的实现切片一起创建，不预先建空 crate。创建时要同时在 `xtask` 的依赖表里登记它所在的层。
 
 | crate（待建） | 对应设计元素 | 位置 |
 |---|---|---|
 | `uta-contract` | 核心↔集成 IDL 的 DTO（§8.1–§8.4），用 schemars 导出 JSON Schema，随 release 发布 | 值层，依赖 `uta-base` |
 | `uta-session` | 集成会话（§7.2 第 3 步会话状态机、调用通道、声明的两种解释） | 不属任一侧，依赖 `uta-contract`、`uta-rpc`、`uta-channel`、`uta-store` |
-| `uta-observe` | 信封解析入口、观察 `Journal` 元素（`RetractableDelta`、各类流的压缩规则与 `fold_state`，建在 `uta-store` 的存储原语之上）、持久订阅、一次性读、投递调度、入站处理器注册表、派生 DAG | 观察侧，依赖 `uta-session` |
+| `uta-observe` | 信封解析入口、观察 `Journal` 元素（`RetractableDelta`、各类流的压缩规则与 `fold_state`，建在 `uta-store` 的存储原语之上）、持久订阅、一次性读、投递调度、入站处理器注册表 | 观察侧，依赖 `uta-session` |
 | `uta-program` | 程序宿主元素（§8.6 活动集合、装载期校验、`Advance` 编排） | 不属任一侧，依赖 `uta-observe` |
 | `uta-effect` | 单据、STS 规则链、lane 驱动、IO 壳、归因处理器、读模型、控制面、会话入口 | 效应侧，依赖 `uta-observe`、`uta-program`、`uta-session` |
 | `uta-api` | 核心↔解释层 IDL（§8.5），只在本仓库内部使用 | 值层 |
 | `uta-cli` | 解释层（`design/downstream/design.md`） | 依赖 `uta-api`，不依赖核心内部 crate |
-| `uta-host` | 程序宿主进程与值树解释器（§8.6） | 外部进程 |
+| `uta-host` | 程序宿主进程、值树解释器与派生 DAG 的运行期求值（§8.6）；核心的装载校验与输出持久化仍归 `uta-program` | 外部进程 |
 | `uta-mapping`、`uta-conformance` | 记录映射解释器、一致性测试与 fixture 上游（`design/integration/design.md` 第 4、5 节） | 随 release 发布 |
 
-§7.3 uses 图里有三对元素互相使用：持久订阅↔集成会话、持久订阅↔程序宿主元素、持久订阅↔投递调度。crate 之间不能循环依赖。所以规定：下层 crate 定义回调 trait，上层 crate 实现它。例如集成会话编排握手事务时，要请持久订阅写 `None{epoch}`，这个 trait 就定义在 `uta-session`，由 `uta-observe` 实现。每对元素里，两个方向经过的仍然只是公共值（§7.3 图下说明）。
+核心进程设计 §7.3 的 uses 图里有三对元素互相使用：持久订阅↔集成会话、持久订阅↔程序宿主元素、持久订阅↔投递调度。crate 之间不能循环依赖。所以规定：下层 crate 定义回调 trait，上层 crate 实现它。例如集成会话编排握手事务时，要请持久订阅写 `None{epoch}`，这个 trait 就定义在 `uta-session`，由 `uta-observe` 实现。每对元素里，两个方向经过的仍然只是公共值（核心进程设计 §7.3 图下说明）。
 
 ## 3 依赖方向
 
