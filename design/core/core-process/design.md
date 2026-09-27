@@ -72,7 +72,7 @@ LogPosition = (StreamId, Seq)           // 一条记录的顺序身份
 - 有序范围 = `StreamId=(source, stream, epoch)`。这一对应由 P2（`Seq` 在“来源 × 流 × epoch”有序范围内赋）、P3（新 epoch 首条记录）与本节位置定义共同给出。
 - **来源是带标签的值** [设计]：集成 id 与程序 id 是两个命名空间，同名也不是同一来源。集成只拥有 `Integration(_)` 的流（声明、开 epoch、供给、作答）；`Program(_)` 的流由核心产出：流名来自程序值的 `outputs`（[program-host-element.md §3.1 程序值](program-host-element.md#31-程序值)），控制面只在这些流上开 epoch（[program-host-element.md §3.3 输出契约与程序流](program-host-element.md#33-输出契约与程序流)）。声明、采纳、会话、`route`、回填与一次性读只对 `Integration(_)` 来源成立，程序的观察输入也只取 `Integration(_)` 来源。`Program(_)` 的流只经只投递项订阅，接纳依据是控制流上该程序 id 的开始成员的 `Applied` 所记的输出契约（[subscription.md §4.1 核心↔解释层：订阅组与 rewind_cursor](subscription.md#41-核心解释层订阅组与-rewind_cursor)）。
 
-**位置作为关联。** `LogPosition` 集合只用于两项语义：输入依据（例如某决策观察到的行情流 A@120、汇率流 B@57、账户流 C@90），与重放位置。它不替代外部订单身份、幂等键或 causation id；后者属独立的名义关联（[core/design.md §3.3 五种关系，五种承载](../design.md#33-五种关系五种承载)）。撤 / 改单的目标身份（`venue_order_id` / `idempotency_key`）不放进 `basis`，放进意图自身的 `target` 字段；`basis` 只记录该身份来自哪条记录的位置（§3.5）。
+**位置作为关联。** `LogPosition` 集合只用于两项语义：输入依据（例如某决策观察到的行情流 A@120、汇率流 B@57、账户流 C@90），与重放位置。它不替代外部订单身份、幂等键或 causation id；后者属独立的名义关联（§3.13）。撤 / 改单的目标身份（`venue_order_id` / `idempotency_key`）不放进 `basis`，放进意图自身的 `target` 字段；`basis` 只记录该身份来自哪条记录的位置（§3.5）。
 
 **三种进度**互不替代，源头各不相同：
 
@@ -213,7 +213,7 @@ LogPosition = (StreamId, Seq)           // 一条记录的顺序身份
 - **基数**：位置集（≅ `Map<StreamId, Seq>`），可同时含两类位置：
   - **派生侧（观察）位置**：真正的跨边引用，例如某决策观察到的行情流 A@120、汇率流 B@57、账户流 C@90；撤 / 改单目标身份来源之三的归因观察记录也在此侧，与其他观察位置同样受保留边界约束。
   - **执行事实侧位置**：`VenueAccepted` / `SendBarrier` / `EffectRequest` 的位置，作为**身份与因果依据**。它属效应宇宙内部的自引用，不是跨边。
-- **可追溯性**：`basis` 记录意图实际消费的 `LogPosition` 集。取值不复制进 `basis`，由观察 J 在这些位置 `fold_state` 重建，所以从 `basis` 能重建“这个决定当时看到了什么”。intent ↔ 结果 / 审计 / 重放的名义关联，由执行事实日志的位置 + causation id 承载（[core/design.md §3.3 五种关系，五种承载](../design.md#33-五种关系五种承载)）；`basis` 提供决定的输入侧可追溯性，与结果侧关联互补、不重叠。
+- **可追溯性**：`basis` 记录意图实际消费的 `LogPosition` 集。取值不复制进 `basis`，由观察 J 在这些位置 `fold_state` 重建，所以从 `basis` 能重建“这个决定当时看到了什么”。intent ↔ 结果 / 审计 / 重放的名义关联，由执行事实日志的位置 + causation id 承载（§3.13）；`basis` 提供决定的输入侧可追溯性，与结果侧关联互补、不重叠。
 
 `basis` 的有效性语义（`basis_valid`、逐位置判定、`Lag` 窗口）是单据在放行前应用的只读校验门，写在 [ticket.md §3.5 第一层：依据有效性 basis_validity](ticket.md#35-第一层依据有效性-basis_validity)；它不参与两阶段协议，只决定是否进入 prepare。
 
@@ -433,6 +433,18 @@ enum DerivationNode {
 #### 扩展
 
 构造子全集即上面的 `enum DerivationNode`；程序值另带的 `inputs` 与 `outputs` 是对输入与节点的声明，不增加构造子。表达力不足时的扩展轴是**显式加构造子**：改这个 enum，五个 fold 随之各加一臂，编译器指出全部遗漏。这与加规则同一纪律：显式接受，不做泛型逃生口。求值开销与 `dyn` 分发成本是实现期 profiling 的对象，落点变化不改本节。会推翻本节的观测见证伪 #1（§6.2）。
+
+### 3.13 五种关系，五种承载
+
+core 与外部之间的关联各有自己的承载，不塞进一个对象的字段互指。[证据：fp-03 命题 2]
+
+| 关系 | 承载 | 验证阶段 |
+|---|---|---|
+| operation ↔ capability | 能力证据值（[integration-session.md §3.3 投影 Projection](integration-session.md#33-投影-projection)） | 运行期握手 |
+| request / resource ↔ provider 身份 | `StreamId`、外部订单 id、幂等键 | 构造期 / 运行期 |
+| 多 effect ↔ 同一作用域 | 单条规则链事务 | 构造期 |
+| program ↔ 解释器 | 解释选择（①派生 / ②决策） | 构造期 |
+| intent ↔ 结果 / 审计 / 重放 | 执行事实日志的位置 + causation id | 运行期，持久 |
 
 ## 4 结构
 
@@ -749,7 +761,7 @@ flowchart TB
 
 #### 4.7.1 进程形状
 
-- 核心进程是一个 OS 进程，独占状态库；集成进程、程序宿主进程、可选子系统的原生 op 进程都是它之外的独立 OS 进程（部署与信任边界的结论在 [core/design.md §4.3 部署与信任](../design.md#43-部署与信任)）。
+- 核心进程是一个 OS 进程，独占状态库；集成进程、程序宿主进程都是它之外的独立 OS 进程，可选子系统在 core 之外（部署与信任边界的结论在 [core/design.md §4.3 部署与信任](../design.md#43-部署与信任)）。
 - 核心进程内的组件之间是函数调用与共享内存，没有 IPC；并发模型、线程与任务划分是实现（`ARCHITECTURE.md`），不改本文的组件边界。本文只要求两件并发事实：存储是单写者，每次事务原子；持久订阅对同一订阅的需求变更、cursor 推进与投递缺口串行化（[subscription.md §4.9 订阅表（持久化）](subscription.md#49-订阅表持久化)）。
 
 **传输与编码** [设计]：
@@ -1025,7 +1037,7 @@ sequenceDiagram
 
 **走通**（[program-host/design.md §6.4 验收](../program-host/design.md#64-验收) #15；[program-host-element.md §6.4 验收](program-host-element.md#64-验收) #16、#82）。
 
-细化：[program-host-element.md §5.2 超预算、跨重启与内容变更（W10 的程序宿主元素细化）](program-host-element.md#52-超预算跨重启与内容变更w10-的程序宿主元素细化)、[program-host/design.md §5.2 Load 与跨重启续跑（W10 变体的宿主细化）](../program-host/design.md#52-load-与跨重启续跑w10-变体的宿主细化)、[core/design.md §5.1 W10（Q25）程序超预算隔离](../design.md#51-w10q25程序超预算隔离)。
+细化：[program-host-element.md §5.2 超预算、跨重启与内容变更（W10 的程序宿主元素细化）](program-host-element.md#52-超预算跨重启与内容变更w10-的程序宿主元素细化)、[program-host/design.md §5.2 Load 与跨重启续跑（W10 变体的宿主细化）](../program-host/design.md#52-load-与跨重启续跑w10-变体的宿主细化)。
 
 #### W11（Q26）单据并发编辑与 SendBack
 
@@ -1094,7 +1106,7 @@ sequenceDiagram
 
 **走通**（不含程序规则时限的路径；时限变体阻塞，§5.3）。
 
-细化：[one-shot-read.md §5.1 W17 的一次性读细化（读处理器）](one-shot-read.md#51-w17-的一次性读细化读处理器)、[program-host-element.md §5.1 一轮 Advance（W17 的程序宿主元素细化）](program-host-element.md#51-一轮-advancew17-的程序宿主元素细化)、[program-host/design.md §5.1 一轮 Advance（W17 的宿主细化）](../program-host/design.md#51-一轮-advancew17-的宿主细化)、[core/design.md §5.2 W17 程序发出读请求（fetch.bars）闭环走观察侧](../design.md#52-w17-程序发出读请求fetchbars闭环走观察侧)。
+细化：[one-shot-read.md §5.1 W17 的一次性读细化（读处理器）](one-shot-read.md#51-w17-的一次性读细化读处理器)、[program-host-element.md §5.1 一轮 Advance（W17 的程序宿主元素细化）](program-host-element.md#51-一轮-advancew17-的程序宿主元素细化)、[program-host/design.md §5.1 一轮 Advance（W17 的宿主细化）](../program-host/design.md#51-一轮-advancew17-的宿主细化)。
 
 #### W18（Q8+Q9+Q10）送审即否决、人工审批与过期、决定版本冲突、冷却
 

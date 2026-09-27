@@ -541,23 +541,30 @@ flowchart TB
 
 ### 4.9 崩溃恢复与集成崩溃两故障面
 
-**恢复。** 启动第 4 步（[core-process/design.md §4.7.3 启动五步](design.md#473-启动五步)）时 IO 壳从日志 fold 各 lane 上每次尝试的等待与结果。判定顺序固定 [设计]：
+**恢复。** 恢复分两段，对应启动五步的第 2 步与第 4 步（[core-process/design.md §4.7.3 启动五步](design.md#473-启动五步)）[设计]：
 
-1. **等待已结束者无动作**：`Finished`（`VenueAccepted`、`VenueRejected`、`NotSent`，或已有 `Found`/`Absent`）、`Expired` 或 `Abandoned`。`Expired` 不会被再过一次发出前门；`Abandoned` 的尝试只有在最近一次重开是它之后的 `Manual`、且该轮渠道尚未穷尽时，才在会话建立后续跑该轮。
-2. **无 `SendBarrier` 者**仍是确未发出的尝试，过发出前门：发送、等待（该集成尚无已建立会话或会话有效能力不可执行）或 `Expired`。
-3. **`SendBarrier` 无后继者**，append `Undetermined(CrashWindow)`，进入对账驱动。
-4. **`Undetermined` 且等待 `Active` 者**，按 `round == 当前轮` 的 `ResolutionEvidence` 重建本轮进度（发起轮次归属，不按 append 先后），在该集成会话建立后续跑下一渠道或停等。
+- **启动第 2 步：本地重建，不接触任何集成。** IO 壳从日志 fold 各 lane 上每次尝试的等待与结果；对 `SendBarrier` 无后继者 append `Undetermined(CrashWindow)`。这一步的结论只来自记录。
+- **启动第 4 步：先对账，后发出。** 集成会话已在第 3 步开始建立；IO 壳按下面的分类，先为未决尝试启动或续跑对账，再对无 `SendBarrier` 者过发出前门（取证在前，已结束等待的尝试先移出阻塞头集合）。发送与取证都需要该集成已建立的会话，尚无会话的等会话建立。
 
-崩溃前正在进行的 `abandon` 若尚未 append `Abandoned`，日志里没有它的痕迹，尝试按第 4 条照常 `Active`。IO 壳不对任何已有 `SendBarrier` 的尝试再调用写操作。
+每次尝试按 fold 出的状态落入且只落入下面一类：
+
+1. **等待已结束者无动作**：`Finished`（`VenueAccepted`、`VenueRejected`、`NotSent`，或已有 `Found`/`Absent`）、`Expired` 或 `Abandoned`。`Expired` 不会被再过一次发出前门；`Abandoned` 的尝试只有在最近一次重开是它之后的 `Manual`、且该轮渠道尚未穷尽时，才在会话建立后续跑该轮（第 4 步）。
+2. **`SendBarrier` 无后继者**：第 2 步 append `Undetermined(CrashWindow)`，第 4 步进入对账驱动。
+3. **`Undetermined` 且等待 `Active` 者**：第 4 步按 `round == 当前轮` 的 `ResolutionEvidence` 重建本轮进度（发起轮次归属，不按 append 先后），在该集成会话建立后续跑下一渠道或停等。
+4. **无 `SendBarrier` 者**仍是确未发出的尝试：第 4 步在对账启动之后过发出前门：发送、等待（该集成尚无已建立会话或会话有效能力不可执行）或 `Expired`。
+
+崩溃前正在进行的 `abandon` 若尚未 append `Abandoned`，日志里没有它的痕迹，尝试按第 3 类照常 `Active`。IO 壳不对任何已有 `SendBarrier` 的尝试再调用写操作。
+
+下图是上面四类的逻辑分类，不是启动时序；时序是先第 2 步、后第 4 步，第 4 步里先对账、后发出。
 
 ```mermaid
 flowchart TB
-  S[("重启：从执行事实 fold 每次尝试")] --> Q1{"等待已结束？<br/>Finished / Expired / Abandoned"}
+  S[("从执行事实 fold 每次尝试")] --> Q1{"等待已结束？<br/>Finished / Expired / Abandoned"}
   Q1 -->|"是"| N1["无动作（Abandoned 仅续跑其后 Manual 开出且未穷尽的一轮）"]
   Q1 -->|"否"| Q2{"有 SendBarrier？"}
-  Q2 -->|"否"| G["过发出前门：发送 / 等待 / Expired"]
-  Q2 -->|"是，无后继"| U["append Undetermined(CrashWindow) → 对账驱动"]
-  Q2 -->|"是，已 Undetermined"| R["按 round == 当前轮 重建进度，会话建立后续跑或停等"]
+  Q2 -->|"是，无后继"| U["第 2 步：append Undetermined(CrashWindow)<br/>第 4 步：对账驱动"]
+  Q2 -->|"是，已 Undetermined"| R["第 4 步：按 round == 当前轮 重建进度，会话建立后续跑或停等"]
+  Q2 -->|"否"| G["第 4 步（对账启动之后）：过发出前门：发送 / 等待 / Expired"]
 ```
 
 **集成崩溃两故障面。** 集成崩溃按崩溃发生在哪条路径分为两个面。判别边界唯一：**崩溃是否落在 IO 壳的写调用（`submit`/`cancel`）投放路径上**。

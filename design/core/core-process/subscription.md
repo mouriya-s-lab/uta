@@ -515,13 +515,13 @@ flowchart LR
 | 投递缺口写下之后、确认之前 | 缺口在订阅表里 | 重新挂接时先于 `to` 之后的记录交出 |
 | `Routed` 已返回、路由结论记录未提交 | 无记录 | 义务在内存里随实例结束；重启后会话建立时按需求重新起 `route` |
 | `Covered` 已返回、读结论未提交 | 无结果记录、无读结论、进度不变 | 从最近的读结论续；同 epoch 无重复 |
-| 保留边界推进时覆盖检查点已提交、压缩未完成 | 检查点在健康流上 | 检查点只说 `folded_below` 之下，与记录并存无矛盾；压缩按 [observation-journal.md §3.2 控制动作 advance_retention(to: Set<LogPosition>)](observation-journal.md#32-控制动作-advance_retentionto-setlogposition) 重做 |
+| 保留边界推进时覆盖检查点已提交、压缩未完成 | 检查点在健康流上 | 检查点只说 `folded_below` 之下，与记录并存无矛盾；重启后是否继续这次压缩未定义（[observation-journal.md §5 走查](observation-journal.md#5-走查) 卡点 1） |
 
 ### 5.8 卡点
 
 走查中核对了两处跨组件的衔接，均已由上级接口承担，不是本组件的卡点：
 
-- 覆盖检查点的写入时机依赖观察 Journal 在压缩之前请求本组件（§4.8）；这一请求方向需在 [core-process/design.md §4.3.1 uses 图](design.md#431-uses-图) 里出现（此前的设计只以“持久订阅先 append”陈述，未画出请求方向）。
+- [设计] 观察 Journal 在压缩当前流 epoch 的记录之前请求本组件 append 覆盖检查点（§4.8）。这是旧设计“删行之前由持久订阅先写检查点”这一先后规则在组件协作上的落实：它定的是谁向谁请求，不改变覆盖的代数，也不解决推进之后、压缩完成之前的崩溃窗口（[observation-journal.md §5 走查](observation-journal.md#5-走查) 卡点 1）。[core-process/design.md §4.3.1 uses 图](design.md#431-uses-图) 里“观察 J → 持久订阅：请写覆盖检查点”一条与此一致。
 - 程序 `await-all` 输入的覆盖推进由本组件的序号覆盖给出、经投递调度组成投递事件；上级 uses 图里“程序宿主元素向投递调度取覆盖推进”一条已覆盖取得路径，本组件对投递调度提供覆盖当前值（§4.8）。
 
 ## 6 评估

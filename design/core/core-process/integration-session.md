@@ -317,7 +317,7 @@ UTA 对投影只做两件事：按投影路由（lane 按 `WriteScope`、订阅�
 | **采纳集合** `adopted(as_of?)` | 一次性读与持久订阅的“来源未登记”判定；读模型 `health` 的成员（读模型按同一规则直接 fold 控制流） | 3.7 | — |
 | **会话状态** `source_state(source)` | 一次性读的 `Unavailable{source_state}` | `Connecting` / `Halted{cause}` | — |
 
-`latest`、`ever_declared` 与 `adopted` 是按所给位置（缺省为当前）对声明版本与控制流求值的查询，不是另存的声明、采纳集合或状态；本组件不为它们另建表或缓存，读模型 `health` 直接 fold 控制流得到同一结果。`effective` 与 `source_state` 读本组件的会话状态机，其中 `Halted` 的持久部分就是控制流上的 `IntegrationHalted` 记录（§4.6）。
+这些接口都是对本组件已写下的记录求值的查询，不另存权威状态：`latest(source)` 与 `ever_declared(source)` 回答当前切面，由声明版本与 `CapabilityObserved` 求出；`adopted(as_of?)` 由控制流上的采纳记录求出，可带位置。历史切面（`as_of`）上的声明与健康成员由读模型直接按记录 fold（[read-model.md §4.2 读模型集合](read-model.md#42-读模型集合)），不经这些接口。`effective` 与 `source_state` 读本组件的会话状态机，其中 `Halted` 的持久部分就是控制流上的 `IntegrationHalted` 记录（§4.6）。
 
 本组件使用的接口：
 

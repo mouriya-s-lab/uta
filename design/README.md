@@ -584,7 +584,7 @@ flowchart LR
 
 **W9（Q20）双实例。** 同一用户状态根上启动第二个 core；或持有者死亡 / 受控停止后接管。成：第二实例专用退出码退出；接管不产生双写，旧实例拉起的集成与宿主进程被回收；受控停止之后没有孤儿、每个在途调用都有结果。trace：[core-process/design.md §5.1 W9（Q20）双实例](core/core-process/design.md#w9q20双实例)。
 
-**W10（Q25）程序超预算隔离。** 程序在宿主进程里死循环、超内存或超意图速率。成：该程序被隔离并产出失败观察，其他程序、账户、core 不受影响；core 重启后不自动装回。容器级步骤：[core/design.md §5.1](core/design.md#51-w10q25程序超预算隔离)；组件级 trace：[core-process/design.md §5.1 W10](core/core-process/design.md#w10q25程序超预算隔离)。
+**W10（Q25）程序超预算隔离。** 程序在宿主进程里死循环、超内存或超意图速率。成：该程序被隔离并产出失败观察，其他程序、账户、core 不受影响；core 重启后不自动装回。trace：[core-process/design.md §5.1 W10](core/core-process/design.md#w10q25程序超预算隔离)。
 
 **W11（Q26）单据并发编辑与退回。** 两个下游 principal 经解释层操作同一张单据。成：第二个 principal 被拒或得冲突，负责人与版本可读。trace：[core-process/design.md §5.1 W11（Q26）单据并发编辑与 SendBack](core/core-process/design.md#w11q26单据并发编辑与-sendback)。
 
@@ -598,7 +598,7 @@ flowchart LR
 
 **W16 行情修订撤回旧派生信号但不动已发执行事实。** 集成送来修订 bar 的迟到 tick。成：派生信号撤回，已发的写与发送历史完整保留，相关单据呈偏离。trace：[core-process/design.md §5.1 W16 行情修订撤回旧派生信号但不动已发执行事实](core/core-process/design.md#w16-行情修订撤回旧派生信号但不动已发执行事实)。
 
-**W17 程序发出读请求（fetch.bars）闭环走观察侧。** 宿主进程里的程序发出读请求 → core 经集成 `read` → 回答作为观察记录回到程序。成：读不进单据与写路径；无会话、不支持、未确认、请求不合法都不调用集成，也不返回看似成功的空数组。容器级步骤：[core/design.md §5.2](core/design.md#52-w17-程序发出读请求fetchbars闭环走观察侧)；组件级 trace：[core-process/design.md §5.1 W17](core/core-process/design.md#w17-程序-emit-读处理器fetchbars闭环走观察侧)。
+**W17 程序发出读请求（fetch.bars）闭环走观察侧。** 宿主进程里的程序发出读请求 → core 经集成 `read` → 回答作为观察记录回到程序。成：读不进单据与写路径；无会话、不支持、未确认、请求不合法都不调用集成，也不返回看似成功的空数组。trace：[core-process/design.md §5.1 W17](core/core-process/design.md#w17-程序-emit-读处理器fetchbars闭环走观察侧)。
 
 **W18（Q8+Q9+Q10）送审即否决、人工审批与过期、决定版本冲突、冷却。** 下游经解释层提交三种非法意图、人工审批、两次同版本决定。成：参数不合规与只读账户两笔无上游调用、各一对意图 / 否决并有安全事件；他账户 instrument 在允许集合内时恰一次上游调用、终于上游拒绝；过期意图无递送；第二次决定得冲突。trace：[core-process/design.md §5.1 W18（Q8+Q9+Q10）送审即否决、人工审批与过期、决定版本冲突、冷却](core/core-process/design.md#w18q8q9q10送审即否决人工审批与过期决定版本冲突冷却)。
 
