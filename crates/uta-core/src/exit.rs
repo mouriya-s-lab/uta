@@ -1,4 +1,4 @@
-//! Process exit codes of the core daemon. Design §7.2 requires dedicated codes
+//! Process exit codes of the core daemon. Design core/core-process/design.md §4.7 requires dedicated codes
 //! for core-level refusals to start; their values are fixed here and listed in
 //! ARCHITECTURE.md.
 
@@ -17,7 +17,7 @@ pub enum Exit {
     /// forward migration failed (the file stays at its old version).
     FormatIncompatible,
     /// Controlled stop could not complete; no end anchor, fence released only
-    /// by process exit (design §7.2 "停止在两种情形下失败").
+    /// by process exit (design core/core-process/design.md §4.7.4 "停止失败").
     StopFailed,
 }
 

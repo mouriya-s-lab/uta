@@ -1,4 +1,4 @@
-//! The user state root (design §7.1 单实例: `OPENALICE_HOME`).
+//! The user state root (design core/core-process/design.md §4.6 统一路径文件: `OPENALICE_HOME`).
 //!
 //! Resolution matches Alice exactly (`design/investigation/existing-capabilities.md:239`,
 //! OpenAlice `src/core/paths.ts`): `OPENALICE_HOME` when the variable is set,

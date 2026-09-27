@@ -1,6 +1,6 @@
 //! OS process identity and exit confirmation.
 //!
-//! The process table (design §7.5) is an index into OS processes, keyed by
+//! The process table (design core/core-process/storage.md §4.3) is an index into OS processes, keyed by
 //! `(pid, start_time)`; whether a process is alive is asked of the OS only.
 //! [`ExitConfirmed`] is the only proof the core accepts that an indexed process
 //! has ended: it can be obtained only from this crate, and only after the OS

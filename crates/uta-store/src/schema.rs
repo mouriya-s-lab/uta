@@ -1,4 +1,4 @@
-//! Format versions and forward-only migrations (design §7.4, C14).
+//! Format versions and forward-only migrations (design core/core-process/storage.md §2.5, C14).
 //!
 //! `MIGRATIONS[n]` brings a file from format version `n` to `n + 1`. All pending
 //! migrations run in one transaction, so after a crash at any point the file is
