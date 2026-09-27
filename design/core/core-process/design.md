@@ -248,7 +248,7 @@ LogPosition = (StreamId, Seq)           // 一条记录的顺序身份
 | 结果 | 总是可判定（拿到了或没拿到） | 可能不可判定（`Undetermined`） |
 | 失败处理 | 重试、换渠道、标 gap | 对账，永不重试 |
 | 对内的副作用 | append 观察记录、推进进度、触发处理器与 DAG 重算、唤醒程序、更新单据 `alignment`；对账取证另 append 执行事实侧的 `ResolutionEvidence` | append 执行事实（`SendBarrier`/回执/`Undetermined`/`Expired`）、推进 lane、关闭单据 |
-| 时间 | 事件时间 + 收到时间 | 只有发出时间（venue 的时间是回执的观察） |
+| 时间 | 事件时间 + 集成的收到时间（`received_at`）；核心另在每条记录上盖记录时间（§3.8） | 只有发出时间（venue 的时间是回执的观察） |
 | 发起者 | 任何人 | 只有 IO 壳 |
 | 机制 | 进度、保留、去重、批处理 | 单据锁、STS 链、lane、两阶段、证据 gate |
 

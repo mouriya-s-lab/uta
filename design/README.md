@@ -176,7 +176,7 @@ flowchart LR
 |F8|子账户 / 钱包是某些 venue 的结构。|`broker.ts:535-553`|
 |F9|用户可在 venue 自己的 app 里下单、出入金；我们只能事后观察。|`broker.ts:578-586`|
 |F10|订单从 listing 消失不等于终态（listing 可能滞后或不完整）。|`UnifiedTradingAccount.ts:853-877` 二次确认；Longbridge `client_request_id` 仅 10 分钟缓存（`venue-capabilities.md:156`）|
-|F11|推送流有自己的时钟；venue 事件时间与本地收到时间不同源。|域常识；`src/domain/market-data/bars/types.ts:92` 明言 freshness “neither establishes measured feed latency”|
+|F11|推送流有自己的时钟；venue 事件时间与本机收到时间（集成在本机收到上游数据的时刻）不同源。|域常识；`src/domain/market-data/bars/types.ts:92` 明言 freshness “neither establishes measured feed latency”|
 |F12|venue 对每笔成交给出身份，逐笔量与订单累计量分开报告；成交事后可被修正；同一条回报流里还有不是成交的事件。|IBKR TWS API “Executions and Commissions”（`interactivebrokers.github.io/tws-api/executions_commissions.html`）：修正以另一条 `execDetails` 送达，除 execID 最后一个点之后的数字外参数全同；`reqExecutions` 默认只返回当日零点以来的执行。Alpaca “Websocket Streaming”（`docs.alpaca.markets/us/docs/websocket-streaming`）：`trade_updates` 的 fill 事件带 `execution_id`，`qty`/`price` 是本次成交，`order.filled_qty` 是订单累计。Binance `binance-spot-api-docs` `user-data-stream.md` 的 `executionReport`：`t` Trade ID、`l` 本次成交量、`z` 累计成交量；示例中 `x: NEW`（不是成交）的事件 `t` 为 -1，却同样带 `I` Execution Id|
 
 #### O 既有机器事实
@@ -229,7 +229,7 @@ flowchart LR
 每个现象是一类带名字、方向和语义字段的记录；字段写语义而不是实现类型。
 
 - 方向：`→机` = 域给机器；`机→` = 机器给域。
-- 所有记录共享不可变信封：记录身份、记录时间（本地墙钟 + 单调计数）、记录者 principal 或来源。下表不重复列。
+- 所有记录共享不可变信封：记录身份、记录时间（核心 append 时盖上的本地墙钟 + 单调计数；与 P2 的集成收到时间 `received_at` 不是同一字段）、记录者 principal 或来源。下表不重复列。
 
 |编号|现象|方向|语义字段|被哪些需求引用|
 |---|---|---|---|---|
@@ -264,7 +264,7 @@ flowchart LR
 - 来源：账户、公共 feed、或程序。程序输出的指标 / alert 是派生观察，与外部观察同一形状。
 - 主体：instrument / 账户 / 子账户 / feed。
 - 种类：quote / book / bar / clock / 余额 / 持仓 / 订单状态 / 成交 / 目录 / 连接状态 / 健康 / 汇率 / 派生。
-- venue 事件时间（可无）、venue 序号（可无）、venue 续传游标（可无）、本地收到时间、Seq、原始负载（订单状态 / 成交必有，其余种类可无，[envelope.md §2.2 三部分](core/core-process/envelope.md#22-三部分-设计)）、质量标记。
+- venue 事件时间（可无）、venue 序号（可无）、venue 续传游标（可无）、集成在本机的收到时间（`received_at`，由集成填写；不是核心盖的记录时间）、Seq、原始负载（订单状态 / 成交必有，其余种类可无，[envelope.md §2.2 三部分](core/core-process/envelope.md#22-三部分-设计)）、质量标记。
 - 订单状态 / 成交观察带归因（某尝试 / 外部 / 未定）。
 - 成交观察带执行身份（在来源 × 作用域内唯一，跨渠道不变）与可选的修订号；数量与价格是本笔执行的量；订单状态带该订单的累计量（[read-model.md §3.2 成交的计数身份](core/core-process/read-model.md#32-成交的计数身份-设计)，F12）。
 

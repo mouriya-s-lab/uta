@@ -420,7 +420,7 @@ flowchart LR
 - 已接纳的项此后因新声明挂起或恢复，照 §4.1 配额与 §4.2 的规则，不使程序失败。
 - 项随开始成员的 `Applied` 建立，随 `unload_program` 或替换的 `Applied` 按下列规则结束。沿用旧状态的替换里（是否沿用由程序宿主元素按 [program-host-element.md §4.4 卸载与替换](program-host-element.md#44-卸载与替换) 判定），**共有输入**是新旧程序值里名字、来源与流都相同的输入：它的 cursor 原样沿用（保留引用的转交见 [observation-journal.md §2.4 保留：边界与删除规则](observation-journal.md#24-保留边界与删除规则)）；它的订阅项只在主体集与用途也相同、且不是被拒的项时原样沿用，否则同一事务结束旧项、按新声明建立新项并判定接纳，这时 cursor 接着走而项重建，项的结束锚点与 cursor 的不同。被拒的项从不沿用：任何替换的 `Applied` 都结束它，并在同一事务为新成员建立新项、重新判定接纳，cursor 按沿用规则接着走或按 `Reset` 重建；所以腾出配额或采纳来源之后以同一程序值再 `load_program`，就是一次重新接纳。
 - 投递缺口属于该流的 cursor，不属于项（§3.3）：cursor 沿用时，未确认的缺口随之沿用，项被重建或重新接纳失败也一样；它只在新 cursor 覆盖它的 `Advance` 提交、该流离开程序订阅（`unload_program`，或新程序不再声明的输入的 cursor 结束）或 `Reset` 重建该流的 cursor 时删除。
-- `ordered` 与 `latest` 按 [delivery.md §3.1 三种消费方式（投递侧）](delivery.md#31-三种消费方式投递侧) 投递给程序；`await-all` 输入的订阅项按 `ordered` 投递，它的要求点与等待窗口是程序在投递之上的调度，不是订阅项的属性。
+- `ordered` 与 `latest` 按 [delivery.md §3.1 三种消费方式（投递侧）](delivery.md#31-三种消费方式投递侧) 投递给程序，它们声明的等待窗口由投递调度执行；`await-all` 输入的订阅项按 `ordered` 投递，它的要求点是程序在投递之上的调度，不是订阅项的属性。
 
 **cursor 的生命周期**：该程序的 cursor（程序订阅每条选中流一个）在让它进入活动集合（或替换它）的 `load_program` `Applied` 的同一事务里定下：按各输入声明的起点建立，`Tail` 取该 `Applied` 提交时该流的流末（`At`），`Origin` 为 `Start{from}`。
 
