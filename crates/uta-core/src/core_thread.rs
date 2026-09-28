@@ -17,7 +17,7 @@
 //!   runtime, so it cannot be cancelled halfway.
 //! - drop without stop: the handle closes the command channel and joins the
 //!   thread, which drops the store on itself without an end anchor (the crash
-//!   path of design §7.2). The thread therefore never outlives its handle, and
+//!   path of design core/core-process/design.md §4.7.4). The thread therefore never outlives its handle, and
 //!   the OS lock (declared before the handle) is released only after it.
 
 use std::path::PathBuf;
@@ -154,7 +154,7 @@ impl CoreHandle {
         Ok(answer.await.map_err(|_| CommandError::CoreGone)??)
     }
 
-    /// Controlled stop, instance part (design §7.2 受控停止 step 5 and closing
+    /// Controlled stop, instance part (design core/core-process/design.md §4.7.4 受控停止 step 5 and closing
     /// SQLite): end anchor, close, join the thread. Blocking; call it outside
     /// the async runtime.
     pub fn stop(mut self) -> Result<(), StopError> {
@@ -253,7 +253,7 @@ fn serve(mut state: CoreState, inbox: &mut mpsc::Receiver<Command>) {
         }
     }
     // Every handle is gone without a stop: the instance ends like a crash,
-    // without an end anchor (design §7.2 "崩溃路径不变"); the store is dropped
+    // without an end anchor (design core/core-process/design.md §4.7.4 "崩溃路径不变"); the store is dropped
     // (and its connection closed) here, on the owning thread.
 }
 

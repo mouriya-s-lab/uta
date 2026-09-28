@@ -1,4 +1,4 @@
-//! The OS half of the instance fence (design §7.1 单实例, §7.2 step 1).
+//! The OS half of the instance fence (design core/design.md §4.3 单实例, core/core-process/design.md §4.7.3 step 1).
 //!
 //! One exclusive OS file lock per user state root. The lock is held by the
 //! open file handle, so it is released when this process ends, including on a

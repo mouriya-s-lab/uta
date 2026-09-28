@@ -1,4 +1,4 @@
-//! Single-writer SQLite store of the UTA core (design §7.4).
+//! Single-writer SQLite store of the UTA core (design core/core-process/storage.md).
 //!
 //! Ownership model:
 //! - [`Store`] owns the only read-write `rusqlite::Connection`. It is `Send`
@@ -13,7 +13,7 @@
 //!   In-memory state of the core is updated from `Committed` values, never
 //!   from a closure that might still roll back.
 //! - Durability: WAL with `synchronous=FULL`, so a returned commit has been
-//!   synced to the WAL (design §7.4, §6.5 "durable append").
+//!   synced to the WAL (design core/core-process/storage.md §2.1, core/core-process/io-shell.md §4.2 "durable append").
 
 mod journal;
 mod schema;
@@ -34,7 +34,7 @@ pub use rusqlite::Error as SqliteError;
 pub use schema::FORMAT_VERSION;
 
 /// Why the store could not be opened. Each variant is a core-level refusal to
-/// start (design §7.2 "失败分两级").
+/// start (design core/core-process/design.md §4.7.3 "失败分两级").
 #[derive(Debug, thiserror::Error)]
 pub enum OpenError {
     #[error("database file is format version {found}, newer than the supported {supported}")]
@@ -139,7 +139,7 @@ impl UnixMillis {
     }
 }
 
-/// A core instance id (design §7.2 step 1): monotonically increasing, minted
+/// A core instance id (design core/core-process/storage.md §4.2): monotonically increasing, minted
 /// only by [`Store::begin_instance`] in the fence transaction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct InstanceId(u64);
@@ -173,7 +173,7 @@ impl CurrentInstance {
     }
 }
 
-/// How an earlier instance ended (design §7.5 实例表).
+/// How an earlier instance ended (design core/core-process/storage.md §4.2 实例表).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstanceEnd {
     /// A controlled stop wrote the end anchor.
@@ -190,7 +190,7 @@ pub struct InstanceRecord {
     pub end: InstanceEnd,
 }
 
-/// A process-table row: an index into an OS process (design §7.5 进程表).
+/// A process-table row: an index into an OS process (design core/core-process/storage.md §4.3 进程表).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessRecord {
     pub instance: InstanceId,
@@ -241,7 +241,7 @@ impl Store {
         Ok(Committed(value))
     }
 
-    /// The fence transaction (design §7.2 step 1): inserts the next instance
+    /// The fence transaction (design core/core-process/design.md §4.7.3 step 1): inserts the next instance
     /// row in its own `BEGIN IMMEDIATE` transaction and returns the proof only
     /// after `COMMIT`. Call only while the OS instance lock is held; the lock
     /// plus this row are the fence. If a previous instance has no end anchor,
@@ -315,7 +315,7 @@ impl Store {
     }
 
     /// Process-table rows registered by instances other than `current`: the
-    /// candidates for orphan reclamation (design §7.2 step 1).
+    /// candidates for orphan reclamation (design core/core-process/design.md §4.7.3 step 1).
     pub fn processes_of_other_instances(
         &self,
         current: &CurrentInstance,
@@ -371,7 +371,7 @@ impl Tx<'_> {
         Observations { tx: &self.tx }
     }
 
-    /// The execution-fact journal: append only (§3.1, §7.4).
+    /// The execution-fact journal: append only (core/core-process/design.md §3.3, core/core-process/storage.md §2.3).
     pub fn executions(&mut self) -> Executions<'_> {
         Executions { tx: &self.tx }
     }

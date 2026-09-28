@@ -577,7 +577,7 @@ impl Process {
     }
 
     /// Windows has no exit request for another process; closing the session
-    /// channel is the request (design §7.1/§7.2).
+    /// channel is the request (design core/core-process/integration-session.md §4.5).
     pub(crate) fn request_exit(&self) -> io::Result<()> {
         Ok(())
     }

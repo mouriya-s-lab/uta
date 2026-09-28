@@ -16,7 +16,7 @@ impl Drop for SleepChild {
 }
 
 /// A row written by one instance is an orphan candidate for the next, and is
-/// cleared only with the OS's exit confirmation (design §7.2 step 1).
+/// cleared only with the OS's exit confirmation (design core/core-process/design.md §4.7.3 step 1).
 #[cfg(unix)]
 #[tokio::test]
 async fn process_rows_of_an_earlier_instance_are_cleared_only_after_os_exit() {

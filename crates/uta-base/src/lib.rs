@@ -1,8 +1,8 @@
 //! Identifiers whose source is outside the core.
 //!
 //! Integration ids and program ids are written by Alice into the shared
-//! configuration files (design §7.6); stream names and write lane keys come
-//! from integration declarations and program values (§2.2, §4.3). The core
+//! configuration files (design core/core-process/design.md §4.6); stream names and write lane keys come
+//! from integration declarations and program values (core/core-process/integration-session.md §3.3, core/core-process/program-host-element.md §3.1). The core
 //! never mints them. They enter the core exactly once, through `parse`
 //! (or serde, which is routed through the same parser), and are passed around
 //! as cheap `Arc<str>` clones afterwards.
@@ -105,28 +105,28 @@ macro_rules! config_id {
 
 config_id! {
     /// An integration registration id from the integration registry file.
-    /// Alice keeps an id bound to one integration forever (design §7.2 step 3).
+    /// Alice keeps an id bound to one integration forever (design core/core-process/integration-session.md §4.7).
     IntegrationId
 }
 
 config_id! {
-    /// A program id from the program load manifest (design §8.6).
+    /// A program id from the program load manifest (design core/core-process/program-host-element.md §4.8).
     ProgramId
 }
 
 config_id! {
-    /// A stream name: declared by an integration (`StreamDecl`, §2.2) or taken
-    /// from a program value's `outputs` (§4.3).
+    /// A stream name: declared by an integration (`StreamDecl`, core/core-process/integration-session.md §3.3) or taken
+    /// from a program value's `outputs` (core/core-process/program-host-element.md §3.1).
     StreamName
 }
 
 config_id! {
-    /// A write lane key (`WriteScope.key`, §2.2): declared by the integration,
+    /// A write lane key (`WriteScope.key`, core/core-process/integration-session.md §3.3): declared by the integration,
     /// compared by the core as an opaque value.
     WriteLaneKey
 }
 
-/// The source of an observation stream (§2.3): integration ids and program ids
+/// The source of an observation stream (core/core-process/design.md §3.1): integration ids and program ids
 /// are separate namespaces, so the source carries the tag.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Source {
@@ -135,7 +135,7 @@ pub enum Source {
 }
 
 /// What a child process of the core is, as recorded in the process table
-/// (design §7.5 "进程表"). Integration ids and program ids are separate
+/// (design core/core-process/storage.md §4.3 "进程表"). Integration ids and program ids are separate
 /// namespaces, so the role carries the namespace tag.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ProcessRole {

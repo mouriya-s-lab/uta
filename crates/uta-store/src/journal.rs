@@ -1,4 +1,4 @@
-//! The two journals' storage primitives (design §2.3, §3.1, §4.1, §7.4).
+//! The two journals' storage primitives (design core/core-process/design.md §3.1, §3.3; core/core-process/observation-journal.md §2.1; core/core-process/storage.md §2.2).
 //!
 //! - Observation streams are identified by `StreamId = (source, stream, epoch)`;
 //!   the epoch and every `Seq` are allocated here, inside the transaction that
@@ -6,9 +6,9 @@
 //! - Execution-fact streams are append-only: [`Executions`] has `append` and
 //!   nothing else. Observation streams may also be compacted ([`Observations`]
 //!   exposes the deletion primitives; which records a stream may lose is the
-//!   observation Journal element's rule, §2.4).
+//!   observation Journal element's rule, core/core-process/observation-journal.md §2.4).
 //! - Record bodies are opaque bytes tagged with a [`RecordKind`]; the store
-//!   never parses them (§7.3 存储 "两侧通用，不解析").
+//!   never parses them (core/core-process/storage.md §2.2 "两侧共享存储原语，不共享抽象").
 
 use rusqlite::{OptionalExtension, params};
 use uta_base::{IntegrationId, ProgramId, Source, StreamName, WriteLaneKey};
@@ -36,7 +36,7 @@ impl Seq {
     }
 }
 
-/// `StreamId = (source, stream, epoch)` of an observation stream (§2.3).
+/// `StreamId = (source, stream, epoch)` of an observation stream (core/core-process/design.md §3.1).
 /// Only the store constructs it: by opening an epoch, or by reading one back.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StreamId {
@@ -59,7 +59,7 @@ impl StreamId {
     }
 }
 
-/// `LogPosition = (StreamId, Seq)` of an observation record (§2.3).
+/// `LogPosition = (StreamId, Seq)` of an observation record (core/core-process/design.md §3.1).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LogPosition {
     stream: StreamId,
@@ -80,16 +80,16 @@ impl LogPosition {
 /// identity is not minted by anyone, only positions on it are.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ExecStream {
-    /// The one control stream per user state root (§7.3 控制流).
+    /// The one control stream per user state root (core/core-process/design.md §4.5 控制流).
     Control,
-    /// An integration's declaration versions (§7.5 能力证据).
+    /// An integration's declaration versions (core/core-process/integration-session.md §3.6).
     Declaration(IntegrationId),
-    /// One write lane of an integration (§6.4).
+    /// One write lane of an integration (core/core-process/lane.md §3.1).
     Lane {
         integration: IntegrationId,
         lane: WriteLaneKey,
     },
-    /// A program's request stream (§6.1).
+    /// A program's request stream (core/core-process/outbound-requests.md §3.4).
     Requests(ProgramId),
 }
 
@@ -224,7 +224,7 @@ impl Observations<'_> {
         )
     }
 
-    /// Compaction primitive: deletes one record (a superseded one, §2.4).
+    /// Compaction primitive: deletes one record (a superseded one, core/core-process/observation-journal.md §2.4).
     /// Returns whether a record was deleted.
     pub fn delete(&mut self, position: &LogPosition) -> Result<bool, rusqlite::Error> {
         let key = obs_stream_key(self.tx, &position.stream)?;

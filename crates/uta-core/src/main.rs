@@ -1,6 +1,6 @@
 //! The UTA core daemon.
 //!
-//! Startup (design §7.2): take the fence (OS lock, then the instance row on
+//! Startup (design core/core-process/design.md §4.7.3): take the fence (OS lock, then the instance row on
 //! the core thread), reclaim orphans of earlier instances, then run until the
 //! OS asks to stop. Controlled stop ends inner lifecycles first, writes the
 //! instance end anchor, closes SQLite on the core thread, joins it, and only
@@ -175,7 +175,7 @@ enum Reclaim {
     Failed,
 }
 
-/// Design §7.2 step 1 "回收孤儿": every process-table row of an earlier
+/// Design core/core-process/design.md §4.7.3 step 1 "回收孤儿": every process-table row of an earlier
 /// instance whose `(pid, start_time)` still matches is asked to exit, forced
 /// after the grace period, and its row cleared once the OS confirms the exit.
 /// The instance does not become ready until every row is cleared; a stop
