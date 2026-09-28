@@ -1273,7 +1273,7 @@ sequenceDiagram
     - fixture 集成把同一持仓身份放到同一作用域的两条持仓流上：`positions` 对它标出跨流冲突、并列两条流各自的最近观察、不选其一、不相加；对该持仓的敞口检查与持仓在检查得 `Undecidable`；
     - 核心重启后第 5 步：对已建立会话的集成，每条不在配额池里的订单状态流与成交流的 `route` 全集含 `All`，即使没有任何订阅选中它们。
 - **#73 声明的两种解释**（[integration-session.md §3.6 声明的两种解释](integration-session.md#36-声明的两种解释-设计)、[read-model.md §3.5 健康面](read-model.md#35-健康面-设计)、[read-model.md §4.2 读模型集合](read-model.md#42-读模型集合)、[one-shot-read.md §4.2 核心↔解释层：read](one-shot-read.md#42-核心解释层readtargets-deadline--vectargetresult)）：来源在会话中收紧能力后，以 fixture 集成断开会话：（对应 Q2/Q16/Q32）
-    - `read_model(sources)` 仍给出最近声明，值里没有任何会话状态；`health` 给出该来源的会话已离开 `Established`（此例为 `Connecting`）；解释层合并二者，下游看到“来源离线”而非“不支持”（[downstream/design.md §4 结构](../../downstream/design.md#4-结构)）；
+    - `read_model(sources)` 仍给出最近声明，值里没有任何会话状态；`health` 给出该来源的会话已离开 `Established`（此例为 `Connecting`）；解释层合并二者，下游看到“来源离线”而非“不支持”（[downstream/translation.md §4.1 请求的解析：此刻能不能](../../downstream/translation.md#41-请求的解析此刻能不能)）；
     - 离线期间写不过发出前门；一次性读得 `Unavailable{source_state}`，不得 `Unsupported`；回填任务不发调用、停在 `Backfilling`；
     - 会话重新建立、声明换成新版本：此后的发出前门、`route`、回填调用与一次性读按新会话的有效声明判定，`sources` 在同一位置之后给出新声明版本。
 - **#81 受控停止**（§4.7.4、§4.7.2；[program-host-element.md §4.4 卸载与替换](program-host-element.md#44-卸载与替换)；[io-shell.md §4.8 结果未知组（核心↔解释层）：放弃跟踪与重开](io-shell.md#48-结果未知组核心解释层放弃跟踪与重开)；[integration-session.md §4.8 控制动作 restart_integration 与 rotate_credential](integration-session.md#48-控制动作-restart_integration-与-rotate_credential)）：在各目标 OS 上以服务管理器与终端中断发出停止请求：（对应 Q20/Q21）
