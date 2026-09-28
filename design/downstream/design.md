@@ -134,7 +134,7 @@ flowchart LR
 - 订单参数：写侧基本类型的已注册字段（处理器字段注册表里的守卫字段，如 side、instrument，[envelope.md §3.2 处理器字段注册表](../core/core-process/envelope.md#32-处理器字段注册表)），以及该来源为每种操作声明的意图参数 schema（公共意图 schema 或其扩展，含订单类型、time-in-force 等没有处理器读的参数；核心按它校验、不读其值，原样交给集成，[ticket.md §3.4 参数合规：意图参数 schema](../core/core-process/ticket.md#34-参数合规意图参数-schema-设计)）；
 - 读侧字段：公共 schema。成交的执行身份与修订号也是公共 schema 字段，对外以成交编号、修订号给出：下游自行计数时读的就是它们，与核心 `orders` 读的是同一个值（[read-model.md §3.2 成交的计数身份](../core/core-process/read-model.md#32-成交的计数身份-设计)）；
 - 读侧查询参数：各流的请求 schema（公共请求 schema 或来源扩展，[integration-session.md §3.3 投影 Projection](../core/core-process/integration-session.md#33-投影-projection)）：查询主体（已解析的 instrument、目录键或文本）与领域过滤条件（到期日、行权价、条数上限等）；时间段落到核心的 `range`；
-- 来源专有的参数与字段：该集成发布的扩展 schema 与记录映射（[integration/design.md §4.3 发布物](../integration/design.md#43-发布物)）。
+- 来源专有的参数与字段：该集成发布的扩展 schema 与记录映射（[README.md §4.2 部分之间的关系](../README.md#42-部分之间的关系)）。
 
 生成在构建期完成，从类型与集成的发布制品生成，不在运行期远程发现。命令是否存在在构建时就定了；运行期只回答“此刻能不能”（[translation.md §4.1 请求的解析：此刻能不能](translation.md#41-请求的解析此刻能不能)）。
 

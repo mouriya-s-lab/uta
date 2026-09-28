@@ -2,7 +2,7 @@
 
 UTA（Unified Trading Agent）是 OpenAlice 的独立进程，位于上游（券商、交易所）与下游（Alice、CLI 使用者、外部客户程序）之间：经集成接触上游，持有观察流、意图与全部交易写入的记录；账户、订单、持仓的原值在上游，不在 UTA。下游只经解释层接触 UTA；Alice 是下游之一，与 UTA 生命周期互相独立。本仓库是 UTA 的设计与实现仓库。旧 UTA 实现留在 OpenAlice 仓库（`services/uta/`、`packages/uta-protocol/`、`src/services/uta-client/`），不具备正确性，只作为"既有机器事实"（[design/README.md §2.1](design/README.md#21-域事实既有机器事实利益相关者要求与假设) O 表）被引用。
 
-设计文档按 C4 层级组织，文件树镜像元素树，从 `design/README.md` 读起。`design/README.md` 是四个部分之上的景观层：全局原则、问题域与需求登记（F/O/S/H/P/A/B/C、Q、K）、四个部分的划分与关系、W1–W20 场景。四个部分各是一棵 C4 树：core 的系统上下文在 `design/core/design.md`，容器为核心进程（`design/core/core-process/design.md`，其组件各一份文档在同目录）与程序宿主进程（`design/core/program-host/design.md`）；核心两侧的清洗层各自成文：集成在 `design/integration/`，解释层在 `design/downstream/`（`design.md` 是它的系统上下文与唯一容器，翻译与长连接端点两个组件各一份文档在同目录）；可选子系统在 `design/hpc-derivation/`。节号按文档内编号引用（例 `io-shell.md §4.2`）。代码在 Cargo 工作区（`crates/`、`xtask/`）；crate 划分、依赖方向、线程与任务模型、所有权与派生规则、线缆约定在根目录 `ARCHITECTURE.md`。
+设计文档按 C4 层级组织，文件树镜像元素树，从 `design/README.md` 读起。`design/README.md` 是四个部分之上的景观层：全局原则、问题域与需求登记（F/O/S/H/P/A/B/C、Q、K）、四个部分的划分与关系、W1–W20 场景。四个部分各是一棵 C4 树：core 的系统上下文在 `design/core/design.md`，容器为核心进程（`design/core/core-process/design.md`，其组件各一份文档在同目录）与程序宿主进程（`design/core/program-host/design.md`）；核心两侧的清洗层各自成树：集成的系统上下文在 `design/integration/design.md`，唯一的容器集成进程在 `design/integration/integration-process/design.md`；解释层在 `design/downstream/`（`design.md` 是它的系统上下文与唯一容器，翻译与长连接端点两个组件各一份文档在同目录）；可选子系统在 `design/hpc-derivation/`。节号按文档内编号引用（例 `io-shell.md §4.2`）。代码在 Cargo 工作区（`crates/`、`xtask/`）；crate 划分、依赖方向、线程与任务模型、所有权与派生规则、线缆约定在根目录 `ARCHITECTURE.md`。
 
 ## 阶段与范围
 

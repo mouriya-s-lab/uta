@@ -658,7 +658,7 @@ flowchart TB
 61. **调用方键由核心铸造**（§3.4、§4.6）：（对应 Q2/Q6）
     - 每次键角色不是 `None` 的尝试，`SendBarrier` 所记的键等于 `AttemptRef` 的固定编码，且原样到达 fixture 上游；不同尝试的键两两不同；重启恢复后同一尝试的取证用同一个键；`EffectRequest` 与意图里没有键字段；
     - fixture 上游的键字符集或长度装不下该编码：集成声明 `None`，尝试不带键，没有 by-key 与 replay-by-key 渠道；
-    - fixture 中另一写者在同一作用域用了与某尝试相同字节的键：它的记录归因为 `Unattributed`，不使该尝试 `Found`；核心不把任何记录判为 `External`，只凭键字节的记录不被核心改写为 `FromAttempt`。
+    - fixture 上游在某尝试的键唯一期结束之后，让另一写者在同一作用域用与它相同字节的键写下记录：该记录归因为 `Unattributed`，不使该尝试 `Found`；核心不把任何记录判为 `External`，只凭键字节的记录不被核心改写为 `FromAttempt`。唯一期之内别的写者冒用这一编码观察不到，不作验收（证伪 #25）。
 65. **按键取证的窗口**（§4.5、§4.6）：以 fixture 上游设定键唯一期与保留期：（对应 Q3）
     - `barrier_at` 已超出唯一期的尝试，`query_by_key` 得 `Unavailable`（`Gap{origin: Channel}`），从不得 `Absent`；超出保留期时 `replay_by_key` 得 `Unavailable`，fixture 上游未收到重放；
     - listing 或 fills 的空答只产生 `Inconclusive`；fixture 声明需要隔一段时间再确认缺席的上游，间隔之内集成返回 `Unavailable`；

@@ -537,6 +537,7 @@ flowchart LR
   IL <-->|"核心↔解释层契约"| CORE
   CORE <-->|"核心↔集成契约"| INT
   INT <-->|"上游协议"| VENUE
+  INT -.->|"构建期：扩展 schema 与记录映射"| IL
   FILES -.->|"core 只读"| CORE
 ```
 
@@ -547,7 +548,8 @@ flowchart LR
 | 下游 ↔ 解释层 | 命令、长连接消息、续传与读取令牌、缺失通知 | 解释层部分；schema 与 CLI 随本仓库 release 发布，是跨仓库契约 | [downstream/design.md](downstream/design.md) |
 | 解释层 ↔ core | 会话、订阅与确认、一次性读、读模型、单据、结果未知、控制动作 | core；JSON-RPC IDL，只在本仓库内部 | 每个操作写在实现它的 core 组件文档，总表见 [core-process/design.md §4.2 对外接口总表](core/core-process/design.md#42-对外接口总表) |
 | core ↔ 集成 | 握手与声明、推送（观察、gap、能力变更、readiness）、读写调用 | core；IDL 随 release 发布给集成作者 | [integration-session.md §4.3 核心↔集成契约的会话部分](core/core-process/integration-session.md#43-核心集成契约的会话部分)，各操作见 [core-process/design.md §4.2 对外接口总表](core/core-process/design.md#42-对外接口总表) |
-| 集成 ↔ 上游 | 上游协议 | 上游 | 各集成自己；接入方法见 [integration/design.md](integration/design.md) |
+| 集成 ↔ 上游 | 上游协议 | 上游 | 各集成自己；接入方法见 [integration/design.md §5.1 接入一个新 venue](integration/design.md#51-接入一个新-venue) |
+| 集成 → 解释层（构建期） | 每个集成随发布制品给出的扩展 schema 与记录映射；解释层据此生成该来源专有的命令参数与字段。握手时交出的同一组值以 `(schema_id, schema_version)` 标识，与发布制品不一致的版本在解释层按“构建时没有的 schema 版本”处理 | 各集成；随该集成的发布制品发布 | 发布：[integration/design.md §4.2 发布物](integration/design.md#42-发布物)；生成与运行期处理：[downstream/design.md §4.3 命令与参数从哪里来](downstream/design.md#43-命令与参数从哪里来) |
 | core ↔ 可选子系统 | `Pooled` 段视图、原生 op 的安装与每次宿主执行的交出 | core | [program-host-element.md §4.7 核心↔可选行情派生计算子系统](core/core-process/program-host-element.md#47-核心可选行情派生计算子系统) |
 | Alice → core（文件） | 封存凭据、集成登记、规则、程序装载清单与程序值文件、运行期参数、原生计算制品 | 文件写者 Alice；core 只读 | [core-process/design.md §4.6 统一路径文件](core/core-process/design.md#46-统一路径文件) |
 

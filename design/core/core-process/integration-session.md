@@ -14,7 +14,7 @@
 - **读者**：核心实现者；集成作者（第 3、4.3 节是他们要实现的契约）；审查 IDL 的人。
 - **状态**：已定。
 - **非目标**：
-  - 集成进程内部怎么写（适配器、记录映射解释器库、一致性测试）：[integration/design.md §4 结构](../../integration/design.md#4-结构)。
+  - 集成进程内部怎么写（声明构造、记录映射、适配器代码）与一致性测试：[integration-process/design.md §4 结构](../../integration/integration-process/design.md#4-结构)、[integration-process/design.md §6.1 一致性测试](../../integration/integration-process/design.md#61-一致性测试)。
   - 其余契约操作的规格。`submit`/`cancel` 与四个取证操作在 [io-shell.md §4.6 写与取证操作的规格（核心→集成）](io-shell.md#46-写与取证操作的规格核心集成)；`read` 在 [one-shot-read.md §4.1 核心→集成：read](one-shot-read.md#41-核心集成readstream-request-range--answered--unavailable--refused)；`route`、`backfill`、实时边界与序号覆盖在 [subscription.md §4.3 核心→集成：route](subscription.md#43-核心集成routestream-subjects-generation--routedrefused--unavailable)、[subscription.md §4.4 核心→集成：backfill](subscription.md#44-核心集成backfillstream-window-subjects--covered--unavailable--refused)；信封、锚点、字段注册与 schema 在 [envelope.md §3.1 锚点表 × 链路](envelope.md#31-锚点表--链路)；成交与订单状态的契约语义在 [read-model.md §3.2 成交的计数身份](read-model.md#32-成交的计数身份-设计)；交易协议的操作种类表在 [ticket.md §4.5 交易协议：操作种类、目标、可执行性、检查目录](ticket.md#45-交易协议操作种类目标可执行性检查目录-交易协议)。
   - 健康面的 fold 规则（会话值怎样取舍、readiness 何时有效、`health` 的成员）：[read-model.md §3.5 健康面](read-model.md#35-健康面-设计)。本文只写本组件写下的健康观察与计数的内容。
   - 控制动作的共同部分（principal、授权、`Applied | Rejected` 的记录）：[control-plane.md §4.2 共同流程](control-plane.md#42-共同流程)。
@@ -335,7 +335,7 @@ UTA 对投影只做两件事：按投影路由（lane 按 `WriteScope`、订阅�
 
 #### 4.3.1 `handshake() → Projection | Refused | Unavailable`
 
-- **语义**：声明作用域、流、能力、配额、扩展 schema 与记录映射。集成为构造声明可以先询问上游（[integration/design.md §4.2 声明构造](../../integration/design.md#声明构造)）。握手在核心拉起集成进程时创建的通道上进行；它属于哪个会话由这条通道决定，集成不必知道也不回填 `SessionEpoch`。
+- **语义**：声明作用域、流、能力、配额、扩展 schema 与记录映射。集成为构造声明可以先询问上游（[integration-process/design.md §4.5 声明构造](../../integration/integration-process/design.md#45-声明构造)）。握手在核心拉起集成进程时创建的通道上进行；它属于哪个会话由这条通道决定，集成不必知道也不回填 `SessionEpoch`。
 - **动作轴**：非动作（声明交换）。
 - **返回**：
   - `Projection`（含契约版本）；
@@ -417,7 +417,7 @@ UTA 对投影只做两件事：按投影路由（lane 按 `WriteScope`、订阅�
 
 ### 4.4 集成义务清单
 
-集成由 IDL 固定的职责，按契约的三部分分列。声明与记录映射义务由握手时的静态校验保证；行为义务无法由构造保证，以一致性测试验证：以 fixture 上游驱动集成，逐条义务观测其返回值与推送（[integration/design.md §5.2 一致性测试](../../integration/design.md#52-一致性测试)，验收 [integration/design.md §6.2 验收](../../integration/design.md#62-验收) #22）。集成**不持有**规则状态、不做决策、不接触 SQLite。
+集成由 IDL 固定的职责，按契约的三部分分列。声明与记录映射义务由握手时的静态校验保证；行为义务无法由构造保证，以一致性测试验证：以 fixture 上游驱动集成，逐条义务观测其返回值与推送（[integration-process/design.md §6.1 一致性测试](../../integration/integration-process/design.md#61-一致性测试)，验收 [integration-process/design.md §6.2 验收](../../integration/integration-process/design.md#62-验收) #22）。集成**不持有**规则状态、不做决策、不接触 SQLite。
 
 **声明义务**（握手时交给核心的值）：
 
