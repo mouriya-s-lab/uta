@@ -10,7 +10,7 @@
 - **非目标**：
   - 各操作组的规格：订阅组在 [subscription.md §4.1 核心↔解释层：订阅组与 rewind_cursor](subscription.md#41-核心解释层订阅组与-rewind_cursor)，一次性读在 [one-shot-read.md](one-shot-read.md)，读模型与健康在 [read-model.md §4.2 读模型集合](read-model.md#42-读模型集合)，单据组在 [ticket.md §4.3 单据组（核心↔解释层）](ticket.md#43-单据组核心解释层)，结果未知组在 [io-shell.md §4.8 结果未知组（核心↔解释层）：放弃跟踪与重开](io-shell.md#48-结果未知组核心解释层放弃跟踪与重开)，控制组在 [control-plane.md §4.1 控制组的操作集与各自的规格所在](control-plane.md#41-控制组的操作集与各自的规格所在)。
   - 写授权与控制授权的规则本身：[decision-chain.md §4.2 顺序固定链：授权 → 输入约束 → 审批 → lane → 过期](decision-chain.md#42-顺序固定链授权--输入约束--审批--lane--过期)。
-  - 解释层对下游的对外面（命令、长连接消息、续传令牌）：[downstream/design.md §4.2 一次性命令](../../downstream/design.md#42-一次性命令)、[downstream/endpoint.md](../../downstream/endpoint.md)。
+  - 解释层对下游的对外面（命令、长连接消息、续传令牌）：[downstream/cli/design.md §4.2 命令的形态](../../downstream/cli/design.md#42-命令的形态)、[downstream/endpoint/design.md](../../downstream/endpoint/design.md)。
 
 标签与编号约定见 [README.md §0.4 阅读约定](../../README.md#04-阅读约定)。
 
@@ -94,7 +94,7 @@
 ### 4.5 传输与 IDL
 
 - 核心↔解释层的语义由一份 IDL 固定，同一 JSON-RPC；传输按 OS 选择（UDS / 命名管道 / 回环 + 本地令牌），只改编码与信道，不改 IDL。编码取舍见 [core-process/design.md §4.7.1 进程形状](design.md#471-进程形状)。
-- 本契约消息 schema 的文本形式随 IDL 文件留在本仓库内部，不对下游发布；对下游发布的是解释层的对外面（[downstream/design.md §4.4 身份与发布物](../../downstream/design.md#44-身份与发布物)）。
+- 本契约消息 schema 的文本形式随 IDL 文件留在本仓库内部，不对下游发布；对下游发布的是解释层的对外面（[downstream/design.md §4.2 身份与发布物](../../downstream/design.md#42-身份与发布物)）。
 
 ### 4.6 已定事实
 

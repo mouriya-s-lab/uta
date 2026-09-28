@@ -16,7 +16,7 @@
   - 健康观察的写入（会话状态与调用计数由集成会话写，回填进度与覆盖检查点由持久订阅写），在 [integration-session.md §4.6 会话状态机](integration-session.md#46-会话状态机)、[subscription.md §4.5 实时边界、回填任务与回填进度](subscription.md#45-实时边界回填任务与回填进度)；
   - readiness 的语义与上报，在 [integration-session.md §4.3.2 集成→核心的推送](integration-session.md#432-集成核心的推送)；
   - 读模型之外的订阅与投递，在 [subscription.md §4.1 核心↔解释层：订阅组与 rewind_cursor](subscription.md#41-核心解释层订阅组与-rewind_cursor)；
-  - 解释层把读模型翻成对外概念，在[解释层的翻译组件](../../downstream/translation.md)。
+  - 解释层把读模型翻成对外概念，在[解释层的翻译组件](../../downstream/endpoint/translation.md)。
 - 证据标签与编号约定见 [README.md §0.4 阅读约定](../../README.md#04-阅读约定)。
 
 ## 1 问题域
@@ -320,7 +320,7 @@
 - 它的输入只有各来源的声明流（声明版本与针对逻辑流读 / 回填能力的 `CapabilityObserved`）与各 lane 流上的 `CapabilityObserved`，不读控制流，也不标来源是否在采纳集合里。它的值里没有记录映射。
 - 它是来源说过什么的记录，即集成会话的“最近声明”（[integration-session.md §3.6 声明的两种解释](integration-session.md#36-声明的两种解释-设计)）：来源处于已建立会话时，它就是写门与读路由此刻使用的会话有效声明；离线时它只是来源上一次会话里的陈述，不是此刻的能力。
 - 它只 fold 执行事实，可按历史 `as_of` 读取；历史切面只含该切面上已有声明版本的来源。
-- 来源的会话状态不在其中，在 `health`；“此刻能不能”由解释层合并二者（[downstream/translation.md §4.1 请求的解析：此刻能不能](../../downstream/translation.md#41-请求的解析此刻能不能)）。
+- 来源的会话状态不在其中，在 `health`；“此刻能不能”由解释层合并二者（[downstream/endpoint/translation.md §4.1 请求的解析：此刻能不能](../../downstream/endpoint/translation.md#41-请求的解析此刻能不能)）。
 
 **`health`**：成员是 `as_of` 时的采纳集合，由控制流 fold：`as_of` 在控制流上的位置及以前最近一条采纳记录列出的 id，加上该位置及以前、`instance_id` 与那条采纳记录相同的 `restart_integration` `Applied` 采纳的 id。每个成员一份 `IntegrationHealth`（§3.5），各字段只由健康观察 fold。
 
@@ -347,7 +347,7 @@
 
 ### 4.5 解释层怎样得到声明 [设计]
 
-解释层读 `sources` 取得来源、账户（`account_ref`）、流与读写能力；订阅各来源的执行事实得知声明版本与 `CapabilityObserved` 的变化（[subscription.md §4.1 核心↔解释层：订阅组与 rewind_cursor](subscription.md#41-核心解释层订阅组与-rewind_cursor)），再重读 `sources`。`WriteLaneKey` 与 `Verdict` 只在解释层内部使用，对外翻成“账户”“支持 / 不支持 / 未确认”（[downstream/translation.md §3.1 对外概念](../../downstream/translation.md#31-对外概念)、[§4.1 请求的解析：此刻能不能](../../downstream/translation.md#41-请求的解析此刻能不能)）。
+解释层读 `sources` 取得来源、账户（`account_ref`）、流与读写能力；订阅各来源的执行事实得知声明版本与 `CapabilityObserved` 的变化（[subscription.md §4.1 核心↔解释层：订阅组与 rewind_cursor](subscription.md#41-核心解释层订阅组与-rewind_cursor)），再重读 `sources`。`WriteLaneKey` 与 `Verdict` 只在解释层内部使用，对外翻成“账户”“支持 / 不支持 / 未确认”（[downstream/endpoint/translation.md §3.1 对外概念](../../downstream/endpoint/translation.md#31-对外概念)、[§4.1 请求的解析：此刻能不能](../../downstream/endpoint/translation.md#41-请求的解析此刻能不能)）。
 
 - 理由：`sources` 与写门、读路由用的是同一份能力记录，解释层对“不支持 / 未确认”的回答与核心的判定不分叉（Q16）；声明变化经执行事实订阅到达，重连后从已确认 cursor 续，不丢（Q29）。
 - 不选：

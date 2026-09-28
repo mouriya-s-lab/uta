@@ -549,7 +549,7 @@ flowchart LR
 | 解释层 ↔ core | 会话、订阅与确认、一次性读、读模型、单据、结果未知、控制动作 | core；JSON-RPC IDL，只在本仓库内部 | 每个操作写在实现它的 core 组件文档，总表见 [core-process/design.md §4.2 对外接口总表](core/core-process/design.md#42-对外接口总表) |
 | core ↔ 集成 | 握手与声明、推送（观察、gap、能力变更、readiness）、读写调用 | core；IDL 随 release 发布给集成作者 | [integration-session.md §4.3 核心↔集成契约的会话部分](core/core-process/integration-session.md#43-核心集成契约的会话部分)，各操作见 [core-process/design.md §4.2 对外接口总表](core/core-process/design.md#42-对外接口总表) |
 | 集成 ↔ 上游 | 上游协议 | 上游 | 各集成自己；接入方法见 [integration/design.md §5.1 接入一个新 venue](integration/design.md#51-接入一个新-venue) |
-| 集成 → 解释层（构建期） | 每个集成随发布制品给出的扩展 schema 与记录映射；解释层据此生成该来源专有的命令参数与字段。握手时交出的同一组值以 `(schema_id, schema_version)` 标识，与发布制品不一致的版本在解释层按“构建时没有的 schema 版本”处理 | 各集成；随该集成的发布制品发布 | 发布：[integration/design.md §4.2 发布物](integration/design.md#42-发布物)；生成与运行期处理：[downstream/design.md §4.3 命令与参数从哪里来](downstream/design.md#43-命令与参数从哪里来) |
+| 集成 → 解释层（构建期） | 每个集成随发布制品给出的扩展 schema 与记录映射；解释层据此生成该来源专有的命令参数与字段。握手时交出的同一组值以 `(schema_id, schema_version)` 标识，与发布制品不一致的版本在解释层按“构建时没有的 schema 版本”处理 | 各集成；随该集成的发布制品发布 | 发布：[integration/design.md §4.2 发布物](integration/design.md#42-发布物)；生成与运行期处理：[downstream/cli/design.md §4.3 命令与参数从哪里来](downstream/cli/design.md#43-命令与参数从哪里来) |
 | core ↔ 可选子系统 | `Pooled` 段视图、原生 op 的安装与每次宿主执行的交出 | core | [program-host-element.md §4.7 核心↔可选行情派生计算子系统](core/core-process/program-host-element.md#47-核心可选行情派生计算子系统) |
 | Alice → core（文件） | 封存凭据、集成登记、规则、程序装载清单与程序值文件、运行期参数、原生计算制品 | 文件写者 Alice；core 只读 | [core-process/design.md §4.6 统一路径文件](core/core-process/design.md#46-统一路径文件) |
 
@@ -594,7 +594,7 @@ flowchart LR
 
 **W13（Q28）保留边界推进与被引用位置。** 运维者经解释层推进保留边界。成：边界不越过仍被登记引用的最早位置，执行事实无记录被删。trace：[core-process/design.md §5.1 W13（Q28）保留边界推进与被引用位置](core/core-process/design.md#w13q28保留边界推进与被引用位置)。
 
-**W14（Q29）下游断连重连。** Alice 或解释层崩溃重启，core 独立存活；Alice 凭续传令牌经解释层重连。成：取得当前状态、cursor 之后的记录与断连期间的缺失通知；重复只出现在未确认区间。trace：[core-process/design.md §5.1 W14（Q29）下游（Alice）断连重连](core/core-process/design.md#w14q29下游alice断连重连)；解释层内部：[downstream/design.md §5.1 W14（Q29）下游断连重连](downstream/design.md#51-w14q29下游断连重连)。
+**W14（Q29）下游断连重连。** Alice 或解释层崩溃重启，core 独立存活；Alice 凭续传令牌经解释层重连。成：取得当前状态、cursor 之后的记录与断连期间的缺失通知；重复只出现在未确认区间。trace：[core-process/design.md §5.1 W14（Q29）下游（Alice）断连重连](core/core-process/design.md#w14q29下游alice断连重连)；解释层内部：[downstream/endpoint/design.md §5.1 W14（Q29）下游断连重连](downstream/endpoint/design.md#51-w14q29下游断连重连)。
 
 **W15（Q24）含 `Pooled` 的程序：无子系统 / 有子系统且 op 崩溃。** 成：无子系统时该程序装载被拒、其余程序照常；op 崩溃只产生失败观察，不改名为来源 gap 或写的无回执；外部写仍经效应路径。子系统内部不在本文范围。trace：[core-process/design.md §5.1 W15（Q24）含 Pooled 的程序](core/core-process/design.md#w15q24含-pooled-的程序)。
 
@@ -604,9 +604,9 @@ flowchart LR
 
 **W18（Q8+Q9+Q10）送审即否决、人工审批与过期、决定版本冲突、冷却。** 下游经解释层提交三种非法意图、人工审批、两次同版本决定。成：参数不合规与只读账户两笔无上游调用、各一对意图 / 否决并有安全事件；他账户 instrument 在允许集合内时恰一次上游调用、终于上游拒绝；过期意图无递送；第二次决定得冲突。trace：[core-process/design.md §5.1 W18（Q8+Q9+Q10）送审即否决、人工审批与过期、决定版本冲突、冷却](core/core-process/design.md#w18q8q9q10送审即否决人工审批与过期决定版本冲突冷却)。
 
-**W19（Q19）会话身份与未授权控制。** 未认证连接、伪造请求体身份、无 scope 的控制请求经解释层到达 core。成：无上游调用、无配置变更，安全事件可读。trace：[core-process/design.md §5.1 W19（Q19）会话身份与未授权控制](core/core-process/design.md#w19q19会话身份与未授权控制)；解释层内部：[downstream/design.md §5.2 W19（Q19）会话身份与未授权控制](downstream/design.md#52-w19q19会话身份与未授权控制)。
+**W19（Q19）会话身份与未授权控制。** 未认证连接、伪造请求体身份、无 scope 的控制请求经解释层到达 core。成：无上游调用、无配置变更，安全事件可读。trace：[core-process/design.md §5.1 W19（Q19）会话身份与未授权控制](core/core-process/design.md#w19q19会话身份与未授权控制)；解释层内部：[downstream/endpoint/design.md §5.2 W19（Q19）会话身份与未授权控制](downstream/endpoint/design.md#52-w19q19会话身份与未授权控制)。
 
-**W20（Q13+Q15+Q16）解释层取得声明、按账户与无账户来源读、推送待审与结果未知。** 集成握手后，解释层读取来源声明、跨账户与公共来源一次性读、订阅超配额、接收待审与结果未知的推送。成：各读目标独立，“来源重连中 / 不支持 / 未确认 / 来源拒绝 / 尚未作答 / 空结果”可区分；超配额项被拒而集成收不到超限主体；待审与结果未知重连后不丢。trace：[core-process/design.md §5.1 W20（Q13+Q15+Q16）解释层取得声明、按账户与无账户来源读、推送待审与结果未知](core/core-process/design.md#w20q13q15q16解释层取得声明按账户与无账户来源读推送待审与结果未知)；解释层内部：[downstream/design.md §5.3 W20（Q13+Q15+Q16）取得声明、按账户与无账户来源读、推送待审与结果未知](downstream/design.md#53-w20q13q15q16取得声明按账户与无账户来源读推送待审与结果未知)。
+**W20（Q13+Q15+Q16）解释层取得声明、按账户与无账户来源读、推送待审与结果未知。** 集成握手后，解释层读取来源声明、跨账户与公共来源一次性读、订阅超配额、接收待审与结果未知的推送。成：各读目标独立，“来源重连中 / 不支持 / 未确认 / 来源拒绝 / 尚未作答 / 空结果”可区分；超配额项被拒而集成收不到超限主体；待审与结果未知重连后不丢。trace：[core-process/design.md §5.1 W20（Q13+Q15+Q16）解释层取得声明、按账户与无账户来源读、推送待审与结果未知](core/core-process/design.md#w20q13q15q16解释层取得声明按账户与无账户来源读推送待审与结果未知)；解释层内部：[downstream/design.md §5.1 W20（Q13+Q15+Q16）取得声明、按账户与无账户来源读、推送待审与结果未知](downstream/design.md#51-w20q13q15q16取得声明按账户与无账户来源读推送待审与结果未知)。
 
 ## 6 评估
 

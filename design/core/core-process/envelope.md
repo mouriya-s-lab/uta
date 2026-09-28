@@ -188,7 +188,7 @@ venue 词汇不越过集成 [域 B6]。
 - **公共意图 schema**：交易协议的每种操作种类（下单、撤单、改单、平仓）各有一份意图参数 schema，随 IDL 发布，写成 JSON Schema，含类型相关的必填与互斥约束。集成在该 `(scope, OperationKind)` 的 `CapabilityProof` 里声明它接受的 schema 身份：公共意图 schema，或以它为基础只增加字段与约束的扩展 schema（[integration-session.md §3.3 投影 Projection](integration-session.md#33-投影-projection)）；意图按声明的 schema 在输入约束步校验（[ticket.md §3.4 参数合规：意图参数 schema](ticket.md#34-参数合规意图参数-schema-设计)）。意图参数 schema 是 UTA 的契约，不是上游请求格式。
 - **交易协议检查读的公共字段**（[ticket.md §4.5 交易协议：操作种类、目标、可执行性、检查目录](ticket.md#45-交易协议操作种类目标可执行性检查目录-交易协议)）：持仓记录的带符号数量与作用域内稳定的持仓身份；报价记录的一个指定参考价字段；目录记录的合约乘数、计价币种与按 (instrument, `OperationKind`) 的写资格；余额记录的权益及其币种；公共意图 schema 的限价字段。
 - **扩展 schema**：venue 特有、公共 schema 容纳不下的内容，由集成在声明中给出 schema 文本，以单独的流输出；需要与公共流关联时，程序按记录上的身份字段 `Join`（[core-process/design.md §3.12 组合子值树与五个 fold](design.md#312-组合子值树与五个-fold)）。扩展 schema 同样属于契约，不是上游消息格式。
-- 核心不解释 schema 内容：程序与钩子的解释器按 schema 注册；schema 身份随声明交给解释层，解释层据此判断该来源专有字段此刻能否使用（来源专有字段本身在构建期从集成发布制品生成，[downstream/design.md §4.3 命令与参数从哪里来](../../downstream/design.md#43-命令与参数从哪里来)）。
+- 核心不解释 schema 内容：程序与钩子的解释器按 schema 注册；schema 身份随声明交给解释层，解释层据此判断该来源专有字段此刻能否使用（来源专有字段本身在构建期从集成发布制品生成，[downstream/cli/design.md §4.3 命令与参数从哪里来](../../downstream/cli/design.md#43-命令与参数从哪里来)）。
 - 理由：载荷若是上游形状，程序就成了 UTA 内第二个消费上游的地方，只能按 venue 分别写，跨渠道组合做不成（§2.7 最后一条不选）。
 
 **schema 身份与版本** [设计]：

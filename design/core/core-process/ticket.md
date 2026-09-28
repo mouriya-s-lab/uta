@@ -119,7 +119,7 @@ enum TicketAction<Intent> {
 
 - **schema 从哪来。** 每个 `Supported` 的写能力 `(scope, OperationKind)` 在其 `CapabilityProof` 里声明它接受的意图参数 schema 身份 `(schema_id, schema_version)`（[integration-session.md §3.3 投影 Projection](integration-session.md#33-投影-projection)）：交易协议该操作种类的公共意图 schema（随 IDL 发布，[envelope.md §3.3 payload_schema 与 schema 发布](envelope.md#33-payload_schema-与-schema-发布)），或该集成以它为基础只增加字段与约束的扩展 schema，因而合扩展者必合公共者。schema 覆盖意图的全部参数：已注册的守卫字段与载荷（订单类型、time-in-force、来源专有选项等没有处理器读的参数）。判定读的是该来源的**会话有效声明**（[integration-session.md §3.6 声明的两种解释](integration-session.md#36-声明的两种解释-设计)），不读离线时留下的最近声明。
 - **schema 语言。** JSON Schema，与配置文件的 schema 同一语言，钉在一个 draft 版本与一个关键字子集上，`format` 只作注解不作断言；schema 与一个参考校验器随 IDL 发布，两个实现对同一参数得出同一结论由此可测（验收 #30、#31）。类型相关的必填与互斥（限价单要限价、追踪单的偏移量与百分比二选一、某来源只对市价单接受名义金额、某来源不支持的选项被禁止）写成 schema 自身的条件约束；合规与否只由该语言的校验语义决定，没有第二道由实现各自补写的语义校验。来源相关的限制由该来源的 schema 选定，不是交易协议的全局事实。
-- **意图带身份。** 每版意图带它的参数所依据的 schema 身份，版本 hash 覆盖它。下游的参数在构建期按某个 schema 版本生成（[downstream/design.md §4.3 命令与参数从哪里来](../../downstream/design.md#43-命令与参数从哪里来)），程序按它读到的声明写参数；带身份使“按哪一版写的”不靠猜。
+- **意图带身份。** 每版意图带它的参数所依据的 schema 身份，版本 hash 覆盖它。下游的参数在构建期按某个 schema 版本生成（[downstream/cli/design.md §4.3 命令与参数从哪里来](../../downstream/cli/design.md#43-命令与参数从哪里来)），程序按它读到的声明写参数；带身份使“按哪一版写的”不靠猜。
 - **守卫字段的数量规则**（交易协议注册的字段，不随来源变）：下单与改单的新单部分，`quantity` 与 `notional` 恰有一个，有限且为正；平仓只可带 `quantity`（有限且为正），不带 `notional`；撤单两者都不带。C10 的“数量 / 名义有限且为正”即此。改单另带新单的**数量口径**：绝对量（改后的订单按意图所带的 `quantity` 或 `notional`）或剩余量（只与 `quantity` 合法：改后的订单按意图的 `quantity` 减去原单已成交的量）。口径的含义由上游在改单的那一次写里按它自己的成交记录落实（§4.5 改单）；核心只按 schema 校验口径是否被接受，不据它计算任何数量。
 - **结果是单据 fold 的状态** `parameter_validity`：
 

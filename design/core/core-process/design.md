@@ -1080,11 +1080,11 @@ sequenceDiagram
 
 1. Alice 或解释层崩溃 / 重启，核心独立存活。消费方会话随传输关闭结束：会话入口不为它写任何记录；订阅、单据与在途读不属于会话（[session-entry.md §4.4 会话的生命周期](session-entry.md#44-会话的生命周期-设计)）。
 2. 重连：会话入口 `handshake(contract_version, actor)` 取 `principal = (os_user, actor)`；持久订阅把同一 principal 的订阅重新挂接，投递调度从已确认 cursor 续投，先交出未确认的 `Gap{origin: Delivery}`（[subscription.md §4.1 核心↔解释层：订阅组与 rewind_cursor](subscription.md#41-核心解释层订阅组与-rewind_cursor)）。执行事实订阅同样从已确认 cursor 续，没有投递损失。
-3. `read_model(kind)` 由读模型给出 `Snapshot`（`subscriptions`、`tickets` 只给当前态）。未确认区间可能重复可见，按 `LogPosition` 去重。解释层内部的续传令牌与缺失通知在 [downstream/design.md §5 走查](../../downstream/design.md#5-走查)。
+3. `read_model(kind)` 由读模型给出 `Snapshot`（`subscriptions`、`tickets` 只给当前态）。未确认区间可能重复可见，按 `LogPosition` 去重。解释层内部的续传令牌与缺失通知在 [downstream/endpoint/design.md §5.1 W14（Q29）下游断连重连](../../downstream/endpoint/design.md#51-w14q29下游断连重连)。
 
 **走通。**
 
-细化：[delivery.md §5.2 W14 的投递细化（重新挂接）](delivery.md#52-w14-的投递细化重新挂接)、[read-model.md §5.1 重连后取当前状态（W14 的读模型细化）](read-model.md#51-重连后取当前状态w14-的读模型细化)、[session-entry.md §5.2 W14 的本组件细化（Q29）](session-entry.md#52-w14-的本组件细化q29)、[subscription.md §5.2 W14 的持久订阅细化（下游断连重连）](subscription.md#52-w14-的持久订阅细化下游断连重连)、[downstream/design.md §5.1 W14（Q29）下游断连重连](../../downstream/design.md#51-w14q29下游断连重连)。
+细化：[delivery.md §5.2 W14 的投递细化（重新挂接）](delivery.md#52-w14-的投递细化重新挂接)、[read-model.md §5.1 重连后取当前状态（W14 的读模型细化）](read-model.md#51-重连后取当前状态w14-的读模型细化)、[session-entry.md §5.2 W14 的本组件细化（Q29）](session-entry.md#52-w14-的本组件细化q29)、[subscription.md §5.2 W14 的持久订阅细化（下游断连重连）](subscription.md#52-w14-的持久订阅细化下游断连重连)、[downstream/endpoint/design.md §5.1 W14（Q29）下游断连重连](../../downstream/endpoint/design.md#51-w14q29下游断连重连)。
 
 #### W15（Q24）含 `Pooled` 的程序
 
@@ -1136,7 +1136,7 @@ sequenceDiagram
 
 **走通**（[control-plane.md §6.2 验收标准](control-plane.md#62-验收标准) #13）。
 
-细化：[control-plane.md §5.2 W19 第 3 步的本组件细化（Q19）](control-plane.md#52-w19-第-3-步的本组件细化q19)、[session-entry.md §5.1 W19 第 1、2 步的本组件细化（Q19）](session-entry.md#51-w19-第-12-步的本组件细化q19)、[downstream/design.md §5.2 W19（Q19）会话身份与未授权控制](../../downstream/design.md#52-w19q19会话身份与未授权控制)。
+细化：[control-plane.md §5.2 W19 第 3 步的本组件细化（Q19）](control-plane.md#52-w19-第-3-步的本组件细化q19)、[session-entry.md §5.1 W19 第 1、2 步的本组件细化（Q19）](session-entry.md#51-w19-第-12-步的本组件细化q19)、[downstream/endpoint/design.md §5.2 W19（Q19）会话身份与未授权控制](../../downstream/endpoint/design.md#52-w19q19会话身份与未授权控制)。
 
 #### W20（Q13+Q15+Q16）解释层取得声明、按账户与无账户来源读、推送待审与结果未知
 
@@ -1148,7 +1148,7 @@ sequenceDiagram
 
 **走通**（验收 #54；[read-model.md §6.3 验收](read-model.md#63-验收) #25；[one-shot-read.md §6.1 验收标准](one-shot-read.md#61-验收标准) #27；[subscription.md §6.2 验收标准](subscription.md#62-验收标准) #28、#29、#47、#48）。
 
-细化：[one-shot-read.md §5.2 W20 步 3 的一次性读细化（多 target 与 Pending）](one-shot-read.md#52-w20-步-3-的一次性读细化多-target-与-pending)、[read-model.md §5.2 取得声明（W20 的读模型细化）](read-model.md#52-取得声明w20-的读模型细化)、[subscription.md §5.3 W20 步 4 的持久订阅细化（多项订阅与配额）](subscription.md#53-w20-步-4-的持久订阅细化多项订阅与配额)、[downstream/design.md §5.3 W20（Q13+Q15+Q16）取得声明、按账户与无账户来源读、推送待审与结果未知](../../downstream/design.md#53-w20q13q15q16取得声明按账户与无账户来源读推送待审与结果未知)。
+细化：[one-shot-read.md §5.2 W20 步 3 的一次性读细化（多 target 与 Pending）](one-shot-read.md#52-w20-步-3-的一次性读细化多-target-与-pending)、[read-model.md §5.2 取得声明（W20 的读模型细化）](read-model.md#52-取得声明w20-的读模型细化)、[subscription.md §5.3 W20 步 4 的持久订阅细化（多项订阅与配额）](subscription.md#53-w20-步-4-的持久订阅细化多项订阅与配额)、[downstream/design.md §5.1 W20（Q13+Q15+Q16）取得声明、按账户与无账户来源读、推送待审与结果未知](../../downstream/design.md#51-w20q13q15q16取得声明按账户与无账户来源读推送待审与结果未知)。
 
 ### 5.2 崩溃矩阵（#1–#21）
 
@@ -1273,7 +1273,7 @@ sequenceDiagram
     - fixture 集成把同一持仓身份放到同一作用域的两条持仓流上：`positions` 对它标出跨流冲突、并列两条流各自的最近观察、不选其一、不相加；对该持仓的敞口检查与持仓在检查得 `Undecidable`；
     - 核心重启后第 5 步：对已建立会话的集成，每条不在配额池里的订单状态流与成交流的 `route` 全集含 `All`，即使没有任何订阅选中它们。
 - **#73 声明的两种解释**（[integration-session.md §3.6 声明的两种解释](integration-session.md#36-声明的两种解释-设计)、[read-model.md §3.5 健康面](read-model.md#35-健康面-设计)、[read-model.md §4.2 读模型集合](read-model.md#42-读模型集合)、[one-shot-read.md §4.2 核心↔解释层：read](one-shot-read.md#42-核心解释层readtargets-deadline--vectargetresult)）：来源在会话中收紧能力后，以 fixture 集成断开会话：（对应 Q2/Q16/Q32）
-    - `read_model(sources)` 仍给出最近声明，值里没有任何会话状态；`health` 给出该来源的会话已离开 `Established`（此例为 `Connecting`）；解释层合并二者，下游看到“来源离线”而非“不支持”（[downstream/translation.md §4.1 请求的解析：此刻能不能](../../downstream/translation.md#41-请求的解析此刻能不能)）；
+    - `read_model(sources)` 仍给出最近声明，值里没有任何会话状态；`health` 给出该来源的会话已离开 `Established`（此例为 `Connecting`）；解释层合并二者，下游看到“来源离线”而非“不支持”（[downstream/endpoint/translation.md §4.1 请求的解析：此刻能不能](../../downstream/endpoint/translation.md#41-请求的解析此刻能不能)）；
     - 离线期间写不过发出前门；一次性读得 `Unavailable{source_state}`，不得 `Unsupported`；回填任务不发调用、停在 `Backfilling`；
     - 会话重新建立、声明换成新版本：此后的发出前门、`route`、回填调用与一次性读按新会话的有效声明判定，`sources` 在同一位置之后给出新声明版本。
 - **#81 受控停止**（§4.7.4、§4.7.2；[program-host-element.md §4.4 卸载与替换](program-host-element.md#44-卸载与替换)；[io-shell.md §4.8 结果未知组（核心↔解释层）：放弃跟踪与重开](io-shell.md#48-结果未知组核心解释层放弃跟踪与重开)；[integration-session.md §4.8 控制动作 restart_integration 与 rotate_credential](integration-session.md#48-控制动作-restart_integration-与-rotate_credential)）：在各目标 OS 上以服务管理器与终端中断发出停止请求：（对应 Q20/Q21）
