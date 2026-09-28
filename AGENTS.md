@@ -2,12 +2,12 @@
 
 UTA（Unified Trading Agent）是 OpenAlice 的独立进程，位于上游（券商、交易所）与下游（Alice、CLI 使用者、外部客户程序）之间：经集成接触上游，持有观察流、意图与全部交易写入的记录；账户、订单、持仓的原值在上游，不在 UTA。下游只经解释层接触 UTA；Alice 是下游之一，与 UTA 生命周期互相独立。本仓库是 UTA 的设计与实现仓库。旧 UTA 实现留在 OpenAlice 仓库（`services/uta/`、`packages/uta-protocol/`、`src/services/uta-client/`），不具备正确性，只作为"既有机器事实"（[design/README.md §2.1](design/README.md#21-域事实既有机器事实利益相关者要求与假设) O 表）被引用。
 
-设计文档按 C4 层级组织，文件树镜像元素树，从 `design/README.md` 读起。`design/README.md` 是四个部分之上的景观层：全局原则、问题域与需求登记（F/O/S/H/P/A/B/C、Q、K）、四个部分的划分与关系、W1–W20 场景。四个部分各是一棵 C4 树：core 的系统上下文在 `design/core/design.md`，容器为核心进程（`design/core/core-process/design.md`，其组件各一份文档在同目录）与程序宿主进程（`design/core/program-host/design.md`）；核心两侧的清洗层各自成文：集成在 `design/integration/`，解释层在 `design/downstream/`；可选子系统在 `design/hpc-derivation/`。节号按文档内编号引用（例 `io-shell.md §4.2`）。代码在 Cargo 工作区（`crates/`、`xtask/`）；crate 划分、依赖方向、线程与任务模型、所有权与派生规则、线缆约定在根目录 `ARCHITECTURE.md`。
+设计文档按 C4 层级组织，文件树镜像元素树，从 `design/README.md` 读起。`design/README.md` 是四个部分之上的景观层：全局原则、问题域与需求登记（F/O/S/H/P/A/B/C、Q、K）、四个部分的划分与关系、W1–W20 场景。四个部分各是一棵 C4 树：core 的系统上下文在 `design/core/design.md`，容器为核心进程（`design/core/core-process/design.md`，其组件各一份文档在同目录）与程序宿主进程（`design/core/program-host/design.md`）；核心两侧的清洗层各自成文：集成在 `design/integration/`，解释层在 `design/downstream/`（`design.md` 是它的系统上下文与唯一容器，翻译与长连接端点两个组件各一份文档在同目录）；可选子系统在 `design/hpc-derivation/`。节号按文档内编号引用（例 `io-shell.md §4.2`）。代码在 Cargo 工作区（`crates/`、`xtask/`）；crate 划分、依赖方向、线程与任务模型、所有权与派生规则、线缆约定在根目录 `ARCHITECTURE.md`。
 
 ## 阶段与范围
 
 - UTA 正在**从零重写**为独立 Rust 二进制，已进入**预开发阶段**：按切片实现，每个切片只创建在该切片里有真实调用方与运行期路径的 crate，其余设计元素的落点登记在 `ARCHITECTURE.md` 第 2 节。改代码前先读 `ARCHITECTURE.md`；新增 crate 同时在 `xtask` 的依赖表里登记它的层。
-- 跨仓库契约是解释层的对外面：CLI 命令与双向长连接的消息协议（[design/README.md §4.2](design/README.md#42-部分之间的关系)；[解释层设计 §4.6](design/downstream/design.md#46-身份与发布物)）。它们的 schema 与 CLI 由本仓库拥有并随 release 发布，OpenAlice 从 release artifact 消费。核心↔解释层的 JSON-RPC IDL 只在本仓库内部；核心↔集成的 IDL 随 release 发布给集成作者。两者每个操作的规格在实现它的核心组件文档里，总表见 [核心进程 §4.2](design/core/core-process/design.md#42-对外接口总表)。
+- 跨仓库契约是解释层的对外面：CLI 命令与双向长连接的消息协议（[design/README.md §4.2](design/README.md#42-部分之间的关系)；[解释层设计 §4.4](design/downstream/design.md#44-身份与发布物)）。它们的 schema 与 CLI 由本仓库拥有并随 release 发布，OpenAlice 从 release artifact 消费。核心↔解释层的 JSON-RPC IDL 只在本仓库内部；核心↔集成的 IDL 随 release 发布给集成作者。两者每个操作的规格在实现它的核心组件文档里，总表见 [核心进程 §4.2](design/core/core-process/design.md#42-对外接口总表)。
 - **hpc 不在当前阶段范围内**：`design/hpc-derivation/` 是前期补充设计，当前阶段不阅读、不验证、不据它调整核心。核心完备性审查只看 `design/core/`，只需保证 [program-host-element.md §4.7](design/core/core-process/program-host-element.md#47-核心可选行情派生计算子系统) 的 `Pooled` 接口在核心侧自包含（没有子系统时核心完整可运行）；核心设计里指向 `hpc-derivation/design.md` 章节的引用只是指针，不作为核心结论的依据，图也不画它。
 
 ## 设计与实现的分界
