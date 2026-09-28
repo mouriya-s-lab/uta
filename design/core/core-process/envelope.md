@@ -238,7 +238,7 @@ flowchart LR
 
 1. 一条推送缺 `received_at`。
 2. 解析入口拒绝为畸形记录：不 append，没有位置，不触发处理器，也不是 gap。
-3. 集成的缺陷由一致性测试暴露（[integration/design.md §5.2 一致性测试](../../integration/design.md#52-一致性测试)）；核心与其他流不受影响。
+3. 集成的缺陷由一致性测试暴露（[integration-process/design.md §6.1 一致性测试](../../integration/integration-process/design.md#61-一致性测试)）；核心与其他流不受影响。
 4. 卡点：无。
 
 **3. 可选字段缺失**
@@ -267,4 +267,4 @@ flowchart LR
 
 - 新 venue 字段只注册处理器、不改锚点：验收 #5（provider 正交性），[integration-session.md §6.3 验收标准](integration-session.md#63-验收标准)。
 - 枚举映射表中不存在“其他 → rejected”、未列举值以 `Unmapped(raw)` 保留：验收 #12（外部变更与状态保真），[core-process/design.md §6.3 验收标准](design.md#63-验收标准)。
-- 上游只在集成内被消费、载荷按契约 schema 写成：验收 #22，[integration/design.md §6.2 验收](../../integration/design.md#62-验收)。
+- 上游只在集成内被消费、载荷按契约 schema 写成：验收 #22，[integration-process/design.md §6.2 验收](../../integration/integration-process/design.md#62-验收)。

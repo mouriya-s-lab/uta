@@ -52,7 +52,7 @@ flowchart TB
 | `uta-api` | 核心↔解释层 IDL（各操作的规格见 [核心进程 §4.2 对外接口总表](design/core/core-process/design.md#42-对外接口总表)），只在本仓库内部使用 | 值层 |
 | `uta-cli` | 解释层（`design/downstream/design.md`） | 依赖 `uta-api`，不依赖核心内部 crate |
 | `uta-host` | [程序宿主进程](design/core/program-host/design.md#程序宿主进程)：值树解释器、派生 DAG 的增量引擎（[§3.2 解释①：派生](design/core/program-host/design.md#32-解释①派生)）、决策解释与 `Checkpoint` 序列化（[§4.1 组件](design/core/program-host/design.md#41-组件)） | 外部进程 |
-| `uta-mapping`、`uta-conformance` | 记录映射解释器、一致性测试与 fixture 上游（[集成部分 §4.3 发布物](design/integration/design.md#43-发布物)、[§5.2 一致性测试](design/integration/design.md#52-一致性测试)） | 随 release 发布 |
+| `uta-mapping`、`uta-conformance` | 记录映射解释器、一致性测试与 fixture 上游（[集成 §4.2 发布物](design/integration/design.md#42-发布物)、[集成进程 §4.4 记录映射](design/integration/integration-process/design.md#44-记录映射)、[集成进程 §6.1 一致性测试](design/integration/integration-process/design.md#61-一致性测试)） | 随 release 发布 |
 
 [核心进程 §4.3.1 uses 图](design/core/core-process/design.md#431-uses-图)里有三对元素互相使用：持久订阅↔集成会话、持久订阅↔程序宿主元素、持久订阅↔投递调度。crate 之间不能循环依赖。所以规定：下层 crate 定义回调 trait，上层 crate 实现它。例如集成会话编排握手事务时，要请持久订阅写 `None{epoch}`，这个 trait 就定义在 `uta-session`，由 `uta-observe` 实现。每对元素里，两个方向经过的仍然只是公共值（[核心进程 §4.3.2 三对互用](design/core/core-process/design.md#432-三对互用)）。
 
