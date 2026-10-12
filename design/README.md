@@ -18,9 +18,9 @@ UTA 由四个部分组成，每个部分是一棵独立的 C4 树：
 | 部分 | 它是什么 | L1 文档 |
 |---|---|---|
 | core | 核心进程与它拉起的程序宿主进程：记录、类型、规则链、写边界；抽象只在这里 | [core/design.md](core/design.md) |
-| 集成 | 每个上游一个独立进程，把上游协议清洗成契约值；上游的唯一消费点 | [integration/design.md](integration/design.md) |
-| 解释层 | 把 core 的操作、记录与状态清洗成下游能懂的一次性命令与双向长连接；不持有状态 | [downstream/design.md](downstream/design.md) |
-| 行情派生计算子系统（可选） | 为 `Pooled` 组合子物化段视图、运行原生 op 的独立进程；没有它 core 完整可运行 | [hpc-derivation/design.md](hpc-derivation/design.md)（当前阶段不在范围内，见 `AGENTS.md`） |
+| 集成 | 每个上游一个独立进程，把上游协议清洗成契约值；上游的唯一消费点 | [drafts/integration/design.md](drafts/integration/design.md) |
+| 解释层 | 把 core 的操作、记录与状态清洗成下游能懂的一次性命令与双向长连接；不持有状态 | [drafts/downstream/design.md](drafts/downstream/design.md) |
+| 行情派生计算子系统（可选） | 为 `Pooled` 组合子物化段视图、运行原生 op 的独立进程；没有它 core 完整可运行 | [drafts/hpc-derivation/design.md](drafts/hpc-derivation/design.md)（当前阶段不在范围内，见 `AGENTS.md`） |
 
 划分的理由与部分之间的关系见 §4。
 
@@ -43,17 +43,17 @@ UTA 由四个部分组成，每个部分是一棵独立的 C4 树：
 设计层面明确不做：
 
 - 不存在 `UnifiedOrder`/`Account` 权威对象；core 不枚举 venue，不引入 venue 词汇。写侧基本类型“订单”只含核心代数实际读取的字段（§1.3）。
-- 不维护成交账本与加权成本（旧 UTA 的成本基础）：它们与由成交拼成的成交历史视图一样，是下游或程序对去重后成交的派生，不是 core 的读模型；core 只保证同一笔执行只计一次，并说明何时能称完整（[read-model.md §3.2 成交的计数身份](core/core-process/read-model.md#32-成交的计数身份-设计)）。
-- core 与集成都不保存上游状态的拷贝去冒充原值：没有“同步”操作，读与取证的回答来自本次对上游的询问（§1.1、[integration-session.md §4.4 集成义务清单](core/core-process/integration-session.md#44-集成义务清单)）。
+- 不维护成交账本与加权成本（旧 UTA 的成本基础）：它们与由成交拼成的成交历史视图一样，是下游或程序对去重后成交的派生，不是 core 的读模型；core 只保证同一笔执行只计一次，并说明何时能称完整（[trade-observation.md §3.1 成交的计数身份](core/read/trade-observation.md#31-成交的计数身份-设计)）。
+- core 与集成都不保存上游状态的拷贝去冒充原值：没有“同步”操作，读与取证的回答来自本次对上游的询问（§1.1、[integration.md §4.4 集成义务清单](core/boundary/integration.md#44-集成义务清单)）。
 - 下游不直接对接核心契约；解释层的对外面不出现核心概念，解释层不持有状态（§4.1）。
 - UTA 不含业务：策略、风控阈值、下单组合方式在程序、规则文件或下游代码里（§1.3）。
 - 不做类型级 capability；不把运行期未知冒充静态保证。
 - 写不批处理、不去重、不由 replay 重发。
 - 不假设 venue 时间单调；不承诺跨源全序。
 - 不在派生 DAG 里放绑定不可逆外部行为的执行状态。
-- 不承接既有行为 A50（catalog 刷新）与 A51（ephemeral purge）：前者是 Alice 侧配置文件的内容维护（各文件的写者是 Alice，core 只读，[core-process/design.md §4.6 统一路径文件](core/core-process/design.md#46-统一路径文件)）；后者依赖的 ephemeral 实例概念，在单实例状态根（H10）下不存在。
-- 不提供账户快照（A36–A38 读取、捕获、持久化，A49 调度）：账户快照是账户、持仓、待决订单的组合视图，属业务，在下游业务应用里，其数据经解释层取得。core 自己的快照只加速重启重建，不对外读（[storage.md §2.4 快照是近处副本](core/core-process/storage.md#24-快照是近处副本-设计)）。
-- 不保留多意图的整体审批（旧 commit 把若干暂存操作放在一个 hash 下一并批准或拒绝，A26–A28）：审批的单位是一张单据的一个版本（[ticket.md](core/core-process/ticket.md)）；下游的“全部批准”是 N 次独立的决定，逐项有结果，没有原子性；多个意图的执行本来也从不原子。
+- 不承接既有行为 A50（catalog 刷新）与 A51（ephemeral purge）：前者是 Alice 侧配置文件的内容维护（各文件的写者是 Alice，core 只读，[files.md 统一路径文件](core/boundary/files.md)）；后者依赖的 ephemeral 实例概念，在单实例状态根（H10）下不存在。
+- 不提供账户快照（A36–A38 读取、捕获、持久化，A49 调度）：账户快照是账户、持仓、待决订单的组合视图，属业务，在下游业务应用里，其数据经解释层取得。core 自己的快照只加速重启重建，不对外读（[storage.md §2.4 快照是近处副本](core/base/storage.md#24-快照是近处副本-设计)）。
+- 不保留多意图的整体审批（旧 commit 把若干暂存操作放在一个 hash 下一并批准或拒绝，A26–A28）：审批的单位是一张单据的一个版本（[ticket.md](core/read-write/ticket.md)）；下游的“全部批准”是 N 次独立的决定，逐项有结果，没有原子性；多个意图的执行本来也从不原子。
 - 不承接模拟器控制（A09、A39–A47：设标记价、推 tick、手动成交 / 撤单、注入出入金与外部成交）：它们是 fake 上游自己的控制面，不是 UTA 的契约（core 对集成与解释层的操作集里没有改上游状态的控制操作）。fake 上游的变化经普通观察进入 UTA：行情流、带归因的成交、外部变更（P11）。
 - 不保留旧 commit 的自由文本 `message`（A21/A24）：单据不记起单理由与批准理由，“为什么下这一单”由下游按它拿到的请求引用自己保存；UTA 只给出退回、否决与规则否决的原因。
 
@@ -71,7 +71,7 @@ UTA 由四个部分组成，每个部分是一棵独立的 C4 树：
 
 **状态词。** `已定`：走查卡点归零、替代方案与风险写全；`评审中`：走查登记了未关闭的卡点，文档写明卡点与关闭它的事件。
 
-**跨文档引用。** 链接到文件，正文写节号，例如“[core-process/design.md §3.12 组合子值树与五个 fold](core/core-process/design.md#312-组合子值树与五个-fold)”。
+**跨文档引用。** 链接到文件，正文写节号，例如“[value-tree.md §3.1 组合子值树与五个 fold](core/base/value-tree.md#31-组合子值树与五个-fold)”。
 
 **图。** 图一律是内嵌在所画元素文档里的 Mermaid，只画本层元素与直接相邻的外部元素。图只画正文已定的内容；图上出现正文没有的东西即图错。
 
@@ -104,8 +104,8 @@ UTA 经手的每一个值——订单、持仓、余额、行情——权威来�
 
 UTA 提供的是记录、类型、规则链与写边界；业务在二次开发时用它们组装，不在 UTA 里。[设计]
 
-- **业务**：策略与信号、风控与审批规则的具体内容（阈值、谁来批）、下单的组合方式（仓位怎么算、分几笔、撤了再下的时机）、指标、告警、组合视图。它们是程序、规则文件（[decision-chain.md §4.9 规则文件的内容与合法性](core/core-process/decision-chain.md#49-规则文件的内容与合法性)）或下游自己的代码。
-- **写侧的基本类型**：写意图要有类型，信封与规则链才有可说的概念；一个类型都不给，锚点、守卫、审批与 lane 都无从成立。订单（交易协议，[ticket.md §4.5 交易协议：操作种类、目标、可执行性、检查目录](core/core-process/ticket.md#45-交易协议操作种类目标可执行性检查目录-交易协议)）是预置的写侧基本类型；需要时可以再加，走意图类型的扩展轴（新意图类型 = 新检查集，[integration-session.md §4.3.4 扩展与演进](core/core-process/integration-session.md#434-扩展与演进)），核心代数不变。基本类型只含核心代数实际读取的字段，不是上游订单记录的拷贝（§1.5）；没有处理器读的下单参数（如订单类型、time-in-force、来源专有选项）是意图的载荷，core 不读，原样交给集成（[envelope.md §2.2 三部分](core/core-process/envelope.md#22-三部分-设计)）。
+- **业务**：策略与信号、风控与审批规则的具体内容（阈值、谁来批）、下单的组合方式（仓位怎么算、分几笔、撤了再下的时机）、指标、告警、组合视图。它们是程序、规则文件（[decision-chain.md §4.9 规则文件的内容与合法性](core/read-write/decision-chain.md#49-规则文件的内容与合法性)）或下游自己的代码。
+- **写侧的基本类型**：写意图要有类型，信封与规则链才有可说的概念；一个类型都不给，锚点、守卫、审批与 lane 都无从成立。订单（交易协议，[trade-protocol.md §4.1 交易协议：操作种类、目标、可执行性、检查目录](core/read-write/trade-protocol.md#41-交易协议操作种类目标可执行性检查目录-交易协议)）是预置的写侧基本类型；需要时可以再加，走意图类型的扩展轴（新意图类型 = 新检查集，[integration.md §4.3.4 扩展与演进](core/boundary/integration.md#434-扩展与演进)），核心代数不变。基本类型只含核心代数实际读取的字段，不是上游订单记录的拷贝（§1.5）；没有处理器读的下单参数（如订单类型、time-in-force、来源专有选项）是意图的载荷，core 不读，原样交给集成（[envelope.md §2.2 三部分](core/boundary/envelope.md#22-三部分-设计)）。
   - 不选：写侧不预置任何类型、只留纯泛型协议：信封里没有任何概念，锚点、守卫、审批与 lane 都无从成立，规则链写不出来；按上游订单记录列全字段：即 §1.1 的大对象。
 - **读侧是反向代理**：持仓、余额、成交、行情等观察按契约载荷 schema 直通，载荷是什么类型不影响核心语义。公共 schema 服务于下游，core 不依赖它。
 
@@ -129,7 +129,7 @@ flowchart LR
 
 订单的状态、持仓、审批流、策略行为都是这四步的组合结果，不是核心实体。UTA 中不存在任何同时承载 provider 字段与业务状态的对象：那样的对象就是上游原值的拷贝（§1.1）。写侧基本类型“订单”是意图的类型，只含核心代数实际读取的字段，不是这样的对象。[证据：fp-00 §1 五十三案例无一以大对象为中心；fp-02 命题 12]
 
-四步都在 core 里，机制之间只通过位置、键与日志记录关联；四步各由 core 的哪些元素承担，见 [core/design.md](core/design.md) 与它分解出的核心进程文档。
+四步都在 core 里，机制之间只通过位置、键与日志记录关联；四步各由 core 的哪些元素承担，见 [core/design.md](core/design.md) 与 [core/design.md §4.4 模块地图](core/design.md#44-模块地图) 所列的文档。
 
 四步落在四个部分上的样子：
 
@@ -149,13 +149,13 @@ flowchart LR
   IL <--> DOWN
 ```
 
-四步口号是开篇导览与场景的骨架（§5），不是文档主线。core 的主线是两个类型宇宙与它们之间唯一的边（[core-process/design.md §3.4 两个类型宇宙与唯一边](core/core-process/design.md#34-两个类型宇宙与唯一边)）。
+四步口号是开篇导览与场景的骨架（§5），不是文档主线。core 的主线是两个类型宇宙与它们之间唯一的边（[core/design.md §3.4 两个类型宇宙与唯一边](core/design.md#34-两个类型宇宙与唯一边)）。
 
 ### 1.6 跨部分的两对术语
 
 | 词 / 概念对 | 甲 | 乙 | 区分依据 |
 |---|---|---|---|
-| 解释层 / 解释器 | 解释层：core 之外把 core 清洗成对外接口的部分，面向下游 | 解释器：core 内对值树的解释，包括五个 fold、程序的两种解释与宿主 | 前者是接口清洗，不含抽象；后者属设计中心（[core-process/design.md §3.12 组合子值树与五个 fold](core/core-process/design.md#312-组合子值树与五个-fold)） |
+| 解释层 / 解释器 | 解释层：core 之外把 core 清洗成对外接口的部分，面向下游 | 解释器：core 内对值树的解释，包括五个 fold、程序的两种解释与宿主 | 前者是接口清洗，不含抽象；后者属设计中心（[value-tree.md §3.1 组合子值树与五个 fold](core/base/value-tree.md#31-组合子值树与五个-fold)） |
 | 两种“下游” | core 内的“交给下游”：解释载荷的程序、钩子与消费方 | core 之外的下游：Alice、CLI 使用者、外部客户程序，只经解释层接触 core | 前者说的是载荷的解释权，后者说的是接触 core 的途径 |
 
 ## 2 问题域
@@ -213,7 +213,7 @@ flowchart LR
 |---|---|---|---|
 |H1|对同一外部效果的重复投放不可接受（资金后果）。|域常识；S8 对效应关联可审计的要求|维护者明确接受“宁重复不漏单”的账户类别（证伪 #5）|
 |H2|程序（AI 写的决策代码）不可信：会死循环、吃内存、超产意图、输出非法。|维护者“ai写不好scala”；S8 对安全关联的要求|—（威胁模型，不证伪）|
-|H3|凭据封存文件由 Alice 写入 `OPENALICE_HOME` 统一路径，core 读取并传给对应集成进程；程序与消费方只见账户身份。|共享配置文件契约（[core-process/design.md §4.6 统一路径文件](core/core-process/design.md#46-统一路径文件)）；`src/core/config.ts:704-787` 封存；`alice-consumers.md:213`|维护者把 owner 移到 UTA 或 OS secret broker|
+|H3|凭据封存文件由 Alice 写入 `OPENALICE_HOME` 统一路径，core 读取并传给对应集成进程；程序与消费方只见账户身份。|共享配置文件契约（[files.md 统一路径文件](core/boundary/files.md)）；`src/core/config.ts:704-787` 封存；`alice-consumers.md:213`|维护者把 owner 移到 UTA 或 OS secret broker|
 |H4|同一 (账户, 子账户) 上的写需要一个全序；不同账户可并行。|F1 + F8：venue 侧顺序只能由我们发出的顺序决定|某 venue 文档保证并发写的确定性排序（未见；证伪 #6）|
 |H5|订阅的 owner 是 UTA 而非消费方：消费方断开后订阅仍有业务价值（程序在跑）。|S1/S3：程序在 UTA 内运行|维护者决定程序随消费方连接存亡（证伪 #7）|
 |H6|决定有时效，过期未决 = 否决，不做补偿。|connector `ttlMs`（`delivery-manager.ts:271`）、Telegram 过期（`telegram-uta.ts:196-199`）是现有实例|维护者要求人类决定无过期，或过期后自动执行|
@@ -224,7 +224,7 @@ flowchart LR
 
 ### 2.2 机器与域共享的现象
 
-这里的“机器”是 UTA 的四个部分整体。观察引用 = `LogPosition`：`StreamId = (source, stream, epoch)`，`LogPosition = (StreamId, Seq)`（[core-process/design.md §3.1 流、位置与三种进度](core/core-process/design.md#31-流位置与三种进度)）。位置集写作 `Set<LogPosition>`，同构于 `Map<StreamId, Seq>`。
+这里的“机器”是 UTA 的四个部分整体。观察引用 = `LogPosition`：`StreamId = (source, stream, epoch)`，`LogPosition = (StreamId, Seq)`（[base/design.md §3.1 流、位置与三种进度](core/base/design.md#31-流位置与三种进度)）。位置集写作 `Set<LogPosition>`，同构于 `Map<StreamId, Seq>`。
 
 每个现象是一类带名字、方向和语义字段的记录；字段写语义而不是实现类型。
 
@@ -236,7 +236,7 @@ flowchart LR
 |P1|能力声明|集成→机；机→解释层（声明部分）|见表下|C2、C8、A02、A18、A19、Q6、Q13、Q15、Q16|
 |P2|观察|集成→机；程序→机（派生）|见表下|B1–B5、A08、A11–A17、Q1–Q3、Q16、Q18|
 |P3|gap / 控制|机→程序/消费方|见表下|C6、Q11、Q12、Q14、Q28、Q31|
-|P4|订阅需求 / 订阅状态|消费方/程序→机；机→集成|owner、选择器（观察流：一组来源 × 流 × 主体集的项，可跨流跨来源，每项是供给项（要上游推送）或只投递项（只看已有的记录）；或执行事实：来源 × 作用域，含此后出现的 lane）、epoch、状态（待接纳 / 活 / 被拒 / 挂起，逐项给出、整体由逐项派生；挂起带原因；上游拒绝推送的主体逐主体列出）、拒绝原因、消费游标（该订阅每条选中流已确认的最后 `LogPosition`；确认 = 消费方已处理，未确认区间可重复可见，[subscription.md §3.2 cursor 与确认](core/core-process/subscription.md#32-cursor-与确认)）；机→集成的一半是每条流被路由的主体全集及上游的确认|B1、C5、Q9、Q13、Q14、Q23、Q31|
+|P4|订阅需求 / 订阅状态|消费方/程序→机；机→集成|owner、选择器（观察流：一组来源 × 流 × 主体集的项，可跨流跨来源，每项是供给项（要上游推送）或只投递项（只看已有的记录）；或执行事实：来源 × 作用域，含此后出现的 lane）、epoch、状态（待接纳 / 活 / 被拒 / 挂起，逐项给出、整体由逐项派生；挂起带原因；上游拒绝推送的主体逐主体列出）、拒绝原因、消费游标（该订阅每条选中流已确认的最后 `LogPosition`；确认 = 消费方已处理，未确认区间可重复可见，[consumption.md §3.2 cursor 与确认](core/read/consumption.md#32-cursor-与确认)）；机→集成的一半是每条流被路由的主体全集及上游的确认|B1、C5、Q9、Q13、Q14、Q23、Q31|
 |P5|回填|机→集成；集成→机|窗口（起点可为上游历史的真实起点）、覆盖边界（本次取得的连续前缀）、结果、与实时流的边界（`live_from`，由 readiness 给出）、回填进度|A19、Q14|
 |P6|意图|程序/消费方→机|意图身份、principal、目标（账户、子账户、instrument；撤单 / 改单另有订单身份，平仓另有持仓身份）、操作种类（下单 / 改单 / 撤单 / 平仓，交易协议的封闭集合）、参数（按目标来源声明的意图参数 schema）、依据（`Set<LogPosition>`）、生产者（程序制品 hash + 版本 + 调用身份，或消费方会话）、过期|B7、C1、C3、C10、A29–A35、Q5、Q7、Q8、Q17、Q19、Q25|
 |P7|决定|决策者→机|所指意图、principal、裁决（批准 / 否决 / 过期 / 规则否决）、依据、对待决集合版本的期望；否决带原因，规则否决带 `Rejection`，过期带到期的 `deadline`，批准不带原因（“依据什么”由依据与绑定版本回答）|S8、C3、A26–A28、Q7、Q9、Q10、Q19|
@@ -264,14 +264,14 @@ flowchart LR
 - 来源：账户、公共 feed、或程序。程序输出的指标 / alert 是派生观察，与外部观察同一形状。
 - 主体：instrument / 账户 / 子账户 / feed。
 - 种类：quote / book / bar / clock / 余额 / 持仓 / 订单状态 / 成交 / 目录 / 连接状态 / 健康 / 汇率 / 派生。
-- venue 事件时间（可无）、venue 序号（可无）、venue 续传游标（可无）、集成在本机的收到时间（`received_at`，由集成填写，只在集成交来的观察记录上：推送、回填与一次性读作答的记录；同一流上核心自己写的控制记录与程序派生的观察不带它，只与其他记录一样有核心盖的记录时间与位置）、Seq、原始负载（订单状态 / 成交必有，其余种类可无，[envelope.md §2.2 三部分](core/core-process/envelope.md#22-三部分-设计)）、质量标记。
+- venue 事件时间（可无）、venue 序号（可无）、venue 续传游标（可无）、集成在本机的收到时间（`received_at`，由集成填写，只在集成交来的观察记录上：推送、回填与一次性读作答的记录；同一流上核心自己写的控制记录与程序派生的观察不带它，只与其他记录一样有核心盖的记录时间与位置）、Seq、原始负载（订单状态 / 成交必有，其余种类可无，[envelope.md §2.2 三部分](core/boundary/envelope.md#22-三部分-设计)）、质量标记。
 - 订单状态 / 成交观察带归因（某尝试 / 外部 / 未定）。
-- 成交观察带执行身份（在来源 × 作用域内唯一，跨渠道不变）与可选的修订号；数量与价格是本笔执行的量；订单状态带该订单的累计量（[read-model.md §3.2 成交的计数身份](core/core-process/read-model.md#32-成交的计数身份-设计)，F12）。
+- 成交观察带执行身份（在来源 × 作用域内唯一，跨渠道不变）与可选的修订号；数量与价格是本笔执行的量；订单状态带该订单的累计量（[trade-observation.md §3.1 成交的计数身份](core/read/trade-observation.md#31-成交的计数身份-设计)，F12）。
 
-**P3 gap / 控制的三类**（P3 分类的是连续性与损失现象；渠道失败 `Gap{origin: Channel}` 是一次读调用的结果，不是 P3 现象，[one-shot-read.md §3.7 术语：读的“拿不到”](core/core-process/one-shot-read.md#37-术语读的拿不到)）：
+**P3 gap / 控制的三类**（P3 分类的是连续性与损失现象；渠道失败 `Gap{origin: Channel}` 是一次读调用的结果，不是 P3 现象，[one-shot-read.md §3.7 术语：读的“拿不到”](core/read/one-shot-read.md#37-术语读的拿不到)）：
 
-- **来源 gap**：某范围断代（新 epoch 首条记录，含前一范围与其最后 Seq；该流的第一个 epoch 无前驱），或当前 epoch 内回填未覆盖的区间。原因 ∈ {start, disconnect, quota, ingress_overflow, credential_rotated, schema_change, backfill_incomplete, program_upgrade}；各原因的写者与它是否开新 epoch 见 [core-process/design.md §3.2 gap 的三种来源](core/core-process/design.md#32-gap-的三种来源)。
-- **投递 gap**：某订阅对某范围的损失，是订阅的状态，不是流上的记录（流本身不缺这些记录）。原因 ∈ {slow_consumer, compacted, conflated}；它何时产生、何时结束见 [subscription.md §3.3 投递缺口 Gap{origin: Delivery}](core/core-process/subscription.md#33-投递缺口-gaporigin-delivery)，哪种消费方式会因慢而产生它见 [delivery.md §3.1 三种消费方式（投递侧）](core/core-process/delivery.md#31-三种消费方式投递侧)。
+- **来源 gap**：某范围断代（新 epoch 首条记录，含前一范围与其最后 Seq；该流的第一个 epoch 无前驱），或当前 epoch 内回填未覆盖的区间。原因 ∈ {start, disconnect, quota, ingress_overflow, credential_rotated, schema_change, backfill_incomplete, program_upgrade}；各原因的写者与它是否开新 epoch 见 [read/design.md §3.1 gap 的三种来源](core/read/design.md#31-gap-的三种来源)。
+- **投递 gap**：某订阅对某范围的损失，是订阅的状态，不是流上的记录（流本身不缺这些记录）。原因 ∈ {slow_consumer, compacted, conflated}；它何时产生、何时结束见 [consumption.md §3.3 投递缺口 Gap{origin: Delivery}](core/read/consumption.md#33-投递缺口-gaporigin-delivery)，哪种消费方式会因慢而产生它见 [consumption.md §3.6 三种消费方式（投递侧）](core/read/consumption.md#36-三种消费方式投递侧)。
 - **状态通知**：readiness 与回填进度的变化（等待实时 / 实时；补齐中 / 已闭合 / 已到达而衔接未证明 / 未能补齐）、订阅挂起 / 恢复（附挂起原因）。它不是损失，不需确认，由健康观察或订阅状态派生。
 
 ### 2.3 需求
@@ -396,7 +396,7 @@ A 表按调查报告记录的真实入口（路由、SDK 方法、UI/CLI 调用�
 未证明任何 Rust 不可行点；Rust 偏好未触发语言例外。
 
 - tonic 0.14.6 在 Windows 返回 `uds connections are not allowed on windows`（`investigation/rust-feasibility.md:165`），因此 Windows 传输是 OS 选择问题（[core/design.md §4.3](core/design.md#43-部署与信任)）。
-- Wasmtime 48.0.2 没有 live `Store` 快照 / 恢复 API；Wizer 只快照初始化，`Module::serialize` 只保存编译产物（`investigation/rust-feasibility.md:133-139`）。这是 Wasm 不选为初始程序宿主的依据之一；宿主 = 受监督子进程（[program-host/design.md §6.1 替代方案](core/program-host/design.md#61-替代方案)）。
+- Wasmtime 48.0.2 没有 live `Store` 快照 / 恢复 API；Wizer 只快照初始化，`Module::serialize` 只保存编译产物（`investigation/rust-feasibility.md:133-139`）。这是 Wasm 不选为初始程序宿主的依据之一；宿主 = 受监督子进程（[program-host-process.md §6.1 替代方案](core/runtime/program-host-process.md#61-替代方案)）。
 - fuel 是确定性指令预算，epoch 不确定，两者都管不住阻塞的 host 调用；Component Model async ABI "very incomplete"；tokio `broadcast` 会丢弃落后者；okaywal 自述不宜生产；gRPC 单流有序、流间独立；`rust_decimal` scale ≤ 28（同报告 `:117-119,131,189,215,300`）。
 - 吞吐、延迟、崩溃注入文件系统矩阵和 Windows 传输实测尚未完成。
 
@@ -404,7 +404,7 @@ A 表按调查报告记录的真实入口（路由、SDK 方法、UI/CLI 调用�
 
 `existing-capabilities.md:254-277` 的 20 条源码发现已经并入 O11。其中所有权、数量、子账户、unknown、投放后落盘、成交字段、状态映射、guard 和重启状态问题，分别形成 C9–C14 与 Q8、Q19、Q20。它们是既有实现证据，不是新实现已满足的保证。
 
-FX 回退链和模拟器属于既有读来源/集成行为。新边界中的能力声明、操作集合和错误映射由核心↔集成契约表达（[integration-session.md §4.3 核心↔集成契约的会话部分](core/core-process/integration-session.md#43-核心集成契约的会话部分)），不从旧实现路径推出新的核心结构。
+FX 回退链和模拟器属于既有读来源/集成行为。新边界中的能力声明、操作集合和错误映射由核心↔集成契约表达（[integration.md §4.3 核心↔集成契约的会话部分](core/boundary/integration.md#43-核心集成契约的会话部分)），不从旧实现路径推出新的核心结构。
 
 #### 2.4.4 Alice 侧消费需要
 
@@ -417,8 +417,8 @@ SDK 缺口（`getCapabilities` 空、`getPendingOrderIds` 空、historical 可�
 - Venue 官方 URL 尚未逐条重开；表格中保留的能力、重复语义和 10 分钟缓存仍需按 `venue-capabilities.md:167` 重新核实。
 - 旧 UTA 服务端真实路由、运行时错误体、实际状态转移、超时和 retry 语义未从运行环境核实；SDK 路径是调用方证据，不是服务端实现证据。
 - `/api/simulator/*`（A39）到模拟器注入方法（A40–A46）的路由级对应关系未从调查报告取得；报告只记录了路由族与方法各自的存在。
-- 质量场景的容量数字（Q22、Q24、Q30）来自沟通场景与内部预算假设，不是产品 SLO；core 侧以验收 #19（[core-process/design.md §6.3 验收标准](core/core-process/design.md#63-验收标准)）验收，子系统侧以 `hpc-derivation/design.md` §10 #7/#10 验收。
-- 程序宿主进程的 CPU / 内存预算由 OS 按进程限制（POSIX rlimit、Windows job object）并在超限时终止进程：`investigation/rust-feasibility.md` §9 只给出子进程的等待、终止与进程组 / job object 管理，没有给出三个目标 OS 上的配额 API、预算粒度与超限行为，也未在三 OS 上实测（同报告 “Unknowns” 第 7 条）。设计把它作为 [设计] 前提沿用，由证伪 #3 与验收 #15 检验（[program-host/design.md §1.2 本容器直接面对的域](core/program-host/design.md#12-本容器直接面对的域)）。
+- 质量场景的容量数字（Q22、Q24、Q30）来自沟通场景与内部预算假设，不是产品 SLO；core 侧以验收 #19（[runtime/design.md §6.3 验收标准](core/runtime/design.md#63-验收标准)）验收，子系统侧以 `drafts/hpc-derivation/design.md` §10 #7/#10 验收。
+- 程序宿主进程的 CPU / 内存预算由 OS 按进程限制（POSIX rlimit、Windows job object）并在超限时终止进程：`investigation/rust-feasibility.md` §9 只给出子进程的等待、终止与进程组 / job object 管理，没有给出三个目标 OS 上的配额 API、预算粒度与超限行为，也未在三 OS 上实测（同报告 “Unknowns” 第 7 条）。设计把它作为 [设计] 前提沿用，由证伪 #3 与验收 #15 检验（[program-host-process.md §1.2 本容器直接面对的域](core/runtime/program-host-process.md#12-本容器直接面对的域)）。
 
 ## 3 驱动
 
@@ -427,7 +427,7 @@ SDK 缺口（`getCapabilities` 空、`getPendingOrderIds` 空、historical 可�
 每条场景有六要素：stimulus source（刺激源）、stimulus（刺激）、artifact（构件）、environment（环境）、response（响应）、response measure（响应度量）。
 
 - **优先级** 按业务重要性 × 架构风险。高：资金安全、身份/权限或数据连续性直接受影响。中：主要消费能力或恢复能力。低：可隔离的附加能力。
-- **没有一手阈值时**，响应度量写可观察项，由拥有该决定的文档里的验收项或子系统验收标准（`hpc-derivation/design.md` §10）实测。
+- **没有一手阈值时**，响应度量写可观察项，由拥有该决定的文档里的验收项或子系统验收标准（`drafts/hpc-derivation/design.md` §10）实测。
 - 每条场景分给哪些部分见 §4.3；场景的走查见 §5。
 
 |ID|场景|stimulus source|stimulus|artifact|environment|response|response measure|来源|优先级|
@@ -455,15 +455,15 @@ SDK 缺口（`getCapabilities` 空、`getPendingOrderIds` 空、historical 可�
 |Q21|格式升级|新旧版本核心|N+1 读 N；反向读取；迁移中断电|P15 格式版本与迁移|持久文件在升级边界|支持的升级后等价；高版本拒绝；断电后二者之一完整，不出现第三态|退出码或记录说明版本结果；无部分迁移|O9；C14|中|
 |Q22|秒级 K 线与大量指标|维护者需求|实时 K 线订阅、秒级清洗、每 instrument 大量增量指标、多核分发|P2、P4、P12|行情持续到达，程序声明输入|允许增量派生和分发，不把每 bar 全量重跑写成前提|处理不落后于 bar 周期：秒级 bar 的清洗 + 增量指标在下一根到达前完成，积压不增长；分发不阻塞清洗 [推断：B1"秒级"]；负载形状取 Q24 沟通场景规模，验收 #19|B1|中|
 |Q23|多渠道多资产判断|维护者需求|同时订阅多渠道、多 instrument；程序以全部渠道最新状态判断|P2、P4、P12|来源时钟不同，消费声明组合方式|按输入声明提供跨 instrument 观察；不隐含全局时间对齐|程序输入声明包含来源与消费方式；跨源无隐式对齐|B2、B4、B5|中|
-|Q24|完整窗口原生计算|维护者需求|约 1500 条流选 15 条，覆盖 24 h 逐秒数据，指标阈值后唤醒 AI|P2、P5、P12 与可选 Pooled|沟通场景，非容量指标|能表达完整窗口与选择条件，把原生计算输出作为普通派生观察|单次触发到输出派生流 ≤ 50 ms（子系统内部预算，`hpc-derivation/design.md` §2.2，验收其 §10 #7/#10）；1500/15/24 h 仅为沟通场景，不作容量上限|`hpc-derivation/design.md` §1.1、§2.2；B3|中|
+|Q24|完整窗口原生计算|维护者需求|约 1500 条流选 15 条，覆盖 24 h 逐秒数据，指标阈值后唤醒 AI|P2、P5、P12 与可选 Pooled|沟通场景，非容量指标|能表达完整窗口与选择条件，把原生计算输出作为普通派生观察|单次触发到输出派生流 ≤ 50 ms（子系统内部预算，`drafts/hpc-derivation/design.md` §2.2，验收其 §10 #7/#10）；1500/15/24 h 仅为沟通场景，不作容量上限|`drafts/hpc-derivation/design.md` §1.1、§2.2；B3|中|
 |Q25|程序超预算隔离|程序运行时|程序死循环、超内存或超意图速率|P12 程序、P6 意图|不可信程序与其他程序并存；也测试其后核心重启|超预算程序隔离并报告；其他程序、账户、核心继续；重启不自动把它装回来|超出装载时声明的预算（P12：CPU / 内存 / 意图速率 / 状态大小）后被隔离并产出失败观察；核心重启后该程序仍不运行，直到运维重新装载；其他程序、账户、核心的响应度量不变；预算值是装载声明的参数，不是设计常量|H2；C4|高|
-|Q26|单据并发编辑|第二个 principal|第二个 principal 对已有负责人的单据 `Revise`|Ticket、P6/P7|已有负责人且版本已变化|拒绝共同编辑或返回冲突，保留负责人和版本记录|冲突结果、负责人、版本均可读|[ticket.md §4.2 状态机与穷尽转移](core/core-process/ticket.md#42-状态机与穷尽转移)|高|
-|Q27|Replace 不能一次写完成|消费方|venue 不能以一次写完成改单时改单|P6–P10、能力声明|目标意图可能已执行或仍 pending|不把改单伪装为原子动作：能一次写完成的来源才声明改单，否则改单不受支持，调用方自行组合撤单与下单两张单据；撤单的受理不当作原单已结束|不能原子改单的来源上改单意图本地否决、无 venue 调用；组合路径下两张单据各自可见，下单单据的依据引用原单观察；撤单 `Undetermined` 期间同 lane 的下单等待；各自 `deadline`（H6）到期各自关闭，不补偿|[ticket.md §4.5 交易协议：操作种类、目标、可执行性、检查目录](core/core-process/ticket.md#45-交易协议操作种类目标可执行性检查目录-交易协议)；F6|高|
-|Q28|保留边界推进|维护者或核心|retention 推进时仍有单据或程序引用的位置|P15、LogPosition 引用、程序输入|观察记录可压缩，效应单据只追加|不删除仍被引用的位置；必要时拒绝推进或先处理引用|边界推进从不越过仍被登记引用的最早位置|P15；[observation-journal.md §2.4 保留：边界与删除规则](core/core-process/observation-journal.md#24-保留边界与删除规则)；验收 #4|高|
+|Q26|单据并发编辑|第二个 principal|第二个 principal 对已有负责人的单据 `Revise`|Ticket、P6/P7|已有负责人且版本已变化|拒绝共同编辑或返回冲突，保留负责人和版本记录|冲突结果、负责人、版本均可读|[ticket.md §4.2 状态机与穷尽转移](core/read-write/ticket.md#42-状态机与穷尽转移)|高|
+|Q27|Replace 不能一次写完成|消费方|venue 不能以一次写完成改单时改单|P6–P10、能力声明|目标意图可能已执行或仍 pending|不把改单伪装为原子动作：能一次写完成的来源才声明改单，否则改单不受支持，调用方自行组合撤单与下单两张单据；撤单的受理不当作原单已结束|不能原子改单的来源上改单意图本地否决、无 venue 调用；组合路径下两张单据各自可见，下单单据的依据引用原单观察；撤单 `Undetermined` 期间同 lane 的下单等待；各自 `deadline`（H6）到期各自关闭，不补偿|[trade-protocol.md §4.1 交易协议：操作种类、目标、可执行性、检查目录](core/read-write/trade-protocol.md#41-交易协议操作种类目标可执行性检查目录-交易协议)；F6|高|
+|Q28|保留边界推进|维护者或核心|retention 推进时仍有单据或程序引用的位置|P15、LogPosition 引用、程序输入|观察记录可压缩，效应单据只追加|不删除仍被引用的位置；必要时拒绝推进或先处理引用|边界推进从不越过仍被登记引用的最早位置|P15；[journal.md §2.4 保留：边界与删除规则](core/read/journal.md#24-保留边界与删除规则)；验收 #4|高|
 |Q29|Alice 断连重连|Alice 客户端|Alice 崩溃或重启，UTA 独立存活；重连后请求当前状态和 cursor 之后记录|P13 会话、P4 订阅、P3 gap|UTA 订阅和程序仍由 UTA 拥有|重连可取得当前状态；断连期间损失显式标 gap，不伪造逐条补发|当前状态、cursor 后记录和 gap 原因可读|H5；C5；[core/design.md §4.3](core/design.md#43-部署与信任)|中|
-|Q30|可选子系统扇出端到端|核心与可选子系统|1 个输入经 K 个 op 到 N 个消费者|P2/P12、Pooled|子系统已装载且满足前置条件|输出以普通派生流进入下游；不满足条件时 Pooled 程序拒绝而核心其余程序不受影响|端到端结果可测；子系统内部预算分项见 `hpc-derivation/design.md` §2.2，验收其 §10 #7|`hpc-derivation/design.md` §2.2、§10 #7|中|
+|Q30|可选子系统扇出端到端|核心与可选子系统|1 个输入经 K 个 op 到 N 个消费者|P2/P12、Pooled|子系统已装载且满足前置条件|输出以普通派生流进入下游；不满足条件时 Pooled 程序拒绝而核心其余程序不受影响|端到端结果可测；子系统内部预算分项见 `drafts/hpc-derivation/design.md` §2.2，验收其 §10 #7|`drafts/hpc-derivation/design.md` §2.2、§10 #7|中|
 |Q31|消费方式声明|程序作者|同一组流分别以 await-all、ordered、latest 消费|P4、P12、P3|来源时间不同且存在 gap/窗口|按程序声明解释，不强加全局对齐；await-all 只等来源证据证明的覆盖（或 UTA 自己的位置），没有这种证据的输入在装载时拒绝；latest 的合并引用消费方声明的窗口或 conflated gap|每次合并可追溯到声明窗口或 gap；不从到达时间推导任何流的完备|B5；C6；验收 #6|中|
-|Q32|健康与 readiness 可见|运维者/消费方|查询集成的会话状态、逐流 readiness、按调用目标的连续失败与最近成功时间|P16、P14|集成在线、断开、被拒待处理与恢复各状态|返回结构化健康/readiness 供运维与下游观察；“断开会自己恢复”与“被拒需要人处理”可区分；写路径不读健康，由发出前门按会话与能力挡住发送（[io-shell.md §4.2 发送屏障与发出前门](core/core-process/io-shell.md#42-发送屏障与发出前门)）|会话状态、逐流 readiness、按目标的连续失败数与最近成功时间可读；被拒集成不自动重连|P16；S9|中|
+|Q32|健康与 readiness 可见|运维者/消费方|查询集成的会话状态、逐流 readiness、按调用目标的连续失败与最近成功时间|P16、P14|集成在线、断开、被拒待处理与恢复各状态|返回结构化健康/readiness 供运维与下游观察；“断开会自己恢复”与“被拒需要人处理”可区分；写路径不读健康，由发出前门按会话与能力挡住发送（[write.md §4.2 发送屏障与发出前门](core/read-write/write.md#42-发送屏障与发出前门)）|会话状态、逐流 readiness、按目标的连续失败数与最近成功时间可读；被拒集成不自动重连|P16；S9|中|
 
 ### 3.2 约束与偏好
 
@@ -521,7 +521,7 @@ SDK 缺口（`getCapabilities` 空、`getPendingOrderIds` 空、historical 可�
   - 不选：命令在运行期向 core 远程发现：命令集随连接变化，帮助与参数无法在构建期检查。
   - 不选：对外面全部手写：每接一个来源都要改 CLI 才能用它的专有字段。
   - 证据：§1.4；S10、H5/C5、C1。
-- **可选子系统与 core 分开**：只有能形成干净决定边界、core 没有它仍完整可运行的子系统才单独成部分。它经单一读侧组合子 `Pooled` 与已安装的原生 op 接入，接口由 core 拥有（[program-host-element.md §4.7 核心↔可选行情派生计算子系统](core/core-process/program-host-element.md#47-核心可选行情派生计算子系统)）。
+- **可选子系统与 core 分开**：只有能形成干净决定边界、core 没有它仍完整可运行的子系统才单独成部分。它经单一读侧组合子 `Pooled` 与已安装的原生 op 接入，接口由 core 拥有（[program-host.md §4.7 核心↔可选行情派生计算子系统](core/runtime/program-host.md#47-核心可选行情派生计算子系统)、[derivation.md §4.1 核心↔可选行情派生计算子系统（派生）](core/read/derivation.md#41-核心可选行情派生计算子系统派生)）。
 
 ### 4.2 部分之间的关系
 
@@ -545,13 +545,13 @@ flowchart LR
 
 | 关系 | 交换什么 | 契约拥有者与发布 | 规格所在 |
 |---|---|---|---|
-| 下游 ↔ 解释层 | 命令、长连接消息、续传与读取令牌、缺失通知 | 解释层部分；schema 与 CLI 随本仓库 release 发布，是跨仓库契约 | [downstream/design.md](downstream/design.md) |
-| 解释层 ↔ core | 会话、订阅与确认、一次性读、读模型、单据、结果未知、控制动作 | core；JSON-RPC IDL，只在本仓库内部 | 每个操作写在实现它的 core 组件文档，总表见 [core-process/design.md §4.2 对外接口总表](core/core-process/design.md#42-对外接口总表) |
-| core ↔ 集成 | 握手与声明、推送（观察、gap、能力变更、readiness）、读写调用 | core；IDL 随 release 发布给集成作者 | [integration-session.md §4.3 核心↔集成契约的会话部分](core/core-process/integration-session.md#43-核心集成契约的会话部分)，各操作见 [core-process/design.md §4.2 对外接口总表](core/core-process/design.md#42-对外接口总表) |
-| 集成 ↔ 上游 | 上游协议 | 上游 | 各集成自己；接入方法见 [integration/design.md §5.1 接入一个新 venue](integration/design.md#51-接入一个新-venue) |
-| 集成 → 解释层（构建期） | 每个集成随发布制品给出的扩展 schema 与记录映射；解释层据此生成该来源专有的命令参数与字段。握手时交出的同一组值以 `(schema_id, schema_version)` 标识，与发布制品不一致的版本在解释层按“构建时没有的 schema 版本”处理 | 各集成；随该集成的发布制品发布 | 发布：[integration/design.md §4.2 发布物](integration/design.md#42-发布物)；生成与运行期处理：[downstream/cli/design.md §4.3 命令与参数从哪里来](downstream/cli/design.md#43-命令与参数从哪里来) |
-| core ↔ 可选子系统 | `Pooled` 段视图、原生 op 的安装与每次宿主执行的交出 | core | [program-host-element.md §4.7 核心↔可选行情派生计算子系统](core/core-process/program-host-element.md#47-核心可选行情派生计算子系统) |
-| Alice → core（文件） | 封存凭据、集成登记、规则、程序装载清单与程序值文件、运行期参数、原生计算制品 | 文件写者 Alice；core 只读 | [core-process/design.md §4.6 统一路径文件](core/core-process/design.md#46-统一路径文件) |
+| 下游 ↔ 解释层 | 命令、长连接消息、续传与读取令牌、缺失通知 | 解释层部分；schema 与 CLI 随本仓库 release 发布，是跨仓库契约 | [drafts/downstream/design.md](drafts/downstream/design.md) |
+| 解释层 ↔ core | 会话、订阅与确认、一次性读、读模型、单据、结果未知、控制动作 | core；JSON-RPC IDL，只在本仓库内部 | 每个操作写在实现它的 core 组件文档，总表见 [core/design.md §4.6 对外接口总表](core/design.md#46-对外接口总表) |
+| core ↔ 集成 | 握手与声明、推送（观察、gap、能力变更、readiness）、读写调用 | core；IDL 随 release 发布给集成作者 | [integration.md §4.3 核心↔集成契约的会话部分](core/boundary/integration.md#43-核心集成契约的会话部分)，各操作见 [core/design.md §4.6 对外接口总表](core/design.md#46-对外接口总表) |
+| 集成 ↔ 上游 | 上游协议 | 上游 | 各集成自己；接入方法见 [drafts/integration/design.md §5.1 接入一个新 venue](drafts/integration/design.md#51-接入一个新-venue) |
+| 集成 → 解释层（构建期） | 每个集成随发布制品给出的扩展 schema 与记录映射；解释层据此生成该来源专有的命令参数与字段。握手时交出的同一组值以 `(schema_id, schema_version)` 标识，与发布制品不一致的版本在解释层按“构建时没有的 schema 版本”处理 | 各集成；随该集成的发布制品发布 | 发布：[drafts/integration/design.md §4.2 发布物](drafts/integration/design.md#42-发布物)；生成与运行期处理：[drafts/downstream/cli/design.md §4.3 命令与参数从哪里来](drafts/downstream/cli/design.md#43-命令与参数从哪里来) |
+| core ↔ 可选子系统 | `Pooled` 段视图、原生 op 的安装与每次宿主执行的交出 | core | [program-host.md §4.7 核心↔可选行情派生计算子系统](core/runtime/program-host.md#47-核心可选行情派生计算子系统)、[derivation.md §4.1 核心↔可选行情派生计算子系统（派生）](core/read/derivation.md#41-核心可选行情派生计算子系统派生) |
+| Alice → core（文件） | 封存凭据、集成登记、规则、程序装载清单与程序值文件、运行期参数、原生计算制品 | 文件写者 Alice；core 只读 | [files.md 统一路径文件](core/boundary/files.md) |
 
 ### 4.3 需求分配
 
@@ -566,47 +566,47 @@ flowchart LR
 
 ## 5 场景（W1–W20）
 
-每个场景在这里给出刺激、经过的部分、跨越的契约操作与端到端的成败标准；组件级的逐步 trace 在核心进程文档，各部分内部的细化在各自文档。
+每个场景在这里给出刺激、经过的部分、跨越的契约操作与端到端的成败标准；组件级的逐步 trace 在 [core/design.md §5.1 场景 trace（W1–W20）](core/design.md#51-场景-tracew1w20)，各部分内部的细化在各自文档。
 
-**W1（Q1）正常下单闭环。** 程序发出下单请求 → core 开单、过规则链、放行，经集成 `submit` 发出 → 上游受理、部分成交、成交，集成以回执与推送送回。成：订阅者依次收到受理、部分成交、成交，字段与原生身份保真；同一笔执行经多个渠道到达只计一次；未列举状态以 `Unmapped(raw)` 保留。trace：[core-process/design.md §5.1 W1（Q1）正常下单闭环](core/core-process/design.md#w1q1正常下单闭环)。
+**W1（Q1）正常下单闭环。** 程序发出下单请求 → core 开单、过规则链、放行，经集成 `submit` 发出 → 上游受理、部分成交、成交，集成以回执与推送送回。成：订阅者依次收到受理、部分成交、成交，字段与原生身份保真；同一笔执行经多个渠道到达只计一次；未列举状态以 `Unmapped(raw)` 保留。trace：[core/design.md §5.1 W1（Q1）正常下单闭环](core/design.md#w1q1正常下单闭环)。
 
-**W2（Q2+Q3）SendBarrier 后崩溃、三渠道收敛、放弃跟踪、脑裂。** core 在写可能已交出之后崩溃；旧集成进程可能成孤儿并迟到送出。core 重启后经新会话按声明的渠道（按键回读、listing + 身份、无渠道）向集成取证。成：fixture 上游调用 ≤ 1，该意图恰一条 `SendBarrier`；结论只来自上游证据；放弃跟踪带 principal、只结束等待，下游看到“已放弃跟踪，结果未知”。trace：[core-process/design.md §5.1 W2（Q2+Q3）SendBarrier 后崩溃、三渠道收敛、放弃跟踪、脑裂变体](core/core-process/design.md#w2q2q3sendbarrier-后崩溃三渠道收敛放弃跟踪脑裂变体)。
+**W2（Q2+Q3）SendBarrier 后崩溃、三渠道收敛、放弃跟踪、脑裂。** core 在写可能已交出之后崩溃；旧集成进程可能成孤儿并迟到送出。core 重启后经新会话按声明的渠道（按键回读、listing + 身份、无渠道）向集成取证。成：fixture 上游调用 ≤ 1，该意图恰一条 `SendBarrier`；结论只来自上游证据；放弃跟踪带 principal、只结束等待，下游看到“已放弃跟踪，结果未知”。trace：[core/design.md §5.1 W2（Q2+Q3）SendBarrier 后崩溃、三渠道收敛、放弃跟踪、脑裂变体](core/design.md#w2q2q3sendbarrier-后崩溃三渠道收敛放弃跟踪脑裂变体)。
 
-**W3（Q4）Prepared 未发前崩溃。** 放行已持久化、写尚未越过发送屏障时 core 崩溃。成：集成未收到写，fixture 调用数 0；末态为已发、等待后已发或到期，都不经结果未知。trace：[core-process/design.md §5.1 W3（Q4）Prepared 未发前崩溃](core/core-process/design.md#w3q4prepared-未发前崩溃)。
+**W3（Q4）Prepared 未发前崩溃。** 放行已持久化、写尚未越过发送屏障时 core 崩溃。成：集成未收到写，fixture 调用数 0；末态为已发、等待后已发或到期，都不经结果未知。trace：[core/design.md §5.1 W3（Q4）Prepared 未发前崩溃](core/design.md#w3q4prepared-未发前崩溃)。
 
-**W4（Q6）外部变更归因。** 上游推送一笔对不上任何本地尝试的成交或余额变动，集成按上游证据填归因。成：记录存在、无意图引用，订阅者收到；core 不把“未定”判为“外部”。trace：[core-process/design.md §5.1 W4（Q6）外部变更归因](core/core-process/design.md#w4q6外部变更归因)。
+**W4（Q6）外部变更归因。** 上游推送一笔对不上任何本地尝试的成交或余额变动，集成按上游证据填归因。成：记录存在、无意图引用，订阅者收到；core 不把“未定”判为“外部”。trace：[core/design.md §5.1 W4（Q6）外部变更归因](core/design.md#w4q6外部变更归因)。
 
-**W5（Q7）同 lane 并发与队首阻塞。** 两个下游经解释层在 100 ms 内向同一账户各提交一笔，第一笔结果未知。成：fixture 调用不重叠，结果未知期间同 lane 无第二次调用；其他账户不等待；撤阻塞头与显式绕过两条出路各有可见记录。trace：[core-process/design.md §5.1 W5（Q7）同 lane 并发与队首阻塞](core/core-process/design.md#w5q7同-lane-并发与队首阻塞)。
+**W5（Q7）同 lane 并发与队首阻塞。** 两个下游经解释层在 100 ms 内向同一账户各提交一笔，第一笔结果未知。成：fixture 调用不重叠，结果未知期间同 lane 无第二次调用；其他账户不等待；撤阻塞头与显式绕过两条出路各有可见记录。trace：[core/design.md §5.1 W5（Q7）同 lane 并发与队首阻塞](core/design.md#w5q7同-lane-并发与队首阻塞)。
 
-**W6（Q11+Q12+Q31）行情断线、慢消费者、三种消费方式。** 集成断线 30 s 重连且上游无游标，集成上报来源 gap、core 按新会话重下 `route`；一个 `latest` 订阅者不确认。成：订阅者先收到 gap 再收新 epoch 记录；慢者停投并收到投递缺口、其他订阅者不受影响；每次合并可追溯到声明窗口或缺口。trace：[core-process/design.md §5.1 W6（Q11+Q12+Q31）行情断线 gap、慢消费者、三种消费方式](core/core-process/design.md#w6q11q12q31行情断线-gap慢消费者三种消费方式)。
+**W6（Q11+Q12+Q31）行情断线、慢消费者、三种消费方式。** 集成断线 30 s 重连且上游无游标，集成上报来源 gap、core 按新会话重下 `route`；一个 `latest` 订阅者不确认。成：订阅者先收到 gap 再收新 epoch 记录；慢者停投并收到投递缺口、其他订阅者不受影响；每次合并可追溯到声明窗口或缺口。trace：[core/design.md §5.1 W6（Q11+Q12+Q31）行情断线 gap、慢消费者、三种消费方式](core/design.md#w6q11q12q31行情断线-gap慢消费者三种消费方式)。
 
-**W7（Q17）core append 中途崩溃。** 只涉及 core。成：无半条记录，订阅者按 cursor 续接。trace：[core-process/design.md §5.1 W7（Q17）核心 append 中途崩溃](core/core-process/design.md#w7q17核心-append-中途崩溃)。
+**W7（Q17）core append 中途崩溃。** 只涉及 core。成：无半条记录，订阅者按 cursor 续接。trace：[core/design.md §5.1 W7（Q17）核心 append 中途崩溃](core/design.md#w7q17核心-append-中途崩溃)。
 
-**W8（Q18）配置热变更 / 换凭据。** 运维者经解释层发 `reload_config` 或 `rotate_credential`；Alice 事先改写统一路径文件；换凭据时 core 结束目标集成的会话与进程，再以新凭据拉起新集成进程并握手；上游可能拒绝凭据或暂时不可达。成：下一笔意图用新规则；目标集成旧进程退出先于新进程拉起，各流新 epoch 首条为 `credential_rotated`，其他集成 Seq 连续；凭据被拒显示为“停止并待处理”，与“断开、正在重连”可区分，上游不再收到重复登录。trace：[core-process/design.md §5.1 W8（Q18）配置热变更 / 换凭据](core/core-process/design.md#w8q18配置热变更--换凭据)。
+**W8（Q18）配置热变更 / 换凭据。** 运维者经解释层发 `reload_config` 或 `rotate_credential`；Alice 事先改写统一路径文件；换凭据时 core 结束目标集成的会话与进程，再以新凭据拉起新集成进程并握手；上游可能拒绝凭据或暂时不可达。成：下一笔意图用新规则；目标集成旧进程退出先于新进程拉起，各流新 epoch 首条为 `credential_rotated`，其他集成 Seq 连续；凭据被拒显示为“停止并待处理”，与“断开、正在重连”可区分，上游不再收到重复登录。trace：[core/design.md §5.1 W8（Q18）配置热变更 / 换凭据](core/design.md#w8q18配置热变更--换凭据)。
 
-**W9（Q20）双实例。** 同一用户状态根上启动第二个 core；或持有者死亡 / 受控停止后接管。成：第二实例专用退出码退出；接管不产生双写，旧实例拉起的集成与宿主进程被回收；受控停止之后没有孤儿、每个在途调用都有结果。trace：[core-process/design.md §5.1 W9（Q20）双实例](core/core-process/design.md#w9q20双实例)。
+**W9（Q20）双实例。** 同一用户状态根上启动第二个 core；或持有者死亡 / 受控停止后接管。成：第二实例专用退出码退出；接管不产生双写，旧实例拉起的集成与宿主进程被回收；受控停止之后没有孤儿、每个在途调用都有结果。trace：[core/design.md §5.1 W9（Q20）双实例](core/design.md#w9q20双实例)。
 
-**W10（Q25）程序超预算隔离。** 程序在宿主进程里死循环、超内存或超意图速率。成：该程序被隔离并产出失败观察，其他程序、账户、core 不受影响；core 重启后不自动装回。trace：[core-process/design.md §5.1 W10](core/core-process/design.md#w10q25程序超预算隔离)。
+**W10（Q25）程序超预算隔离。** 程序在宿主进程里死循环、超内存或超意图速率。成：该程序被隔离并产出失败观察，其他程序、账户、core 不受影响；core 重启后不自动装回。trace：[core/design.md §5.1 W10](core/design.md#w10q25程序超预算隔离)。
 
-**W11（Q26）单据并发编辑与退回。** 两个下游 principal 经解释层操作同一张单据。成：第二个 principal 被拒或得冲突，负责人与版本可读。trace：[core-process/design.md §5.1 W11（Q26）单据并发编辑与 SendBack](core/core-process/design.md#w11q26单据并发编辑与-sendback)。
+**W11（Q26）单据并发编辑与退回。** 两个下游 principal 经解释层操作同一张单据。成：第二个 principal 被拒或得冲突，负责人与版本可读。trace：[core/design.md §5.1 W11（Q26）单据并发编辑与 SendBack](core/design.md#w11q26单据并发编辑与-sendback)。
 
-**W12（Q27）改单：原子改单，或由调用方组合撤单与下单。** 来源能一次写完成改单时经集成一次写；不能时改单意图本地否决，调用方自行组合两张单据。成：前者一张单据、一次上游写；后者两张单据各一次尝试，撤单受理不被当作原单已结束。trace：[core-process/design.md §5.1 W12（Q27）Replace：原子改单，或由调用方组合撤单与下单](core/core-process/design.md#w12q27replace原子改单或由调用方组合撤单与下单)。
+**W12（Q27）改单：原子改单，或由调用方组合撤单与下单。** 来源能一次写完成改单时经集成一次写；不能时改单意图本地否决，调用方自行组合两张单据。成：前者一张单据、一次上游写；后者两张单据各一次尝试，撤单受理不被当作原单已结束。trace：[core/design.md §5.1 W12（Q27）Replace：原子改单，或由调用方组合撤单与下单](core/design.md#w12q27replace原子改单或由调用方组合撤单与下单)。
 
-**W13（Q28）保留边界推进与被引用位置。** 运维者经解释层推进保留边界。成：边界不越过仍被登记引用的最早位置，执行事实无记录被删。trace：[core-process/design.md §5.1 W13（Q28）保留边界推进与被引用位置](core/core-process/design.md#w13q28保留边界推进与被引用位置)。
+**W13（Q28）保留边界推进与被引用位置。** 运维者经解释层推进保留边界。成：边界不越过仍被登记引用的最早位置，执行事实无记录被删。trace：[core/design.md §5.1 W13（Q28）保留边界推进与被引用位置](core/design.md#w13q28保留边界推进与被引用位置)。
 
-**W14（Q29）下游断连重连。** Alice 或解释层崩溃重启，core 独立存活；Alice 凭续传令牌经解释层重连。成：取得当前状态、cursor 之后的记录与断连期间的缺失通知；重复只出现在未确认区间。trace：[core-process/design.md §5.1 W14（Q29）下游（Alice）断连重连](core/core-process/design.md#w14q29下游alice断连重连)；解释层内部：[downstream/endpoint/design.md §5.1 W14（Q29）下游断连重连](downstream/endpoint/design.md#51-w14q29下游断连重连)。
+**W14（Q29）下游断连重连。** Alice 或解释层崩溃重启，core 独立存活；Alice 凭续传令牌经解释层重连。成：取得当前状态、cursor 之后的记录与断连期间的缺失通知；重复只出现在未确认区间。trace：[core/design.md §5.1 W14（Q29）下游（Alice）断连重连](core/design.md#w14q29下游alice断连重连)；解释层内部：[drafts/downstream/endpoint/design.md §5.1 W14（Q29）下游断连重连](drafts/downstream/endpoint/design.md#51-w14q29下游断连重连)。
 
-**W15（Q24）含 `Pooled` 的程序：无子系统 / 有子系统且 op 崩溃。** 成：无子系统时该程序装载被拒、其余程序照常；op 崩溃只产生失败观察，不改名为来源 gap 或写的无回执；外部写仍经效应路径。子系统内部不在本文范围。trace：[core-process/design.md §5.1 W15（Q24）含 Pooled 的程序](core/core-process/design.md#w15q24含-pooled-的程序)。
+**W15（Q24）含 `Pooled` 的程序：无子系统 / 有子系统且 op 崩溃。** 成：无子系统时该程序装载被拒、其余程序照常；op 崩溃只产生失败观察，不改名为来源 gap 或写的无回执；外部写仍经效应路径。子系统内部不在本文范围。trace：[core/design.md §5.1 W15（Q24）含 Pooled 的程序](core/design.md#w15q24含-pooled-的程序)。
 
-**W16 行情修订撤回旧派生信号但不动已发执行事实。** 集成送来修订 bar 的迟到 tick。成：派生信号撤回，已发的写与发送历史完整保留，相关单据呈偏离。trace：[core-process/design.md §5.1 W16 行情修订撤回旧派生信号但不动已发执行事实](core/core-process/design.md#w16-行情修订撤回旧派生信号但不动已发执行事实)。
+**W16 行情修订撤回旧派生信号但不动已发执行事实。** 集成送来修订 bar 的迟到 tick。成：派生信号撤回，已发的写与发送历史完整保留，相关单据呈偏离。trace：[core/design.md §5.1 W16 行情修订撤回旧派生信号但不动已发执行事实](core/design.md#w16-行情修订撤回旧派生信号但不动已发执行事实)。
 
-**W17 程序发出读请求（fetch.bars）闭环走观察侧。** 宿主进程里的程序发出读请求 → core 经集成 `read` → 回答作为观察记录回到程序。成：读不进单据与写路径；无会话、不支持、未确认、请求不合法都不调用集成，也不返回看似成功的空数组。trace：[core-process/design.md §5.1 W17](core/core-process/design.md#w17-程序-emit-读处理器fetchbars闭环走观察侧)。
+**W17 程序发出读请求（fetch.bars）闭环走观察侧。** 宿主进程里的程序发出读请求 → core 经集成 `read` → 回答作为观察记录回到程序。成：读不进单据与写路径；无会话、不支持、未确认、请求不合法都不调用集成，也不返回看似成功的空数组。trace：[core/design.md §5.1 W17](core/design.md#w17-程序-emit-读处理器fetchbars闭环走观察侧)。
 
-**W18（Q8+Q9+Q10）送审即否决、人工审批与过期、决定版本冲突、冷却。** 下游经解释层提交三种非法意图、人工审批、两次同版本决定。成：参数不合规与只读账户两笔无上游调用、各一对意图 / 否决并有安全事件；他账户 instrument 在允许集合内时恰一次上游调用、终于上游拒绝；过期意图无递送；第二次决定得冲突。trace：[core-process/design.md §5.1 W18（Q8+Q9+Q10）送审即否决、人工审批与过期、决定版本冲突、冷却](core/core-process/design.md#w18q8q9q10送审即否决人工审批与过期决定版本冲突冷却)。
+**W18（Q8+Q9+Q10）送审即否决、人工审批与过期、决定版本冲突、冷却。** 下游经解释层提交三种非法意图、人工审批、两次同版本决定。成：参数不合规与只读账户两笔无上游调用、各一对意图 / 否决并有安全事件；他账户 instrument 在允许集合内时恰一次上游调用、终于上游拒绝；过期意图无递送；第二次决定得冲突。trace：[core/design.md §5.1 W18（Q8+Q9+Q10）送审即否决、人工审批与过期、决定版本冲突、冷却](core/design.md#w18q8q9q10送审即否决人工审批与过期决定版本冲突冷却)。
 
-**W19（Q19）会话身份与未授权控制。** 未认证连接、伪造请求体身份、无 scope 的控制请求经解释层到达 core。成：无上游调用、无配置变更，安全事件可读。trace：[core-process/design.md §5.1 W19（Q19）会话身份与未授权控制](core/core-process/design.md#w19q19会话身份与未授权控制)；解释层内部：[downstream/endpoint/design.md §5.2 W19（Q19）会话身份与未授权控制](downstream/endpoint/design.md#52-w19q19会话身份与未授权控制)。
+**W19（Q19）会话身份与未授权控制。** 未认证连接、伪造请求体身份、无 scope 的控制请求经解释层到达 core。成：无上游调用、无配置变更，安全事件可读。trace：[core/design.md §5.1 W19（Q19）会话身份与未授权控制](core/design.md#w19q19会话身份与未授权控制)；解释层内部：[drafts/downstream/endpoint/design.md §5.2 W19（Q19）会话身份与未授权控制](drafts/downstream/endpoint/design.md#52-w19q19会话身份与未授权控制)。
 
-**W20（Q13+Q15+Q16）解释层取得声明、按账户与无账户来源读、推送待审与结果未知。** 集成握手后，解释层读取来源声明、跨账户与公共来源一次性读、订阅超配额、接收待审与结果未知的推送。成：各读目标独立，“来源重连中 / 不支持 / 未确认 / 来源拒绝 / 尚未作答 / 空结果”可区分；超配额项被拒而集成收不到超限主体；待审与结果未知重连后不丢。trace：[core-process/design.md §5.1 W20（Q13+Q15+Q16）解释层取得声明、按账户与无账户来源读、推送待审与结果未知](core/core-process/design.md#w20q13q15q16解释层取得声明按账户与无账户来源读推送待审与结果未知)；解释层内部：[downstream/design.md §5.1 W20（Q13+Q15+Q16）取得声明、按账户与无账户来源读、推送待审与结果未知](downstream/design.md#51-w20q13q15q16取得声明按账户与无账户来源读推送待审与结果未知)。
+**W20（Q13+Q15+Q16）解释层取得声明、按账户与无账户来源读、推送待审与结果未知。** 集成握手后，解释层读取来源声明、跨账户与公共来源一次性读、订阅超配额、接收待审与结果未知的推送。成：各读目标独立，“来源重连中 / 不支持 / 未确认 / 来源拒绝 / 尚未作答 / 空结果”可区分；超配额项被拒而集成收不到超限主体；待审与结果未知重连后不丢。trace：[core/design.md §5.1 W20（Q13+Q15+Q16）解释层取得声明、按账户与无账户来源读、推送待审与结果未知](core/design.md#w20q13q15q16解释层取得声明按账户与无账户来源读推送待审与结果未知)；解释层内部：[drafts/downstream/design.md §5.1 W20（Q13+Q15+Q16）取得声明、按账户与无账户来源读、推送待审与结果未知](drafts/downstream/design.md#51-w20q13q15q16取得声明按账户与无账户来源读推送待审与结果未知)。
 
 ## 6 评估
 
@@ -614,16 +614,16 @@ flowchart LR
 
 以下观测会推翻相应的部分级决定，而不是用补丁保留结论。其余证伪条件写在拥有各自决定的文档里。
 
-5. **H1 宁重复不漏单**：维护者对某账户类别明确接受“宁重复不漏单” → C1“unknown 不得自动产生新尝试”对该类别放宽，对账驱动的自动化边界（[io-shell.md §4.5 对账驱动](core/core-process/io-shell.md#45-对账驱动)）须分类。
-6. **H4 写并发确定排序**：某 venue 文档保证并发写的确定性排序 → “同 (账户,子账户) 需一个全序”的 lane 前提（[lane.md](core/core-process/lane.md)）对该 venue 放宽。
-7. **H5 订阅生命周期**：维护者决定程序 / 订阅随消费方连接存亡 → “订阅与程序 owner 是 core、与消费方连接无关”（C5；[core/design.md §4.3](core/design.md#43-部署与信任)、[session-entry.md §4.4 会话的生命周期](core/core-process/session-entry.md#44-会话的生命周期-设计)）被推翻，Q29 的重连语义改写。
-8. **H7 信任单位是 OS 用户**：维护者要求同用户进程之间也互相隔离（能力令牌 / 句柄传递），或接受“host 即信任” → 信任边界（[core/design.md §4.3](core/design.md#43-部署与信任)）与 C11 的会话认证模型改写，Q19 的判定依据与 `principal = (os_user, actor)` 握手（[session-entry.md §3 模型](core/core-process/session-entry.md#3-模型)）随之重定。
-9. **上游只在集成内被消费**（§1.1、§4.1）：某上游的回应无法在集成内判定为契约的封闭返回值之一，必须把上游原文交给 core 或程序才能判断 → “接触原值只在集成里发生”不成立，载荷与原始负载的分工（[envelope.md §2.2 三部分](core/core-process/envelope.md#22-三部分-设计)）与集成义务（[integration-session.md §4.4 集成义务清单](core/core-process/integration-session.md#44-集成义务清单)）须重定。
+5. **H1 宁重复不漏单**：维护者对某账户类别明确接受“宁重复不漏单” → C1“unknown 不得自动产生新尝试”对该类别放宽，对账驱动的自动化边界（[resolution.md §4.1 对账驱动](core/read-write/resolution.md#41-对账驱动)）须分类。
+6. **H4 写并发确定排序**：某 venue 文档保证并发写的确定性排序 → “同 (账户,子账户) 需一个全序”的 lane 前提（[lane.md](core/read-write/lane.md)）对该 venue 放宽。
+7. **H5 订阅生命周期**：维护者决定程序 / 订阅随消费方连接存亡 → “订阅与程序 owner 是 core、与消费方连接无关”（C5；[core/design.md §4.3](core/design.md#43-部署与信任)、[session.md §4.4 会话的生命周期](core/boundary/session.md#44-会话的生命周期-设计)）被推翻，Q29 的重连语义改写。
+8. **H7 信任单位是 OS 用户**：维护者要求同用户进程之间也互相隔离（能力令牌 / 句柄传递），或接受“host 即信任” → 信任边界（[core/design.md §4.3](core/design.md#43-部署与信任)）与 C11 的会话认证模型改写，Q19 的判定依据与 `principal = (os_user, actor)` 握手（[session.md §3 模型](core/boundary/session.md#3-模型)）随之重定。
+9. **上游只在集成内被消费**（§1.1、§4.1）：某上游的回应无法在集成内判定为契约的封闭返回值之一，必须把上游原文交给 core 或程序才能判断 → “接触原值只在集成里发生”不成立，载荷与原始负载的分工（[envelope.md §2.2 三部分](core/boundary/envelope.md#22-三部分-设计)）与集成义务（[integration.md §4.4 集成义务清单](core/boundary/integration.md#44-集成义务清单)）须重定。
 11. **抽象不外泄到下游**（§1.4、§4.1）：某项下游确实需要的交互，不暴露核心概念就说不清（例如下游必须按位置自行对齐多条流才能得到正确结果），或解释层不持有状态就做不到（例如必须跨连接聚合）→ 解释层的对外概念须扩充，或其“不持有状态”须重定；若只能把核心概念交出去，“下游只经解释层接触 core”被推翻。
 
 ### 6.2 验收标准（部分级）
 
-46. **程序与下游按执行计数**（[read-model.md §3.2 成交的计数身份](core/core-process/read-model.md#32-成交的计数身份-设计)、[envelope.md §2.4 推论](core/core-process/envelope.md#24-推论)；[downstream/design.md](downstream/design.md)）：用验收 #39 的同一组 fixture 到达：（对应 Q1/Q5/Q31）
+46. **程序与下游按执行计数**（[trade-observation.md §3.1 成交的计数身份](core/read/trade-observation.md#31-成交的计数身份-设计)、[envelope.md §2.4 推论](core/boundary/envelope.md#24-推论)；[drafts/downstream/design.md](drafts/downstream/design.md)）：用验收 #39 的同一组 fixture 到达：（对应 Q1/Q5/Q31）
     - 一个只读公共 schema 字段（执行身份、修订号、数量、价格）、不读注册字段与原始负载的程序 fold，所得有效执行集合与 `orders` 相等；
     - 下游经解释层订阅成交，只用对外输出里的成交编号、修订号与公布的计数规则，所得有效执行集合与 `orders` 相等；冲突与无身份的成交在下游各得对应提示，不被计入；
     - 同一原生成交号在两个账户下，程序与下游都计两笔（身份的范围是来源 × 账户）。
@@ -634,13 +634,13 @@ flowchart LR
 
 - **实现期才能量的数字**：fold 求值开销、`dyn` 分发、增量引擎的 cutoff 粒度、两侧是否物理共表、文本编码吞吐、秒级 K 线负载。由实现 profiling 定落点，落点变化不改模型；能写成可测标准的是验收项（验收 #19）。
 - **会推翻决定的观测**：它们是各文档评估节里的证伪条件；设计已按当前决定写完，命中时改决定而非打补丁。
-- **可选子系统的实现期数字**：跨平台映射与回收、扇出预算分项、列式段对比、原语集与 gap 序列。它们是 `hpc-derivation/design.md` §10 的验收标准，会推翻其决定的观测在其 §11。core 只拥有接口，接口不依赖任何验收结果。
+- **可选子系统的实现期数字**：跨平台映射与回收、扇出预算分项、列式段对比、原语集与 gap 序列。它们是 `drafts/hpc-derivation/design.md` §10 的验收标准，会推翻其决定的观测在其 §11。core 只拥有接口，接口不依赖任何验收结果。
 
 跨语言 IDL 文件与各配置文件的 JSON schema 是实现阶段制品；它们的语义、错误与 undesired events 已在各 core 组件文档定义。
 
 ## 7 证据文件
 
-一手出处在 `design/research/` 与 `design/investigation/`，各部分文档不改动它们；可选子系统的证据在 `design/hpc-derivation/research/`，由其文档逐篇索引。
+一手出处在 `design/research/` 与 `design/investigation/`，各部分文档不改动它们；可选子系统的证据在 `design/drafts/hpc-derivation/research/`，由其文档逐篇索引。
 
 | 路径 | 一手出处 |
 |---|---|
