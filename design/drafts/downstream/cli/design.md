@@ -5,7 +5,7 @@
 - **读者**：实现 `uta` CLI 的人；CLI 使用者（人、AI）。审批者：无（K3）。
 - **状态**：已定。
 - **非目标**：
-  - 核心↔解释层契约各操作的规格：由 core 拥有，总表见 [core/design.md §4.6 对外接口总表](../../../core/design.md#46-对外接口总表)。本文只引用。
+  - 核心↔解释层契约各操作的规格：由 core 拥有，总表见 [core/00-design.md §4.6 对外接口总表](../../../core/00-design.md#46-对外接口总表)。本文只引用。
   - 对外说法与请求的解析：翻译组件定义在长连接端点容器（[../endpoint/translation.md](../endpoint/translation.md)），本容器使用它。
   - 命令与 flag 的具体名字：实现阶段制品。
 
@@ -64,23 +64,23 @@
 
 **生成的**：本来就是下游词汇的部分，由构建期生成组件产出。
 
-- 订单参数：写侧基本类型的已注册字段（处理器字段注册表里的守卫字段，如 side、instrument，[envelope.md §3.2 处理器字段注册表](../../../core/boundary/envelope.md#32-处理器字段注册表)），以及该来源为每种操作声明的意图参数 schema（公共意图 schema 或其扩展，含订单类型、time-in-force 等没有处理器读的参数；核心按它校验、不读其值，原样交给集成，[ticket.md §3.4 参数合规：意图参数 schema](../../../core/read-write/ticket.md#34-参数合规意图参数-schema-设计)）；
-- 读侧字段：公共 schema。成交的执行身份与修订号也是公共 schema 字段，对外以成交编号、修订号给出：下游自行计数时读的就是它们，与核心 `orders` 读的是同一个值（[trade-observation.md §3.1 成交的计数身份](../../../core/read/trade-observation.md#31-成交的计数身份-设计)）；
-- 读侧查询参数：各流的请求 schema（公共请求 schema 或来源扩展，[integration.md §3.3 投影 Projection](../../../core/boundary/integration.md#33-投影-projection)）：查询主体（已解析的 instrument、目录键或文本）与领域过滤条件（到期日、行权价、条数上限等）；时间段落到核心的 `range`；
+- 订单参数：写侧基本类型的已注册字段（处理器字段注册表里的守卫字段，如 side、instrument，[02-envelope.md §3.2 处理器字段注册表](../../../core/04-boundary/02-envelope.md#32-处理器字段注册表)），以及该来源为每种操作声明的意图参数 schema（公共意图 schema 或其扩展，含订单类型、time-in-force 等没有处理器读的参数；核心按它校验、不读其值，原样交给集成，[01-ticket.md §3.4 参数合规：意图参数 schema](../../../core/03-read-write/01-ticket.md#34-参数合规意图参数-schema-设计)）；
+- 读侧字段：公共 schema。成交的执行身份与修订号也是公共 schema 字段，对外以成交编号、修订号给出：下游自行计数时读的就是它们，与核心 `orders` 读的是同一个值（[07-trade-observation.md §3.1 成交的计数身份](../../../core/02-read/07-trade-observation.md#31-成交的计数身份-设计)）；
+- 读侧查询参数：各流的请求 schema（公共请求 schema 或来源扩展，[01-integration.md §3.3 投影 Projection](../../../core/04-boundary/01-integration.md#33-投影-projection)）：查询主体（已解析的 instrument、目录键或文本）与领域过滤条件（到期日、行权价、条数上限等）；时间段落到核心的 `range`；
 - 来源专有的参数与字段：该集成发布的扩展 schema 与记录映射（[README.md §4.2 部分之间的关系](../../../README.md#42-部分之间的关系)）。
 
 生成在构建期完成，从类型与集成的发布制品生成，不在运行期远程发现。命令是否存在在构建时就定了；运行期只回答“此刻能不能”（[../endpoint/translation.md §4.1 请求的解析：此刻能不能](../endpoint/translation.md#41-请求的解析此刻能不能)）。
 
 构建时与运行时的 schema 版本不同：
 
-- 运行期遇到构建时没有的载荷 schema 版本：该来源专有的字段不可用并如实提示，公共字段不受影响。这与核心“未注册的 schema 组合不触发解释器”一致（[envelope.md §3.3 payload_schema 与 schema 发布](../../../core/boundary/envelope.md#33-payload_schema-与-schema-发布)）。
-- 构建时的请求 schema 或意图参数 schema 版本与该来源此刻声明的不同：该读或该操作如实提示暂不能执行，不提交旧版参数（[one-shot-read.md §4.2 核心↔解释层：read](../../../core/read/one-shot-read.md#42-核心解释层readtargets-deadline--vectargetresult)、[decision-chain.md §4.2 顺序固定链：授权 → 输入约束 → 审批 → lane → 过期](../../../core/read-write/decision-chain.md#42-顺序固定链授权--输入约束--审批--lane--过期)）。
+- 运行期遇到构建时没有的载荷 schema 版本：该来源专有的字段不可用并如实提示，公共字段不受影响。这与核心“未注册的 schema 组合不触发解释器”一致（[02-envelope.md §3.3 payload_schema 与 schema 发布](../../../core/04-boundary/02-envelope.md#33-payload_schema-与-schema-发布)）。
+- 构建时的请求 schema 或意图参数 schema 版本与该来源此刻声明的不同：该读或该操作如实提示暂不能执行，不提交旧版参数（[02-one-shot-read.md §4.2 核心↔解释层：read](../../../core/02-read/02-one-shot-read.md#42-核心解释层readtargets-deadline--vectargetresult)、[04-decision-chain.md §4.2 顺序固定链：授权 → 输入约束 → 审批 → lane → 过期](../../../core/03-read-write/04-decision-chain.md#42-顺序固定链授权--输入约束--审批--lane--过期)）。
 
 ## 5 走查
 
 ### 5.1 W20 第 1、3 步的本容器细化
 
-主 trace：[core/design.md §5.1 W20](../../../core/design.md#w20q13q15q16解释层取得声明按账户与无账户来源读推送待审与结果未知)；容器级 trace：[../design.md §5.1](../design.md#51-w20q13q15q16取得声明按账户与无账户来源读推送待审与结果未知)。
+主 trace：[core/00-design.md §5.1 W20](../../../core/00-design.md#w20q13q15q16解释层取得声明按账户与无账户来源读推送待审与结果未知)；容器级 trace：[../design.md §5.1](../design.md#51-w20q13q15q16取得声明按账户与无账户来源读推送待审与结果未知)。
 
 - 第 1 步：构建期，生成器从公共 schema 与集成 X、公共来源 P 的发布制品生成命令参数与字段。
 - 第 3 步：下游读 X 两个账户的持仓与 P 的某 instrument 报价。→ 命令按 `sources` 解析到各自的流，带请求 schema 身份与参数发一次性读；各 target 的结果逐项翻译：X 离线得“来源离线，正在重连”（先于能力判定），P 作答得数据，上游拒绝得“来源拒绝”，迟迟不答得读取令牌。
