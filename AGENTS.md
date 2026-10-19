@@ -1,55 +1,38 @@
 # UTA
 
-UTA（Unified Trading Agent）是 OpenAlice 的独立进程，位于上游（券商、交易所）与下游（Alice、CLI 使用者、外部客户程序）之间：经集成接触上游，持有观察流、意图与全部交易写入的记录；账户、订单、持仓的原值在上游，不在 UTA。下游只经解释层接触 UTA；Alice 是下游之一，与 UTA 生命周期互相独立。本仓库是 UTA 的设计与实现仓库。旧 UTA 实现留在 OpenAlice 仓库（`services/uta/`、`packages/uta-protocol/`、`src/services/uta-client/`），不具备正确性，只作为"既有机器事实"（[design/README.md §2.1](design/README.md#21-域事实既有机器事实利益相关者要求与假设) O 表）被引用。
+UTA（Unified Trading Agent）是 OpenAlice 的独立进程，位于上游（券商、交易所）与下游（Alice、CLI 使用者、外部客户程序）之间：经集成接触上游，持有观察流、意图与全部交易写入的记录；账户、订单、持仓的原值在上游，不在 UTA。下游只经解释层接触 UTA；Alice 是下游之一，与 UTA 生命周期互相独立。本仓库是 UTA 的设计与实现仓库。
 
-设计文档从 `design/README.md` 读起。它是景观层：全局原则、问题域与需求登记（F/O/S/H/P/A/B/C、Q、K）、四个部分的划分与关系、W1–W20 场景。
+设计文档位于 `design/`，采用 `ssot`（文学式 VDM-SL 规格 + 最小补充文字），从 `design/README.md` 的阅读次序读起：
 
-core 的系统上下文、核心进程的模型、组件划分、接口总表与走查在 `design/core/00-design.md`。核心内部按单读链与读写链分模块：`design/core/02-read/` 是单读链，`design/core/03-read-write/` 是读写链；两条链共用的底座、对外边界与运行分别在 `design/core/01-base/`、`design/core/04-boundary/`、`design/core/05-runtime/`。模块地图见 [core/00-design.md §4.4](design/core/00-design.md#44-模块地图)，各目录的 `00-design.md` 列出本目录的文件。核心进程的进程视图、生命周期与崩溃矩阵在 `design/core/05-runtime/00-design.md`，程序宿主进程在 `design/core/05-runtime/04-program-host-process.md`；组件文档按所属模块放置。先读 core 的 `00-design.md`，再按模块目录与目录内文件的两位数前缀升序阅读，每个模块先读 `00-design.md`；序号表示推荐阅读顺序，不表示依赖拓扑。
+- **架构模块（`design/architecture/`）**：定义与具体业务无关的核心连接、状态与不变量。根模块含 `Source`（`design/architecture/source.md`，外部来源会话存续与当前有效能力判定）与 `Observation`（`design/architecture/observation.md`，观察流位置、消费投递、保留边界与活跃引用保护）；子模块为 `Effect`（`design/architecture/effect/effect.md`，受控单次外部写尝试阶段、发送前屏障、同通道未决阻塞、来源证据决议与放弃本地等待）。
+- **业务单元（`design/business/`）**：只经架构导出的连接接入，定义业务在架构连接上的运行与组合规律，包括 `Ticket`（`design/business/ticket/ticket.md`，单据责任人、版本绑定审批与放行门）、`Trading`（`design/business/trading/trading.md`，下单/改单/撤阻塞头组合、成交按执行身份与修订号归并、订单状态按来源定序证据求偏序极大元）与 `Program`（`design/business/program/program.md`，确定性程序按输入游标推进检查点、产出派生观察与提交单据）。
+- **附录（`design/appendix/`）**：存放支撑依据的外部事实证据（如 `design/appendix/evidence/venue-facts.md`），不设立规范规则。
 
-集成、解释层与可选子系统的现有文档在 `design/drafts/`，作为待设计的草稿保留。集成的系统上下文在 `design/drafts/integration/design.md`，集成进程在 `design/drafts/integration/integration-process/design.md`；解释层的系统上下文在 `design/drafts/downstream/design.md`，一次性命令在 `design/drafts/downstream/cli/design.md`，长连接端点在 `design/drafts/downstream/endpoint/design.md`，翻译组件在同目录 `translation.md`；可选子系统在 `design/drafts/hpc-derivation/`。内容问题登记在 `design/pending-issues.md`。
-
-节号按文档内编号引用（例 `06-write.md §4.2`）。代码在 Cargo 工作区（`crates/`、`xtask/`）；crate 划分、依赖方向、线程与任务模型、所有权与派生规则、线缆约定在根目录 `ARCHITECTURE.md`。
+代码在 Cargo 工作区（`crates/`、`xtask/`）；crate 划分、依赖方向、线程与任务模型、所有权与派生规则、线缆约定在根目录 `ARCHITECTURE.md`。
 
 ## 阶段与范围
 
-- UTA 正在**从零重写**为独立 Rust 二进制，已进入**预开发阶段**：按切片实现，每个切片只创建在该切片里有真实调用方与运行期路径的 crate，其余设计元素的落点登记在 `ARCHITECTURE.md` 第 2 节。改代码前先读 `ARCHITECTURE.md`；新增 crate 同时在 `xtask` 的依赖表里登记它的层。
-- 跨仓库契约是解释层的对外面：CLI 命令与双向长连接的消息协议（[design/README.md §4.2](design/README.md#42-部分之间的关系)；[解释层设计 §4.2](design/drafts/downstream/design.md#42-身份与发布物)）。它们的 schema 与 CLI 由本仓库拥有并随 release 发布，OpenAlice 从 release artifact 消费。核心↔解释层的 JSON-RPC IDL 只在本仓库内部；核心↔集成的 IDL 随 release 发布给集成作者。两者每个操作的规格在实现它的核心组件文档里，总表见 [core/00-design.md §4.6](design/core/00-design.md#46-对外接口总表)。
-- **hpc 不在当前阶段范围内**：`design/drafts/hpc-derivation/` 是前期补充设计的草稿，当前阶段不阅读、不验证、不据它调整核心。核心完备性审查只看 `design/core/`，只需保证 [06-derivation.md §4.1](design/core/02-read/06-derivation.md#41-核心可选行情派生计算子系统派生) 的 `Pooled` 接口在核心侧自包含（没有子系统时核心完整可运行）；核心设计里指向 `drafts/hpc-derivation/design.md` 章节的引用只是指针，不作为核心结论的依据，图也不画它。
+- UTA 正在**从零重写**为独立 Rust 二进制，已进入**预开发阶段**：按切片实现，每个切片只创建在该切片里有真实调用方与运行期路径的 crate，其余落点登记在 `ARCHITECTURE.md` 第 2 节。改代码前先读 `ARCHITECTURE.md`；新增 crate 同时在 `xtask` 的依赖表里登记它的层。
+- 跨仓库契约是解释层的对外面：CLI 命令与双向长连接的消息协议。它们的 schema 与 CLI 由本仓库拥有并随 release 发布，OpenAlice 从 release artifact 消费。核心↔解释层的 JSON-RPC IDL 只在本仓库内部；核心↔集成的 IDL 随 release 发布给集成作者。
 
 ## 设计与实现的分界
 
-写进设计的，是两个独立实现者各写一份时必须得出同一外部行为的内容。满足任一条就在设计里定：
+设计文档编写与修改严格遵守 `.claude/rules/design-ssot.rule.md` 与 `ssot` skill：
 
-1. **不可逆的记录语义**：执行事实只追加、永不删除，记录的含义一旦落盘就改不掉。
-2. **跨进程契约的语义**：核心↔集成、核心↔解释层、核心↔程序宿主之间，以及解释层对下游的对外面，操作做什么、成功与失败分别留下什么记录、对外可见什么。
-3. **安全不变量**：不重复投放写、不可判定即 fail-closed、未知结果只以源头证据终结（带 principal 的决议只结束 UTA 自己的等待，不改写结果）、永不 heuristic。
-4. **不止一种合理答案、且外部可观测的行为**：由设计选定一个并写出理由，不留给实现各自发挥。
-
-以下留给实现，设计里不穷举、不据此判定设计是否完备：
-
-- 错误变体名、枚举的具体写法、消息字段与序列化形状。正文中出现的这类名字只是语义的指称，定形在 IDL 文件与存储 schema。
-- 模块内部的分工与数据结构、同一不变量的具体落点（哪个组件执行检查、事务怎么拆）。
-- 不违反任何不变量的多种等价做法（例如多目标操作整体拒绝还是逐项生效，只要设计未把它列为外部契约）。
-- 性能落点：`salsa` 还是手写节点图、`dyn` 还是静态分发、文本还是二进制编码（[core/00-design.md §4.8](design/core/00-design.md#48-rust-映射)）。
-
-审查或补充设计时先按这四条判断。只影响一个模块内部、写错了测试能测出来、以后改了不影响已有记录的，就是实现细节。文档自相矛盾不属于这两类，发现即修正。
+1. **三层分离**：
+   - `design/architecture/` 只放领域无关的权威、生命周期、连接与不变量，绝不引用业务单元。
+   - `design/business/` 只写业务单元如何通过架构连接运行与组合，不把常变的业务阈值、允许集合、冷却参数或上游协议字段搬进设计。
+   - 在连接签名与不变量不变时可替换的一切做法（SQLite 表结构与事务批次、进程内任务/通道分工、线缆帧格式、AST 节点枚举、启动/停止分步脚本、错误原因细分）均属实现，只写在代码与 `ARCHITECTURE.md` 中，不进 `design/`。
+2. **先立 VDM 框架，再填内容**：改设计时先定模块划分、`imports`/`exports` 连接签名与 `token` 占位并跑通 `ssot check design` 与 `ssot graph design`，再填隐式 `post`、状态 `inv`、显式场景与最小补充文字，最终必须同时通过 `ssot check design`（0 错误、0 警告）与 `jev` 模型反模式审查（0 检出）。
 
 ## 设计纪律
 
-- **设计中心优先**：任何新文档、类型、协议，先回答"它是核心设计中哪个代数的组合或解释结果"；答不上来就不写。集成与解释层是核心两侧的接口清洗，不是抽象的延伸；抽象只在核心里。
-- **UTA 不含业务**：策略、风控与审批规则的具体内容、下单组合方式、指标与告警在二次开发时组装，写在程序、规则文件或下游代码里，不进核心（[design/README.md §1.3](design/README.md#13-uta-不含业务)）。写侧需要基本类型，信封与 STS 才有概念：订单是预置的一个，可以再加。读侧是反向代理，载荷类型不影响核心。
-- **权威不在 UTA**：订单、持仓、余额、行情的原值都在上游，UTA 只有意图及其推进记录（[design/README.md §1.1](design/README.md#11-根本约束权威不在-uta)）。不写按上游记录列全字段的 `Order`/`Account`/`Position` 对象，那只是上游原值的拷贝；写侧基本类型只含核心代数实际读取的字段，订单状态、持仓、审批是日志 fold 或解释结果。上游只在集成里被消费，UTA 内不出现第二个读懂上游格式的地方。
-- **权威源头与生命周期**：写任何状态、记录或机制之前，先按 [design/README.md §1.2 权威源头与生命周期](design/README.md#12-权威源头与生命周期) 定出它的唯一源头、记录性质（自有事实 / 取回的副本 / 索引或意图）与生命周期锚点及确认者；非自有状态只向源头请求并等待结论；需要锁、标志位、仲裁、补偿或对账才能一致时，改划分而不是加机制。审查时逐项按这一节判断。
-- **抽象不外泄**：核心概念（位置、cursor、尝试、单据版本、能力三值等）不出现在解释层的对外面上；下游看到的是解释层定义的对外概念。解释层不持有状态，核心概念翻成对外说法的部分逐项手写，本来就是下游词汇的参数与字段由类型生成（解释层设计）。
-- **契约按意图定粒度**：核心↔集成的每个操作是 UTA 的一个意图（要什么），不照搬任何上游接口；上游要调几次、怎样编排是集成的事（[01-integration.md §3.1](design/core/04-boundary/01-integration.md#31-契约的粒度操作是-uta-的意图-设计)）。一个操作只有一个封闭结果，写意图至多一次上游写。不含调用、顺序、时间、跨记录状态的内容写成值（声明、记录映射）；含其中任一的是适配器代码，不进声明语言。
-- **证据纪律**：论断标 `[证据]`/`[设计]`/`[推断]`（含义见 [design/README.md §0.4](design/README.md#04-阅读约定)）；条件式命题不写成无条件结论；运行期才知道的量不冒充静态保证。域事实写在 [design/README.md §2](design/README.md#2-问题域)，新论断引用那里的条目。设计里没有未决项（[design/README.md §6.3](design/README.md#63-未决) 说明原因）：需要实测的量进验收，会推翻决定的观测进证伪条件，二者都写在拥有该决定的文档的评估节，编号全局唯一。
-- **新内容进它所属元素的文档**：一段内容写在它涉及的元素的最小共同上级文档里；只涉及某个元素内部的，写进该元素的文档；跨部分契约的每个操作写在实现它的核心组件文档。不按功能另建文档。只有能形成干净决定边界、核心没有它仍完整可运行的子系统才单独成文，并在核心实现该接口的组件文档里登记接口。核心之外的两侧（集成、解释层）也各自单独成文，只引用核心契约，不回头改核心。
-- **图是正文的视图**：图一律 Mermaid，内嵌在它所画元素的文档里，只画本层元素与直接相邻的外部元素；图只画正文已定的内容，图上出现正文没有的东西就是图错；改正文时同步改同一文档里的图。
-- **冲突处理**：发现文档之间或文档内部的冲突，核实后直接修改冲突内容，不用"以某处为准"来调和；历史交给 git。
-- **研究来源**：只读一手来源（论文、官方文档、pin 到 commit 的公开仓库），不凭记忆写。实验产物放 `/Users/mouriya/Ext/tmp/`（独立硬盘），不进仓库。
+- **权威不在 UTA**：订单、持仓、余额、行情的原值都在上游，UTA 只有意图及其推进记录（`design/architecture/README.md`）。不写按上游记录列全字段的 `Order`/`Account`/`Position` 权威对象；上游协议只在集成进程内消费。
+- **权威源头与生命周期**：写任何状态、记录或连接之前，先确定它的唯一权威源头、记录性质（自有事实 / 取回的副本 / 索引或意图）与生命周期开始/结束锚点及确认者；非自有状态只向源头请求并等待结论（如 `Source`CurrentCapability` 在离线时返回 `<Unavailable>`，`Effect`Resolve` 只以来源证据 `<Found> | <Absent>` 终结 `Effect`InDoubt`）。
+- **冲突处理**：发现文档之间或文档内部的冲突，核实后直接替换冲突内容，不留遗留层；历史交给 git。
 
 ## 仓库规则
 
 - 改文件前先 `git fetch origin` 与 `git status -sb`；保留他人未提交的改动，不 reset、不 stash、不覆盖。
-- 主分支 `main`。预开发阶段起，代码与文档改动都走分支、issue 与 PR 流程（issue 在前，PR 以 closing keyword 关联）。本地 clone 位于 `~/Ext/code/uta`。
+- 主分支 `main`。本地 clone 位于 `~/Ext/code/uta`。
 - Secrets 不进任何跟踪文件、日志或 PR 正文。
