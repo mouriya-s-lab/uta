@@ -11,15 +11,17 @@ imports
       CurrentCapability renamed CurrentCapability,
   from Observation
     types
-      RefHolder renamed RefHolder;
       LogPosition renamed LogPosition
     operations
+      AcquireRef renamed AcquireRef;
+      ReleaseRef renamed ReleaseRef;
       CheckBasis renamed CheckBasis,
   from Effect
     types
       LaneKey renamed LaneKey;
       AttemptId renamed AttemptId;
-      IntentPayload renamed IntentPayload
+      IntentPayload renamed IntentPayload;
+      Attempt renamed Attempt
     operations
       Prepare renamed Prepare
 exports
@@ -37,7 +39,7 @@ exports
     Revise: TicketRecord ==> <Applied> | <Rejected>;
     Decide: TicketId * VersionId * DecisionVerdict ==> DecisionOutcome;
     CloseTicket: TicketId ==> ();
-    Release: TicketId * AttemptId * RefHolder * SourceId * CapabilityKey ==> ReleaseOutcome
+    Release: TicketId * Attempt * SourceId * CapabilityKey ==> ReleaseOutcome
 definitions
 types
   -- 一张单据的身份
@@ -154,9 +156,9 @@ operations
        or ((not exists rec in set rng byId~ & rec.id = id)
            and byId = byId~);
 
-  -- 场景：在单据当前版本已获批准、观察依据新鲜且来源能力支持时，交入写边界并关闭单据
-  Release: TicketId * AttemptId * RefHolder * SourceId * CapabilityKey ==> ReleaseOutcome
-  Release(id, attemptId, holder, source, cap) ==
+  -- 场景：在单据当前版本已获批准、观察依据新鲜且来源能力支持时，登记观察引用、交入写边界并关闭单据
+  Release: TicketId * Attempt * SourceId * CapabilityKey ==> ReleaseOutcome
+  Release(id, attemptEntry, source, cap) ==
     let rec = ApprovedOpenTicket(id) in
       if rec = nil
       then return <Rejected>
@@ -165,14 +167,19 @@ operations
                cases CurrentCapability(source, cap):
                  <Unavailable>, <Unknown> -> return <Waiting>,
                  <Supported> ->
-                   cases Prepare(attemptId, holder, rec.lane, rec.intent, rec.basis, nil):
-                     <Blocked> -> return <Waiting>,
-                     <Rejected> ->
-                       (CloseTicket(id);
-                        return <Rejected>),
+                   cases AcquireRef(attemptEntry.holder, rec.basis):
+                     <Applied> ->
+                       cases Prepare(attemptEntry, nil):
+                         <Blocked> ->
+                           (ReleaseRef(attemptEntry.holder);
+                            return <Waiting>),
+                         others ->
+                           (CloseTicket(id);
+                            return attemptEntry.id)
+                       end,
                      others ->
                        (CloseTicket(id);
-                        return attemptId)
+                        return <Rejected>)
                    end,
                  others ->
                    (CloseTicket(id);

@@ -21,8 +21,6 @@ exports
     struct DeliveryItem;
     struct BasisStatus;
     struct ReadOutcome
-  functions
-    BasisValid: set of LogPosition * set of Entry * set of LogPosition -> BasisStatus
   operations
     Append: StreamId * Seq * EntryKind * ObsPayload * [LogPosition] ==> LogPosition;
     CheckBasis: set of LogPosition ==> BasisStatus;
@@ -82,19 +80,6 @@ state Journal of
   init j == j = mk_Journal({}, {}, {|->})
 end
 
-functions
-  -- 判定一组依据位置是否仍在保留边界之上且未被后续记录修正撤回；两个实现必须得出同一结论
-  BasisValid: set of LogPosition * set of Entry * set of LogPosition -> BasisStatus
-  BasisValid(basis, entries, retention) ==
-    if exists p in set basis &
-         (not exists e in set entries & e.pos = p)
-         or (exists b in set retention & b.stream = p.stream and p.seqNo < b.seqNo)
-    then <BeyondRetention>
-    elseif exists p in set basis &
-             exists e in set entries & e.supersedes = p
-    then <Retracted>
-    else <Fresh>;
-
 operations
   -- 在指定观察流追加一条记录并返回其位置
   Append(stream: StreamId, seqNo: Seq, kind: EntryKind, payload: ObsPayload, supersedes: [LogPosition]) pos: LogPosition
@@ -105,7 +90,14 @@ operations
   -- 查询一组依据位置在当前观察日志与保留边界下的有效性状态
   CheckBasis(basis: set of LogPosition) r: BasisStatus
   ext rd entries rd retention
-  post r = BasisValid(basis, entries, retention);
+  post let beyond = exists p in set basis &
+                      (not exists e in set entries & e.pos = p)
+                      or (exists b in set retention & b.stream = p.stream and p.seqNo < b.seqNo),
+           retracted = exists p in set basis &
+                         exists e in set entries & e.supersedes = p in
+         (beyond and r = <BeyondRetention>)
+         or (not beyond and retracted and r = <Retracted>)
+         or (not beyond and not retracted and r = <Fresh>);
 
   -- 为活跃对象登记需要保护的观察位置集合；若位置已低于保留边界则拒绝登记
   AcquireRef(holder: RefHolder, positions: set of LogPosition) r: <Applied> | <Rejected>

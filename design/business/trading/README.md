@@ -10,11 +10,8 @@
 
 ## 需求
 
-- 交易意图经起单、绑定版本审批后交入受控写边界执行（来源：受控交易执行要求），由 ``Trading`SubmitOrderIntent`` 走通。
-- 上游不支持原子改单时，改单意图不伪装成单次写，而是拆分为撤单与下单两张独立单据（来源：非原子改单安全要求），由 ``Trading`ReplaceOrder`` 走通。
-- 当通道因前序尝试结果未知而阻塞时，指向该阻塞头尝试的撤单可以越顶进入写边界以降低敞口（来源：通道阻塞风险释放要求），由 ``Trading`CancelBlockingOrder`` 走通。
-- 到达的订单观察若由来源证据归因于某次结果未知的本地尝试，则收敛该尝试为已生效（来源：被动归因收敛要求），由 ``Trading`AttributeObservation`` 走通。
+操作员或策略发起的下单、改单、撤阻塞头与成交回报归因，须在不伪造上游原子性与不产生重复下单的前提下完成闭环（来源：外部场所交易安全与审计要求，证据见附录 `evidence/venue-facts.md`），由 ``Trading`SubmitOrderIntent``、``Trading`ReplaceOrder``、``Trading`CancelBlockingOrder`` 与 ``Trading`AttributeObservation`` 走通。
 
 ## 为什么
 
-撤阻塞头准入写在 ``Trading`CancelBlockingOrder`` 而不写进 ``Effect``，因为只有交易撤单具备“减少在途敞口而不增加新资金占用”的业务性质，架构层 ``Effect`Prepare`` 只需校验显式传入的阻塞头集合。
+不选在本地自动把“先撤单再下单”封装成单个写尝试：两次外部写之间若发生崩溃或原单已在撤单前成交，单次尝试模型无法区分哪一步已在上游生效，会造成超额加仓。
