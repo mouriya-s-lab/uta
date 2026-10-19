@@ -7,9 +7,10 @@ exports
     SourceId;
     CapabilityKey;
     struct Verdict;
-    struct CapabilityStatus
+    struct CapabilityStatus;
+    struct CapabilityDecl
   operations
-    OpenSession: SourceId * map CapabilityKey to Verdict ==> ();
+    OpenSession: SourceId * set of CapabilityDecl ==> ();
     CloseSession: SourceId ==> ();
     CurrentCapability: SourceId * CapabilityKey ==> CapabilityStatus
 definitions
@@ -26,35 +27,43 @@ types
   -- 查询来源当前能力的结局：只有会话在线时才返回声明三值，离线时为不可用
   CapabilityStatus = Verdict | <Unavailable>;
 
-  -- 来源会话与最近一次握手声明的记录
+  -- 来源对单项能力的声明条目
+  CapabilityDecl ::
+    source  : SourceId       -- 声明所属的外部来源
+    cap     : CapabilityKey  -- 被声明的能力键
+    verdict : Verdict;       -- 来源给出的支持结论
+
+  -- 来源的在线会话集合与最近一次握手留下的能力声明副本
 state Sources of
-  live : set of SourceId  -- 当前会话在线的来源集合
-  declared : map SourceId to (map CapabilityKey to Verdict)  -- 每个来源最近一次握手留下的声明副本
-  inv mk_Sources(l, d) == l subset dom d
-  init s == s = mk_Sources({}, {|->})
+  live     : set of SourceId        -- 当前会话在线的来源集合
+  declared : set of CapabilityDecl  -- 最近握手留下的能力声明条目集合
+  inv mk_Sources(l, d) ==
+        forall s in set l & exists c in set d & c.source = s
+  init s == s = mk_Sources({}, {})
 end
 
 operations
-  -- 建立来源会话并记下本次握手的能力声明
-  OpenSession(source: SourceId, caps: map CapabilityKey to Verdict)
+  -- 建立来源会话并更新该来源的能力声明副本
+  OpenSession(source: SourceId, caps: set of CapabilityDecl)
   ext wr live wr declared
-  post live = live~ union {source}
-       and declared = declared~ ++ {source |-> caps};
+  post (exists c in set caps & c.source = source)
+       and live = live~ union {source}
+       and declared = {d | d in set declared~ & d.source <> source} union caps;
 
-  -- 结束来源会话；历史声明副本保留，但该来源不再属于在线集合
+  -- 结束来源会话；最近声明副本保留供离线查阅，但该来源不再属于在线集合
   CloseSession(source: SourceId)
   ext wr live
   post live = live~ \ {source};
 
-  -- 查询某来源此刻对某项能力的有效结论；离线时不以历史声明充当当前能力
+  -- 查询某来源此刻对某项能力的有效结论；离线时返回不可用，不以历史声明充当当前能力
   CurrentCapability(source: SourceId, cap: CapabilityKey) r: CapabilityStatus
   ext rd live rd declared
   post (source not in set live and r = <Unavailable>)
        or (source in set live
-           and cap in set dom declared(source)
-           and r = declared(source)(cap))
+           and exists c in set declared &
+                 c.source = source and c.cap = cap and r = c.verdict)
        or (source in set live
-           and cap not in set dom declared(source)
+           and (not exists c in set declared & c.source = source and c.cap = cap)
            and r = <Unsupported>);
 end Source
 ```

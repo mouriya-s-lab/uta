@@ -11,6 +11,7 @@ imports
       CurrentCapability renamed CurrentCapability,
   from Observation
     types
+      RefHolder renamed RefHolder;
       LogPosition renamed LogPosition,
   from Effect
     types
@@ -18,32 +19,35 @@ imports
       AttemptId renamed AttemptId;
       IntentPayload renamed IntentPayload;
       PrepareOutcome renamed PrepareOutcome
-    functions
-      Blockers renamed Blockers
     operations
+      LaneBlockers renamed LaneBlockers;
       Prepare renamed Prepare;
       Resolve renamed Resolve,
   from Ticket
     types
       TicketId renamed TicketId;
-      Principal renamed Principal
+      VersionId renamed VersionId;
+      Principal renamed Principal;
+      TicketRecord renamed TicketRecord;
+      ReleaseOutcome renamed ReleaseOutcome
     operations
       Draft renamed Draft;
+      Decide renamed Decide;
       Release renamed Release
 exports
   types
     ExecutionId;
     OrderId;
-    struct OrderOp;
+    struct FillStatus;
     struct FillObs;
     struct OrderObs
   functions
     EffectiveExecutions: set of FillObs -> set of FillObs;
     MaximalOrderStates: set of OrderObs * set of (OrderObs * OrderObs) -> set of OrderObs
   operations
-    SubmitOrderIntent: Principal * OrderOp * LaneKey * IntentPayload * set of LogPosition ==> TicketId;
-    ReplaceOrder: Principal * SourceId * CapabilityKey * LaneKey * IntentPayload * IntentPayload * set of LogPosition ==> seq of TicketId;
-    CancelBlockingOrder: LaneKey * AttemptId * IntentPayload * set of LogPosition ==> PrepareOutcome;
+    SubmitOrderIntent: TicketRecord * AttemptId * RefHolder * SourceId * CapabilityKey ==> ReleaseOutcome;
+    ReplaceOrder: TicketRecord * TicketRecord * SourceId * CapabilityKey ==> seq of TicketId;
+    CancelBlockingOrder: AttemptId * RefHolder * LaneKey * AttemptId * IntentPayload * set of LogPosition ==> PrepareOutcome;
     AttributeObservation: AttemptId * OrderObs ==> ()
 definitions
 types
@@ -53,52 +57,74 @@ types
   -- 上游订单身份
   OrderId = token;
 
-  -- 交易协议的四类写操作
-  OrderOp = <Place> | <Cancel> | <Replace> | <Close>;
+  -- 成交修订的有效性状态：有效成交或作废修订
+  FillStatus = <Valid> | <Voided>;
 
   -- 一条成交观察副本：用于按执行身份与修订号去重计数
   FillObs ::
     execId   : ExecutionId  -- 成交执行身份
     revision : nat          -- 修订号
-    voided   : bool         -- 是否为作废修订
+    status   : FillStatus   -- 有效或已作废
     qty      : nat;         -- 本笔执行的成交量
 
   -- 一条订单状态观察副本
   OrderObs ::
     orderId     : OrderId       -- 订单身份
     fromAttempt : [AttemptId]   -- 若由集成证明归属于某次本地尝试则填写
-    terminal    : bool;         -- 是否已处于上游终态
+    revision    : nat;          -- 来源给出的状态修订号或序号
 
 functions
-  -- 成交计数判定：同一执行身份取唯一最大修订且排除作废与同修订冲突
+  -- 判定有效成交集合：同一执行身份取唯一最大修订，排除作废项与同修订号内容冲突项
   EffectiveExecutions: set of FillObs -> set of FillObs
   EffectiveExecutions(fills) ==
-    is not yet specified;
+    {f | f in set fills &
+       f.status = <Valid>
+       and not exists g in set fills &
+             g.execId = f.execId and g.revision > f.revision
+       and not exists h in set fills &
+             h.execId = f.execId and h.revision = f.revision and h <> f};
 
-  -- 订单状态偏序判定：按来源定序证据求极大观察集合，不可比时不伪造唯一最新状态
+  -- 判定订单状态的极大观察集合：按来源定序偏序关系求极大元，不可比时保留多值而不伪造唯一最新状态
   MaximalOrderStates: set of OrderObs * set of (OrderObs * OrderObs) -> set of OrderObs
-  MaximalOrderStates(obs, newer) ==
-    is not yet specified;
+  MaximalOrderStates(obs, precedes) ==
+    {x | x in set obs &
+       not exists y in set obs &
+         y.orderId = x.orderId and y <> x and mk_(x, y) in set precedes};
 
 operations
-  -- 场景：按交易操作种类发起订单单据
-  SubmitOrderIntent: Principal * OrderOp * LaneKey * IntentPayload * set of LogPosition ==> TicketId
-  SubmitOrderIntent(actor, op, lane, intent, basis) ==
-    is not yet specified;
+  -- 场景：发起交易单据、完成版本批准并放行进入受控写边界
+  SubmitOrderIntent: TicketRecord * AttemptId * RefHolder * SourceId * CapabilityKey ==> ReleaseOutcome
+  SubmitOrderIntent(draft, attemptId, holder, source, cap) ==
+    (Draft(draft);
+     let - = Decide(draft.id, draft.version, <Approved>) in
+       return Release(draft.id, attemptId, holder, source, cap));
 
-  -- 场景：改单——来源支持原子 Replace 时起一张单据，不支持时组合 Cancel 与 Place 两张单据
-  ReplaceOrder: Principal * SourceId * CapabilityKey * LaneKey * IntentPayload * IntentPayload * set of LogPosition ==> seq of TicketId
-  ReplaceOrder(actor, source, replaceCap, lane, cancelIntent, placeIntent, basis) ==
-    is not yet specified;
+  -- 场景：改单——来源支持原子改单时只起一张单据，不支持时显式组合撤单与下单两张单据
+  ReplaceOrder: TicketRecord * TicketRecord * SourceId * CapabilityKey ==> seq of TicketId
+  ReplaceOrder(cancelOrReplaceDraft, placeDraft, source, replaceCap) ==
+    cases CurrentCapability(source, replaceCap):
+      <Supported> ->
+        (Draft(cancelOrReplaceDraft);
+         return [cancelOrReplaceDraft.id]),
+      others ->
+        (Draft(cancelOrReplaceDraft);
+         Draft(placeDraft);
+         return [cancelOrReplaceDraft.id, placeDraft.id])
+    end;
 
-  -- 场景：撤单目标精确指向当前通道阻塞头尝试时，传入该阻塞头越顶进入写边界
-  CancelBlockingOrder: LaneKey * AttemptId * IntentPayload * set of LogPosition ==> PrepareOutcome
-  CancelBlockingOrder(lane, blockingAttempt, cancelIntent, basis) ==
-    is not yet specified;
+  -- 场景：撤单目标精确指向当前通道阻塞头集合中的尝试时，携带当前阻塞头集合越顶进入写边界
+  CancelBlockingOrder: AttemptId * RefHolder * LaneKey * AttemptId * IntentPayload * set of LogPosition ==> PrepareOutcome
+  CancelBlockingOrder(cancelAttemptId, holder, lane, targetBlockingAttempt, cancelIntent, basis) ==
+    let currentBlockers = LaneBlockers(lane) in
+      if targetBlockingAttempt in set currentBlockers
+      then return Prepare(cancelAttemptId, holder, lane, cancelIntent, basis, currentBlockers)
+      else return <Blocked>;
 
-  -- 场景：带本地尝试归因的订单观察到达时，驱动 Effect`Resolve 收敛结果未知的尝试
+  -- 场景：当带本地尝试归因的订单观察到达时，作为 Found 证据收敛该尝试的结果未知状态
   AttributeObservation: AttemptId * OrderObs ==> ()
   AttributeObservation(attempt, obs) ==
-    is not yet specified;
+    if obs.fromAttempt = attempt
+    then Resolve(attempt, <Found>)
+    else skip;
 end Trading
 ```
