@@ -1,10 +1,10 @@
 # 效应
 
-负责把副作用请求记成值并交给注册的处理器，以及把效应侧的全部进展记成只追加的事件序列（``Request``）；负责核心内唯一的外部写发出点：从获准意图到持久屏障、发出、结果未知与证据收敛（``Write``）；不负责意图怎样形成与审批，不负责解释来源对写的回应意味着什么。
+负责把副作用请求记成 ``Request`EffectRequest`` 并交给经 ``Request`Register`` 登记的种类处理，以及把效应侧的全部进展记成只追加的 ``Request`Requests.events``（``Request``）；负责核心内唯一的外部写发出点：从获准的 ``Write`Intent`` 到 ``Write`Barrier``、发出、结果未知与证据收敛（``Write``）；不负责意图怎样形成与审批，不负责解释来源对写的回应意味着什么。
 
 ## 依据
 
-程序与下游需要请求核心预先不认识的副作用：下单、发通知、拉一次历史、调外部模型（来源：可编程派生要求，证据见附录 `evidence/integration-facts.md`）。所以 ``Request`EffectKind`` 由处理器注册而不由核心穷举，没有处理器的请求停在 ``Request`RequestStatus`` 的 `<Unhandled>` 而不是报错。
+``Program`` 与下游需要以 ``Request`EffectRequest`` 请求核心预先不认识的种类（来源：可编程派生要求，证据见附录 `evidence/integration-facts.md`）。所以 ``Request`EffectKind`` 由 ``Request`Register`` 登记而不由核心穷举，没有登记的种类的请求停在 ``Request`RequestStatus`` 的 `<Unhandled>` 而不是报错。
 
 请求随程序推进先持久化、处理在其后，不存在同步返回值；程序与重启恢复都只能读持久记录，而效应侧的事实不能被压缩或撤回（来源：可编程派生要求，证据见附录 `evidence/integration-facts.md`）。所以答复与写尝试的每次迁移都经 ``Request`Record`` 追加到 ``Request`Requests.events``，程序按位置 ``Request`ReadEvents`` 读回；事件序列不进观察日志。
 
@@ -22,9 +22,9 @@
 
 未过屏障的尝试留在 ``Write`BlockingHeads``：从 ``Write`Prepare`` 提交到 ``Write`Barrier`` 落盘之间有窗口，不占住通道，同通道第二张单据会在窗口内准入。它的出口是 ``Write`Expire``：到期或人工丢弃都走它，因为它确知未发出。
 
-效应事件归 ``Request`` 而不进 ``Observation``：观察日志可压缩、可撤回、有分代，事件序列三者都没有；不选让 ``Delivery`` 同时订阅两类流，那会让只为压缩缺口存在的投递逻辑背上永远不触发的分支。
+``Request`Requests.events`` 不进 ``Observation`Journal``：观察日志可经 ``Observation`AdvanceRetention`` 删、可经 ``Observation`Entry.supersedes`` 撤、有 ``Observation`LogPosition.epoch`` 分代，事件序列三者都没有；不选让 ``Delivery`` 同时订阅两类流，那会让只为 ``Delivery`DeliveryGap`` 存在的投递逻辑背上永远不触发的分支。
 
-`<Bypass>` 准入随单据受审而不是放行时的参数：运维确需越过阻塞时留下可审计的痕迹，审批者看得到它。
+``Write`Admission`` 的 `<Bypass>` 随 ``Ticket`Proposal.admission`` 受审而不是放行时的参数：越过阻塞的决定留在裁决记录里，审批者看得到它。
 
 ## 语义
 

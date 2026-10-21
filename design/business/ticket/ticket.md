@@ -22,7 +22,8 @@ imports
     types
       RequestRef renamed RequestRef;
       EffectKind renamed EffectKind;
-      Principal renamed Principal
+      Principal renamed Principal;
+      Note renamed Note
     operations
       RequestOf renamed RequestOf;
       StatusOf renamed StatusOf;
@@ -55,7 +56,8 @@ exports
     struct ReleaseOutcome
   functions
     Gate: TicketRecord * bool * Alignment * Time * SessionVerdict -> GateVerdict;
-    ToIntent: TicketRecord -> Intent
+    ToIntent: TicketRecord -> Intent;
+    Progress: TicketRecord -> Note
   operations
     Draft: Proposal ==> ();
     Revise: TicketId * Principal * IntentPayload ==> ();
@@ -152,6 +154,10 @@ state Tickets of
 end
 
 functions
+  -- 判定：一张单据此刻的状态记成一条记事；两个实现必须写出同一条
+  Progress: TicketRecord -> Note
+  Progress(rec) == mk_token(mk_(rec.id, rec.status));
+
   -- 判定：放行门。已关闭、到期、来源明确不支持依次优先；送审中的当前版本已批准、依据新鲜、必要项全部对齐、来源此刻支持才开门
   Gate: TicketRecord * bool * Alignment * Time * SessionVerdict -> GateVerdict
   Gate(rec, fresh, align, now, cap) ==
@@ -245,25 +251,25 @@ operations
   -- 场景：放行门。到期或来源明确不支持即关单并记事；门未开或通道不可准入即等待；准入成功则以准备记录关单并记事
   Release: TicketId * Alignment * Time ==> ReleaseOutcome
   Release(id, align, now) ==
-    let rec = byId(id) in
-      cases Gate(rec, CheckBasis(rec.basis), align, now, SessionCapability(rec.source, rec.cap)):
-        <AlreadyClosed> -> return <Closed>,
-        <Overdue> -> (Close(id, <Expired>);
-                      Record(rec.request, mk_token(mk_(id, <Expired>)));
-                      return <Closed>),
-        <Unsupported> -> (Close(id, <DecisionRejected>);
-                          Record(rec.request, mk_token(mk_(id, <DecisionRejected>)));
-                          return <Closed>),
-        <Hold> -> return <Waiting>,
-        others ->
-          cases Prepare(ToIntent(rec)):
-            <Unmapped> -> return <Waiting>,
-            <LaneBlocked> -> return <Waiting>,
-            ref -> (Close(id, mk_Prepared(ref));
-                    Record(rec.request, mk_token(mk_(id, ref)));
-                    return ref)
-          end
-      end
+    cases Gate(byId(id), CheckBasis(byId(id).basis), align, now,
+               SessionCapability(byId(id).source, byId(id).cap)):
+      <AlreadyClosed> -> return <Closed>,
+      <Overdue> -> (Close(id, <Expired>);
+                    Record(byId(id).request, Progress(byId(id)));
+                    return <Closed>),
+      <Unsupported> -> (Close(id, <DecisionRejected>);
+                        Record(byId(id).request, Progress(byId(id)));
+                        return <Closed>),
+      <Hold> -> return <Waiting>,
+      others ->
+        cases Prepare(ToIntent(byId(id))):
+          <Unmapped> -> return <Waiting>,
+          <LaneBlocked> -> return <Waiting>,
+          ref -> (Close(id, mk_Prepared(ref));
+                  Record(byId(id).request, Progress(byId(id)));
+                  return ref)
+        end
+    end
   pre id in set dom byId;
 
   -- 场景：写处理器接手一条等待中的请求。以请求发出者为负责人、请求依据为依据起草并送审，答复以单据身份回填；请求不存在、不在等待中或种类不符则不接手

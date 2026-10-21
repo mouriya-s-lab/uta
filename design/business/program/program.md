@@ -144,20 +144,35 @@ operations
     return ReadEvents(loaded(prog).checkpoint.reqCursor)
   pre prog in set dom loaded;
 
-  -- 场景：推进一步。新检查点的位置登记保护成功后，记下检查点、确认本次消费的输入流游标、追加派生记录、以装载人身份发出请求；登记被拒则本步无效
+  -- 场景：发布本步的派生值到程序的输出流；本步没有派生值则不追加
+  Publish: ProgramId * Step ==> ()
+  Publish(prog, step) ==
+    cases step.derived:
+      nil -> skip,
+      fields -> let - = Append(loaded(prog).output, mk_Decoded(nil, fields), nil, step.supersedes) in skip
+    end
+  pre prog in set dom loaded
+      and (step.supersedes <> nil => step.supersedes.stream = loaded(prog).output);
+
+  -- 场景：以装载人身份发出本步的请求；本步没有请求则不发出
+  Forward: ProgramId * [EffectRequest] ==> ()
+  Forward(prog, req) ==
+    cases req:
+      nil -> skip,
+      r -> let - = Emit(mu(r, member |-> loaded(prog).loadedBy)) in skip
+    end
+  pre prog in set dom loaded;
+
+  -- 场景：推进一步——新检查点经 AcquireRef 受保护后，依次经 Keep、Ack、Publish、Forward 生效；未受保护则本步无效
   Advance: ProgramId * StreamId * Step ==> ()
   Advance(prog, input, step) ==
-    let l = loaded(prog) in
-      cases AcquireRef(l.holder, Protected(step.next)):
-        <Rejected> -> skip,
-        others ->
-          (Keep(prog, step.next);
-           Ack(l.subscription, input, step.next.cursors(input));
-           if step.derived <> nil
-           then let - = Append(l.output, mk_Decoded(nil, step.derived), nil, step.supersedes) in skip;
-           if step.request <> nil
-           then let - = Emit(mu(step.request, member |-> l.loadedBy)) in skip)
-      end
+    cases AcquireRef(loaded(prog).holder, Protected(step.next)):
+      <Rejected> -> skip,
+      others -> (Keep(prog, step.next);
+                 Ack(loaded(prog).subscription, input, step.next.cursors(input));
+                 Publish(prog, step);
+                 Forward(prog, step.request))
+    end
   pre prog in set dom loaded and input in set loaded(prog).inputs
       and dom step.next.cursors = loaded(prog).inputs
       and step.next.reqCursor >= loaded(prog).checkpoint.reqCursor

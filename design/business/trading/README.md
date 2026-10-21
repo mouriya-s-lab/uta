@@ -1,6 +1,6 @@
 # 交易
 
-负责交易写的操作种类、成交与订单状态观察的归并判定，以及改单在不同来源能力下的组合；不负责单据审批与写边界的推进。
+负责 ``Trading`EffectiveExecutions`` 与 ``Trading`MaximalOrderStates`` 两个判定，以及 ``Trading`ReplaceOrder`` 与 ``Trading`DraftCancelOfHead`` 两条起 ``Ticket`Proposal`` 的路径；不负责 ``Ticket`Decide`` 与 ``Write`Barrier`` 之后的任何事。
 
 ## 依据
 
@@ -16,7 +16,7 @@
 
 ## 为什么
 
-``Trading`OperationKind`` 随 ``Trading`TradeDraft`` 进入每张交易单据的起草，``Trading`ReplaceOrder`` 与 ``Trading`DraftCancelOfHead`` 按它核对单据种类；它是封闭集合：下单、撤单、改单、平仓之外的写不是交易写，新增一种是协议扩展，不是业务参数。不选从意图载荷里推断种类：载荷对核心不透明。
+``Trading`OperationKind`` 由起草方随 ``Trading`TradeDraft`` 给出而不从 ``Mapping`IntentPayload`` 推断：载荷对核心不透明，核心读不出它是下单还是撤单。它是封闭集合：下单、撤单、改单、平仓之外的写不是交易写，新增一种要改映射与集成，是协议扩展，不是业务参数。
 
 成交归并与订单定序写成显式纯函数：两个实现必须得出同一集合，否则对账结论因实现而异。
 

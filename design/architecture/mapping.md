@@ -28,6 +28,8 @@ exports
     struct EncodeOutcome;
     struct Probe;
     struct Evidence
+  functions
+    StreamOf: Envelope -> StreamId
   operations
     Install: SourceId * MappingId ==> ();
     Decode: Envelope ==> [Decoded];
@@ -80,6 +82,11 @@ state Mappings of
   init m == m = mk_Mappings({|->})
 end
 
+functions
+  -- 判定：一封信封落在哪条逻辑流上——该来源的外部来头加流名
+  StreamOf: Envelope -> StreamId
+  StreamOf(env) == mk_StreamId(mk_External(env.source), env.stream);
+
 operations
   -- 装载来源的当前映射：替换先前的映射，不保留旧版本
   Install(source: SourceId, mapping: MappingId)
@@ -91,11 +98,10 @@ operations
   ext rd current
   post env.source not in set dom current => r = nil;
 
-  -- 场景：集成交来一封信封时，先解码再追加到该来源该流上；解不出的也追加，原文保留
+  -- 场景：入账——集成交来的信封经 Decode 后经 Append 进入它所属的流；解不出的也进入，原文保留
   Ingest: Envelope ==> LogPosition
   Ingest(env) ==
-    return Append(mk_StreamId(mk_External(env.source), env.stream),
-                  Decode(env), env.raw, nil);
+    return Append(StreamOf(env), Decode(env), env.raw, nil);
 
   -- 按来源当前映射把意图连同调用方键编成请求并导出通道；没有映射的来源一律编不出
   Encode(req: EncodeRequest) r: EncodeOutcome

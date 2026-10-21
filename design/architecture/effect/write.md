@@ -28,6 +28,8 @@ imports
       Encode renamed Encode;
       ClassifyEvidence renamed ClassifyEvidence,
   from Request
+    types
+      Note renamed Note
     operations
       Record renamed Record
 exports
@@ -45,6 +47,7 @@ exports
     struct Reply
   functions
     KeyOf: AttemptRef -> ClientKey;
+    Progress: Attempt -> Note;
     BlockingHeads: set of Attempt * LaneKey -> set of Attempt
   operations
     Prepare: Intent ==> PrepareOutcome;
@@ -130,6 +133,10 @@ functions
   KeyOf: AttemptRef -> ClientKey
   KeyOf(ref) == mk_token(ref);
 
+  -- 判定：一次尝试此刻在两根轴上的位置记成一条记事；两个实现必须写出同一条
+  Progress: Attempt -> Note
+  Progress(a) == mk_token(mk_(a.ref, a.barriered, a.waiting, a.outcome));
+
   -- 判定：某通道的阻塞头集合——等待仍为 Active 的尝试，不论是否已过屏障
   BlockingHeads: set of Attempt * LaneKey -> set of Attempt
   BlockingHeads(as, lane) ==
@@ -179,11 +186,11 @@ operations
       and not attempts(ref).barriered and attempts(ref).waiting = <Active>
   post attempts = attempts~ ++ {ref |-> mu(attempts~(ref), waiting |-> <Expired>)};
 
-  -- 场景：终止一个未过屏障的尝试并记事；到期与人工丢弃走同一出口
+  -- 场景：未过屏障的尝试走到出口——经 MarkExpired 离开阻塞头，再经 Record 对程序可见；到期与人工丢弃同一出口
   Expire: AttemptRef ==> ()
   Expire(ref) ==
     (MarkExpired(ref);
-     Record(nil, mk_token(mk_(ref, <Expired>))))
+     Record(nil, Progress(attempts(ref))))
   pre ref in set dom attempts
       and not attempts(ref).barriered and attempts(ref).waiting = <Active>;
 
@@ -195,7 +202,7 @@ operations
       then (Expire(ref); return <Expired>)
       elseif SessionCapability(a.intent.source, a.intent.cap) = <Supported>
       then (Seal(ref);
-            Record(nil, mk_token(mk_(ref, <Sent>)));
+            Record(nil, Progress(attempts(ref)));
             return <Sent>)
       else return <Waiting>
   pre ref in set dom attempts
@@ -211,11 +218,11 @@ operations
                      waiting |-> if reply = <NoResponse> then <Active> else <Finished>,
                      outcome |-> if reply = <NoResponse> then <Unknown> else reply)};
 
-  -- 场景：集成对已过屏障尝试回复后记录并记事
+  -- 场景：集成的回复到达——经 MarkReply 进入两根轴，再经 Record 对程序可见
   CompleteSend: AttemptRef * Reply ==> ()
   CompleteSend(ref, reply) ==
     (MarkReply(ref, reply);
-     Record(nil, mk_token(mk_(ref, reply))))
+     Record(nil, Progress(attempts(ref))))
   pre ref in set dom attempts
       and attempts(ref).barriered and attempts(ref).outcome = <Pending>;
 
@@ -231,15 +238,14 @@ operations
                              waiting |-> if attempts~(ref).waiting = <Active>
                                          then <Finished> else attempts~(ref).waiting)});
 
-  -- 场景：以证据收敛并记事；未查清不记事
+  -- 场景：取证结论到达——经 MarkEvidence 收敛，再经 Record 对程序可见
   Resolve: AttemptRef * Evidence ==> ()
   Resolve(ref, evidence) ==
     (MarkEvidence(ref, evidence);
-     if evidence <> <Inconclusive>
-     then Record(nil, mk_token(mk_(ref, evidence))))
+     Record(nil, Progress(attempts(ref))))
   pre ref in set dom attempts and attempts(ref).outcome = <Unknown>;
 
-  -- 场景：主动取证。把回读原文连同本尝试的调用方键交给映射分类，再以结论收敛
+  -- 场景：主动取证——回读原文连同本尝试的调用方键经 ClassifyEvidence 得出结论，再经 Resolve 收敛
   ProbeAttempt: AttemptRef * RawPayload ==> Evidence
   ProbeAttempt(ref, raw) ==
     let ev = ClassifyEvidence(mk_Probe(attempts(ref).intent.source, KeyOf(ref), raw)) in
@@ -261,11 +267,11 @@ operations
       and attempts(ref).waiting = <Active> and attempts(ref).outcome = <Unknown>
   post attempts = attempts~ ++ {ref |-> mu(attempts~(ref), waiting |-> <Abandoned>)};
 
-  -- 场景：放弃等待并记事
+  -- 场景：放弃等待——经 MarkAbandoned 离开阻塞头，再经 Record 对程序可见
   Abandon: AttemptRef ==> ()
   Abandon(ref) ==
     (MarkAbandoned(ref);
-     Record(nil, mk_token(mk_(ref, <Abandoned>))))
+     Record(nil, Progress(attempts(ref))))
   pre ref in set dom attempts
       and attempts(ref).waiting = <Active> and attempts(ref).outcome = <Unknown>;
 

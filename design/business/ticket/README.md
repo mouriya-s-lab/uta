@@ -8,7 +8,7 @@
 
 从起单到放行可能相隔很久，放行时依据的观察可能已被撤回、压缩或落后于流末，而来源能力可能已变（来源：审批并发约束，证据见附录 `evidence/approval-facts.md`）。所以 ``Ticket`Release`` 在放行时刻重新核对 ``Observation`CheckBasis``、调用方给出的 ``Ticket`Alignment`` 与 ``Source`SessionCapability``：依据失效或任一必要项不对齐即不放行；能力未确认或离线时等待而不否决，来源已明确不支持时否决关单；购买力、可交易性等资金面项只作为读入的对账项，核心不自行判断。
 
-谁有权裁决、哪些对账项必须对齐、是否自动批准，会随需求改变（来源：审批并发约束，证据见附录 `evidence/approval-facts.md`）。所以 ``Ticket`Decision.decider`` 只记录是谁，``Ticket`Alignment`` 只记录对齐与否；权限与必要项留在代码里。
+谁能作出 ``Ticket`Decision``、``Ticket`Alignment`` 里哪些 ``Ticket`CheckKey`` 必须对齐、是否自动批准，会随需求改变（来源：审批并发约束，证据见附录 `evidence/approval-facts.md`）。所以 ``Ticket`Decision.decider`` 只记录是谁，``Ticket`Alignment`` 只记录未对齐的项；谁有权、哪些项必要，不进 ``Ticket``。
 
 ## 需求
 
@@ -18,7 +18,7 @@
 
 ## 为什么
 
-不选让 ``Trading`` 与 ``Program`` 各自记录 ``Ticket`Decision``：一张单据的裁决会散在两处。也不选把 ``Ticket`Decision`` 放进 ``Write``：``Write`Intent`` 只需要一个获准的意图。
+不选让 ``Trading`` 与 ``Program`` 各自记录 ``Ticket`Decision``：一张单据的裁决会散在两处。也不选把 ``Ticket`Decision`` 放进 ``Write``：``Write`Intent`` 只带载荷与 ``Write`Intent.admission``，不带裁决。
 
 ``Ticket`Proposal.admission`` 随单据受审：批准的是带准入方式的意图，放行时不再另给参数。不选把准入方式作为 ``Ticket`Release`` 的参数：审批者批准的普通单据会在放行时被改成绕过。
 
