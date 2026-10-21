@@ -11,7 +11,7 @@
 ## 需求
 
 - 改单按来源能力分流为一张或两张单据：``Trading`ReplaceOrder``。
-- 带本地调用方键回声的观察到达时，把它作为证据收敛对应尝试的结果未知状态：``Trading`AttributeObservation``。
+- 通道被结果未知的尝试阻塞时，起草指向该阻塞头的撤单单据，经单据审批后以撤阻塞头方式放行：``Trading`DraftCancelOfHead``。
 
 ## 为什么
 
@@ -21,4 +21,4 @@
 
 ## 语义
 
-``Trading`AttributeObservation`` 由效应侧在带 ``Source`ClientKey`` 的观察记录追加后的同一次提交中调用；归因只补结果，不恢复已放弃的等待。
+撤阻塞头的单据经 ``Ticket`Release`` 以 ``Write`Admission`` 的 `<CancelHead>` 放行；撤单尝试本身的结果不决议它所指向的阻塞头，阻塞头仍由 ``Write`Resolve``、``Write`Attribute`` 或 ``Write`Abandon`` 收敛。

@@ -5,25 +5,24 @@ module Request
 imports
   from Observation
     types
-      LogPosition renamed LogPosition,
-  from Session
-    types
-      Principal renamed Principal
+      LogPosition renamed LogPosition
 exports
   types
     RequestRef;
     EffectKind;
+    Principal;
     Payload;
-    Answer;
+    struct Answer;
     struct HandlerClass;
     struct EffectRequest;
     struct Answered;
-    struct Status
+    struct RequestStatus
   operations
     Register: EffectKind * HandlerClass ==> ();
     Emit: EffectRequest ==> RequestRef;
     Respond: RequestRef * Answer ==> ();
-    StatusOf: RequestRef ==> [Status];
+    StatusOf: RequestRef ==> [RequestStatus];
+    RequestOf: RequestRef ==> [EffectRequest];
     Pending: EffectKind ==> set of RequestRef
 definitions
 types
@@ -32,6 +31,9 @@ types
 
   -- 效应种类；由处理器注册，核心不穷举
   EffectKind = token;
+
+  -- 经解释层进入核心的行动主体身份；核心只作相等比较，不认证
+  Principal = token;
 
   -- 请求载荷；核心不解释，交给注册了该种类的处理器
   Payload = token;
@@ -50,15 +52,16 @@ types
     member  : Principal;          -- 以谁的身份发出
 
   -- 已答复
-  Answered :: answer : Answer;
+  Answered ::
+    answer : Answer;  -- 处理器的答复
 
   -- 请求状态：等待处理器、无处理器、已答复
-  Status = <Pending> | <Unhandled> | Answered;
+  RequestStatus = <Pending> | <Unhandled> | Answered;
 
   -- 一条请求流记录
   Record ::
     request : EffectRequest  -- 请求本身
-    status  : Status;        -- 当前状态
+    status  : RequestStatus; -- 当前状态
 
   -- 请求表：处理器注册与请求流
 state Requests of
@@ -71,19 +74,41 @@ state Requests of
 end
 
 operations
-  Register: EffectKind * HandlerClass ==> ()
-  Register(kind, class) == is not yet specified;
+  -- 注册某种类的处理器；同一种类再次注册以后者为准
+  Register(kind: EffectKind, class: HandlerClass)
+  ext wr handlers
+  post handlers = handlers~ ++ {kind |-> class};
 
-  Emit: EffectRequest ==> RequestRef
-  Emit(req) == is not yet specified;
+  -- 追加一条请求：有处理器则等待处理，否则停在无处理器；两者都不是错误
+  Emit(req: EffectRequest) ref: RequestRef
+  ext rd handlers wr log
+  post ref not in set dom log~
+       and log = log~ munion
+             {ref |-> mk_Record(req, if req.kind in set dom handlers
+                                     then <Pending> else <Unhandled>)};
 
-  Respond: RequestRef * Answer ==> ()
-  Respond(ref, answer) == is not yet specified;
+  -- 记录处理器对一条等待中请求的答复
+  Respond(ref: RequestRef, answer: Answer)
+  ext wr log
+  pre ref in set dom log and log(ref).status = <Pending>
+  post log = log~ ++ {ref |-> mu(log~(ref), status |-> mk_Answered(answer))};
 
-  StatusOf: RequestRef ==> [Status]
-  StatusOf(ref) == is not yet specified;
+  -- 查询请求状态；不存在的请求为空
+  StatusOf(ref: RequestRef) r: [RequestStatus]
+  ext rd log
+  post (ref in set dom log and r = log(ref).status)
+       or (ref not in set dom log and r = nil);
 
-  Pending: EffectKind ==> set of RequestRef
-  Pending(kind) == is not yet specified;
+  -- 查询请求本身；不存在的请求为空
+  RequestOf(ref: RequestRef) r: [EffectRequest]
+  ext rd log
+  post (ref in set dom log and r = log(ref).request)
+       or (ref not in set dom log and r = nil);
+
+  -- 某种类下全部等待处理的请求
+  Pending(kind: EffectKind) r: set of RequestRef
+  ext rd log
+  post r = {ref | ref in set dom log &
+              log(ref).request.kind = kind and log(ref).status = <Pending>};
 end Request
 ```

@@ -6,7 +6,6 @@ imports
   from Observation
     types
       StreamId renamed StreamId;
-      LogPosition renamed LogPosition;
       Entry renamed Entry
     operations
       ReadFrom renamed ReadFrom;
@@ -20,8 +19,9 @@ exports
   operations
     Subscribe: set of StreamId ==> SubscriptionId;
     Unsubscribe: SubscriptionId ==> ();
+    RecordGap: SubscriptionId * DeliveryGap ==> ();
     Deliver: SubscriptionId * StreamId ==> seq of Item;
-    Ack: SubscriptionId * LogPosition ==> ();
+    Ack: SubscriptionId * StreamId * nat ==> ();
     CursorOf: SubscriptionId * StreamId ==> nat
 definitions
 types
@@ -50,24 +50,60 @@ state Subscriptions of
         forall id in set dom s &
           dom s(id).cursor = s(id).streams
           and forall g in set s(id).gaps &
-                g.stream in set s(id).streams and s(id).cursor(g.stream) < g.high
+                g.stream in set s(id).streams
+                and g.low <= g.high
+                and s(id).cursor(g.stream) < g.high
   init s == s = mk_Subscriptions({|->})
 end
 
 operations
-  Subscribe: set of StreamId ==> SubscriptionId
-  Subscribe(streams) == is not yet specified;
+  -- 建立订阅：新身份，各流游标从 0 起，无缺口
+  Subscribe(streams: set of StreamId) id: SubscriptionId
+  ext wr subs
+  post id not in set dom subs~
+       and subs = subs~ munion {id |-> mk_Subscription(streams, {s |-> 0 | s in set streams}, {})};
 
-  Unsubscribe: SubscriptionId ==> ()
-  Unsubscribe(id) == is not yet specified;
+  -- 删除订阅；删除两次与一次效果相同
+  Unsubscribe(id: SubscriptionId)
+  ext wr subs
+  post subs = {id} <-: subs~;
 
+  -- 在跳过之前把缺口写在订阅上
+  RecordGap(id: SubscriptionId, gap: DeliveryGap)
+  ext wr subs
+  pre id in set dom subs
+      and gap.stream in set subs(id).streams
+      and gap.low <= gap.high
+      and subs(id).cursor(gap.stream) < gap.high
+  post subs = subs~ ++ {id |-> mu(subs~(id), gaps |-> subs~(id).gaps union {gap})};
+
+  -- 场景：交出某流上游标之后的记录；游标已落入保留边界之下时先写下并交出缺口，再交出边界起的记录
   Deliver: SubscriptionId * StreamId ==> seq of Item
-  Deliver(id, stream) == is not yet specified;
+  Deliver(id, stream) ==
+    let cur = subs(id).cursor(stream), bound = RetentionOf(stream) in
+      if cur + 1 < bound
+      then let gap = mk_DeliveryGap(stream, cur + 1, bound - 1) in
+             (RecordGap(id, gap);
+              return [gap] ^ ReadFrom(stream, bound - 1))
+      else return ReadFrom(stream, cur)
+  pre id in set dom subs and stream in set subs(id).streams;
 
-  Ack: SubscriptionId * LogPosition ==> ()
-  Ack(id, pos) == is not yet specified;
+  -- 确认某流消费到某位置号：游标只前进，被越过的缺口随之消失
+  Ack(id: SubscriptionId, stream: StreamId, seqNo: nat)
+  ext wr subs
+  pre id in set dom subs
+      and stream in set subs(id).streams
+      and seqNo >= subs(id).cursor(stream)
+  post subs = subs~ ++
+         {id |-> mu(subs~(id),
+                    cursor |-> subs~(id).cursor ++ {stream |-> seqNo},
+                    gaps |-> {g | g in set subs~(id).gaps &
+                                g.stream <> stream or g.high > seqNo})};
 
-  CursorOf: SubscriptionId * StreamId ==> nat
-  CursorOf(id, stream) == is not yet specified;
+  -- 某订阅在某流上最后确认的位置号
+  CursorOf(id: SubscriptionId, stream: StreamId) r: nat
+  ext rd subs
+  pre id in set dom subs and stream in set subs(id).streams
+  post r = subs(id).cursor(stream);
 end Delivery
 ```

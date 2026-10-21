@@ -8,7 +8,7 @@ exports
     StreamName;
     CapabilityKey;
     InstrumentId;
-    ClientKey;
+    struct ClientKey;
     RawPayload;
     struct Verdict;
     struct SessionVerdict;
@@ -64,16 +64,32 @@ state Sources of
 end
 
 operations
-  OpenSession: SourceId * Declaration ==> ()
-  OpenSession(source, decl) == is not yet specified;
+  -- 建立来源会话：会话有效声明与最近声明都换成本次握手交出的声明
+  OpenSession(source: SourceId, decl: Declaration)
+  ext wr live wr latest
+  post live = live~ ++ {source |-> decl}
+       and latest = latest~ ++ {source |-> decl};
 
-  CloseSession: SourceId ==> ()
-  CloseSession(source) == is not yet specified;
+  -- 结束来源会话：会话有效声明消失，最近声明保留供离线查阅
+  CloseSession(source: SourceId)
+  ext wr live
+  post live = {source} <-: live~;
 
-  SessionCapability: SourceId * CapabilityKey ==> SessionVerdict
-  SessionCapability(source, cap) == is not yet specified;
+  -- 查询会话有效能力：离线为不可用；在线而本次握手未声明的能力为未确认
+  SessionCapability(source: SourceId, cap: CapabilityKey) r: SessionVerdict
+  ext rd live
+  post (source not in set dom live and r = <Unavailable>)
+       or (source in set dom live
+           and cap in set dom live(source).capabilities
+           and r = live(source).capabilities(cap))
+       or (source in set dom live
+           and cap not in set dom live(source).capabilities
+           and r = <Unknown>);
 
-  LatestStreams: SourceId ==> set of StreamDecl
-  LatestStreams(source) == is not yet specified;
+  -- 最近声明的流集合；从未握手的来源为空集
+  LatestStreams(source: SourceId) r: set of StreamDecl
+  ext rd latest
+  post (source in set dom latest and r = latest(source).streams)
+       or (source not in set dom latest and r = {});
 end Source
 ```

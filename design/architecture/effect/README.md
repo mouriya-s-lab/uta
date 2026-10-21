@@ -4,7 +4,7 @@
 
 ## 依据
 
-程序与下游需要请求核心预先不认识的副作用：下单、发通知、拉一次历史、调外部模型（来源：可编程派生要求，证据见附录 `evidence/integration-facts.md`）。所以 ``Request`EffectKind`` 由处理器注册而不由核心穷举，处理器注册时声明 ``Request`HandlerClass``，没有处理器的请求停在 ``Request`Status`` 的 `<Unhandled>` 而不是报错。
+程序与下游需要请求核心预先不认识的副作用：下单、发通知、拉一次历史、调外部模型（来源：可编程派生要求，证据见附录 `evidence/integration-facts.md`）。所以 ``Request`EffectKind`` 由处理器注册而不由核心穷举，处理器注册时声明 ``Request`HandlerClass``，没有处理器的请求停在 ``Request`RequestStatus`` 的 `<Unhandled>` 而不是报错。
 
 外部写不可逆，且写请求可能在到达上游之后、回执返回之前丢失回执（来源：外部场所能力调查，证据见附录 `evidence/venue-facts.md`）。所以 ``Write`Barrier`` 在调用集成之前持久落下屏障，``Write`Attempt.barriered`` 为假的尝试确知未发出，为真而无后继的尝试只能进入 ``Write`Outcome`` 的 `<Unknown>`，由 ``Write`Resolve`` 与 ``Write`Attribute`` 以证据收敛，核心从不自动重发。
 

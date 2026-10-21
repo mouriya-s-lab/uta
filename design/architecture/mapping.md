@@ -8,45 +8,54 @@ imports
       SourceId renamed SourceId;
       StreamName renamed StreamName;
       CapabilityKey renamed CapabilityKey;
-      InstrumentId renamed InstrumentId;
-      ClientKey renamed ClientKey;
       RawPayload renamed RawPayload;
       Verdict renamed Verdict;
       SessionVerdict renamed SessionVerdict
     operations
-      SessionCapability renamed SessionCapability
+      SessionCapability renamed SessionCapability;
+      LatestStreams renamed LatestStreams,
+  from Observation
+    types
+      Decoded renamed Decoded;
+      External renamed External;
+      StreamId renamed StreamId;
+      LogPosition renamed LogPosition
+    operations
+      IsOpen renamed IsOpen;
+      Append renamed Append;
+      Cover renamed Cover
 exports
   types
     MappingId;
     LaneKey;
     IntentPayload;
-    Fields;
     struct Envelope;
-    struct Decoded;
     struct DecodeOutcome;
+    struct EncodeRequest;
     struct Encoded;
     struct EncodeOutcome;
+    struct Probe;
     struct Evidence;
     struct CapabilityStatus
+  functions
+    Combine: Verdict * SessionVerdict -> CapabilityStatus
   operations
     Install: SourceId * MappingId * map CapabilityKey to Verdict ==> ();
     Decode: Envelope ==> DecodeOutcome;
-    Encode: SourceId * IntentPayload ==> EncodeOutcome;
-    ClassifyEvidence: SourceId * RawPayload ==> Evidence;
+    Ingest: Envelope * StreamId ==> [LogPosition];
+    Encode: EncodeRequest ==> EncodeOutcome;
+    ClassifyEvidence: Probe ==> Evidence;
     CurrentCapability: SourceId * CapabilityKey ==> CapabilityStatus
 definitions
 types
   -- 一份映射定义的身份；核心装载，使用方不读结构
   MappingId = token;
 
-  -- 写通道键：后续写的语义依赖前一笔结果的范围；由映射从意图导出
+  -- 写通道键：后续写的语义依赖前一笔结果的范围；由映射从意图按品种导出
   LaneKey = token;
 
   -- 核心内表达的一次写意图载荷；由业务构造，映射负责编码
   IntentPayload = token;
-
-  -- 映射从来源原文抽出的、供核心与业务使用的字段集
-  Fields = token;
 
   -- 集成交给核心的信封：固定头加来源原文
   Envelope ::
@@ -54,15 +63,13 @@ types
     stream : StreamName  -- 属于来源的哪条流
     raw    : RawPayload; -- 来源原文，原样保存
 
-  -- 映射解码的结果：核心需要的字段，其余留在原文
-  Decoded ::
-    venueSeq   : [nat]           -- 来源连续序号，流声明带序号时必有
-    instrument : [InstrumentId]  -- 记录所属品种
-    clientKey  : [ClientKey]     -- 记录回声的调用方键，用于归因到本地写尝试
-    fields     : Fields;         -- 其余抽出的字段
-
   -- 解码结局：解出，或当前映射解不出
   DecodeOutcome = Decoded | <Unmapped>;
+
+  -- 一次编码请求：发往哪个来源的哪个意图
+  EncodeRequest ::
+    source : SourceId        -- 发往哪个来源
+    intent : IntentPayload;  -- 要编码的意图
 
   -- 映射编码的结果：写通道与交给来源的请求原文
   Encoded ::
@@ -71,6 +78,11 @@ types
 
   -- 编码结局：编出，或当前映射编不出
   EncodeOutcome = Encoded | <Unmapped>;
+
+  -- 一次取证分类请求：哪个来源回读到的原文
+  Probe ::
+    source : SourceId    -- 哪个来源
+    raw    : RawPayload; -- 回读到的原文
 
   -- 取证回读的分类结论：映射匹配不到的一律为未查清
   Evidence = <Found> | <Absent> | <Inconclusive>;
@@ -86,20 +98,61 @@ state Mappings of
   init m == m = mk_Mappings({|->}, {|->})
 end
 
+functions
+  -- 合成当前能力：离线不可用；任一方不支持即不支持；双方都支持才支持；其余未确认
+  Combine: Verdict * SessionVerdict -> CapabilityStatus
+  Combine(fixed, session) ==
+    if session = <Unavailable> then <Unavailable>
+    elseif fixed = <Unsupported> or session = <Unsupported> then <Unsupported>
+    elseif fixed = <Supported> and session = <Supported> then <Supported>
+    else <Unknown>;
+
 operations
-  Install: SourceId * MappingId * map CapabilityKey to Verdict ==> ()
-  Install(source, mapping, caps) == is not yet specified;
+  -- 装载来源的当前映射：替换先前的映射与静态能力声明，不保留旧版本
+  Install(source: SourceId, mapping: MappingId, caps: map CapabilityKey to Verdict)
+  ext wr current wr static
+  post current = current~ ++ {source |-> mapping}
+       and static = static~ ++ {source |-> caps};
 
-  Decode: Envelope ==> DecodeOutcome
-  Decode(env) == is not yet specified;
+  -- 按来源当前映射解码信封；没有映射的来源一律解不出
+  Decode(env: Envelope) r: DecodeOutcome
+  ext rd current
+  post env.source not in set dom current => r = <Unmapped>;
 
-  Encode: SourceId * IntentPayload ==> EncodeOutcome
-  Encode(source, intent) == is not yet specified;
+  -- 场景：入账。流未开代则不入；解不出仍占位置且原文保留；解出且来源声明该流带连续序号时推进覆盖
+  Ingest: Envelope * StreamId ==> [LogPosition]
+  Ingest(env, stream) ==
+    let open = IsOpen(stream) in
+      if not open then return nil
+      else cases Decode(env):
+             <Unmapped> -> return Append(stream, <Unmapped>, nil, env.raw, nil),
+             d ->
+               let pos = Append(stream, <Data>, d, env.raw, nil),
+                   decls = LatestStreams(env.source) in
+                 (if d.venueSeq <> nil
+                     and exists s in set decls & s.name = env.stream and s.venueSeq
+                  then Cover(stream, d.venueSeq);
+                  return pos)
+           end
+  pre is_External(stream.origin) and stream.origin.source = env.source
+      and stream.name = env.stream;
 
-  ClassifyEvidence: SourceId * RawPayload ==> Evidence
-  ClassifyEvidence(source, raw) == is not yet specified;
+  -- 按来源当前映射编码意图并导出通道；没有映射的来源一律编不出
+  Encode(req: EncodeRequest) r: EncodeOutcome
+  ext rd current
+  post req.source not in set dom current => r = <Unmapped>;
 
+  -- 按来源当前映射分类一次回读的原文；没有映射的来源一律未查清
+  ClassifyEvidence(probe: Probe) r: Evidence
+  ext rd current
+  post probe.source not in set dom current => r = <Inconclusive>;
+
+  -- 场景：合成来源此刻对某能力的结论；映射未声明的能力按不支持计
   CurrentCapability: SourceId * CapabilityKey ==> CapabilityStatus
-  CurrentCapability(source, cap) == is not yet specified;
+  CurrentCapability(source, cap) ==
+    let session = SessionCapability(source, cap) in
+      if source in set dom static and cap in set dom static(source)
+      then return Combine(static(source)(cap), session)
+      else return Combine(<Unsupported>, session);
 end Mapping
 ```

@@ -13,6 +13,7 @@
 - 负责人起草、修订、送审并可撤回单据，送审中的版本不被修改：``Ticket`Draft``、``Ticket`Revise``、``Ticket`SubmitForDecision``、``Ticket`Withdraw``。
 - 裁决者对指定版本作出裁决或退回修改，裁决者身份随裁决记录：``Ticket`Decide``、``Ticket`SendBack``。
 - 放行前确认当前版本已批准、依据未失效、必要项对齐、未过期且通道可准入，然后一次性交给写边界并关闭单据：``Ticket`Release``。
+- 写处理器接手程序或下游以效应请求发出的写意图，以请求发出者为负责人起草并送审，再以单据身份答复请求：``Ticket`AdoptRequest``。
 
 ## 为什么
 
@@ -20,6 +21,8 @@
 
 是否允许起单人自批、哪些对账项是必要项、自动审批的阈值，都是随需求变动的策略，留在代码里；单据只提供裁决者身份与对账项的槽位。
 
+单据不持有通道键：通道由 ``Mapping`Encode`` 在放行时从当前版本的意图导出，单据在修订后不必重算它。
+
 ## 语义
 
-``Ticket`Release`` 调用 ``Write`Prepare`` 成功后在同一次提交中以 ``Ticket`Prepared`` 关闭单据；``Write`Prepare`` 返回 `<LaneBlocked>` 时单据保持送审状态等待通道空出。对账项 ``Ticket`Alignment`` 由业务在放行时刻对当前观察或一次性读计算后传入，计算发生在核心进程内。
+``Ticket`Release`` 调用 ``Write`Prepare`` 成功后在同一次提交中以 ``Ticket`Prepared`` 关闭单据；``Write`Prepare`` 返回 `<LaneBlocked>` 或 `<Unmapped>` 时单据保持送审状态，由实现按节奏重试 ``Ticket`Release``。对账项 ``Ticket`Alignment`` 由业务在放行时刻对当前观察或一次性读计算后传入，计算发生在核心进程内。

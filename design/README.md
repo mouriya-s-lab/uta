@@ -6,7 +6,6 @@
 - [architecture/source.md](architecture/source.md)
 - [architecture/mapping.md](architecture/mapping.md)
 - [architecture/observation.md](architecture/observation.md)
-- [architecture/session.md](architecture/session.md)
 - [architecture/delivery/README.md](architecture/delivery/README.md)
 - [architecture/delivery/delivery.md](architecture/delivery/delivery.md)
 - [architecture/effect/README.md](architecture/effect/README.md)

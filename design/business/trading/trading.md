@@ -5,26 +5,17 @@ module Trading
 imports
   from Source
     types
-      SourceId renamed SourceId;
-      CapabilityKey renamed CapabilityKey;
-      InstrumentId renamed InstrumentId;
-      ClientKey renamed ClientKey,
+      CapabilityKey renamed CapabilityKey,
   from Mapping
-    types
-      CapabilityStatus renamed CapabilityStatus
     operations
       CurrentCapability renamed CurrentCapability,
   from Observation
     types
-      LogPosition renamed LogPosition
-    operations
-      ByClientKey renamed ByClientKey,
+      LogPosition renamed LogPosition,
   from Write
     types
-      AttemptRef renamed AttemptRef;
-      Attempt renamed Attempt
+      AttemptRef renamed AttemptRef
     operations
-      Attribute renamed Attribute;
       AttemptOf renamed AttemptOf,
   from Ticket
     types
@@ -44,8 +35,8 @@ exports
     EffectiveExecutions: set of FillObs -> set of FillObs;
     MaximalOrderStates: set of OrderObs -> set of OrderObs
   operations
-    ReplaceOrder: TicketRecord * TicketRecord * CapabilityKey ==> seq of TicketId;
-    AttributeObservation: AttemptRef ==> bool
+    ReplaceOrder: TicketRecord * TicketRecord * TicketRecord * CapabilityKey ==> seq of TicketId;
+    DraftCancelOfHead: TicketRecord * AttemptRef ==> bool
 definitions
 types
   -- 来源分配的成交执行身份
@@ -74,19 +65,40 @@ types
     revision : nat;         -- 来源给出的状态修订号
 
 functions
-  -- 有效成交集合：同一执行身份取唯一最大修订，排除作废项与同修订号冲突项
+  -- 有效成交集合：同一执行身份取唯一最大修订，排除作废项与同修订号内容冲突项
   EffectiveExecutions: set of FillObs -> set of FillObs
-  EffectiveExecutions(fills) == is not yet specified;
+  EffectiveExecutions(fills) ==
+    {f | f in set fills &
+       f.status = <Valid>
+       and not exists g in set fills & g.execId = f.execId and g.revision > f.revision
+       and not exists h in set fills &
+             h.execId = f.execId and h.revision = f.revision and h <> f};
 
-  -- 订单状态的极大观察集合：同一订单按修订号取极大元，不可比时保留多值
+  -- 订单状态的极大观察集合：同一订单按修订号取极大元，修订号相同时保留多值
   MaximalOrderStates: set of OrderObs -> set of OrderObs
-  MaximalOrderStates(obs) == is not yet specified;
+  MaximalOrderStates(obs) ==
+    {x | x in set obs &
+       not exists y in set obs & y.orderId = x.orderId and y.revision > x.revision};
 
 operations
-  ReplaceOrder: TicketRecord * TicketRecord * CapabilityKey ==> seq of TicketId
-  ReplaceOrder(cancelOrReplaceDraft, placeDraft, replaceCap) == is not yet specified;
+  -- 场景：改单。来源支持原子改单时只起改单单据；不支持时显式起撤单与下单两张独立单据；能力未确认或离线时不起单
+  ReplaceOrder: TicketRecord * TicketRecord * TicketRecord * CapabilityKey ==> seq of TicketId
+  ReplaceOrder(replaceDraft, cancelDraft, placeDraft, replaceCap) ==
+    cases CurrentCapability(replaceDraft.source, replaceCap):
+      <Supported> -> (Draft(replaceDraft); return [replaceDraft.id]),
+      <Unsupported> -> (Draft(cancelDraft); Draft(placeDraft); return [cancelDraft.id, placeDraft.id]),
+      others -> return []
+    end
+  pre replaceDraft.id <> cancelDraft.id and cancelDraft.id <> placeDraft.id and replaceDraft.id <> placeDraft.id;
 
-  AttributeObservation: AttemptRef ==> bool
-  AttributeObservation(ref) == is not yet specified;
+  -- 场景：起草撤阻塞头的撤单单据。目标必须是已过屏障、等待仍在进行的尝试；撤单指向它的调用方键
+  DraftCancelOfHead: TicketRecord * AttemptRef ==> bool
+  DraftCancelOfHead(cancelDraft, head) ==
+    cases AttemptOf(head):
+      nil -> return false,
+      a -> if a.barriered and a.waiting = <Active>
+           then (Draft(mu(cancelDraft, target |-> a.key)); return true)
+           else return false
+    end;
 end Trading
 ```
