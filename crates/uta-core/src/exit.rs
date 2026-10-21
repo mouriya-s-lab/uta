@@ -1,6 +1,5 @@
 //! Process exit codes of the core daemon. Design core/core-process/design.md §4.7 requires dedicated codes
-//! for core-level refusals to start; their values are fixed here and listed in
-//! ARCHITECTURE.md.
+//! for core-level refusals to start; their values are fixed here.
 
 use std::process::ExitCode;
 
