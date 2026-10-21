@@ -1,69 +1,79 @@
-# 来源与能力连接
+# 来源会话连接
 
 ```vdm
 module Source
 exports
   types
     SourceId;
+    StreamName;
     CapabilityKey;
+    InstrumentId;
+    ClientKey;
+    RawPayload;
     struct Verdict;
-    struct CapabilityStatus;
-    struct CapabilityDecl
+    struct SessionVerdict;
+    struct StreamDecl;
+    struct Declaration
   operations
-    OpenSession: SourceId * set of CapabilityDecl ==> ();
+    OpenSession: SourceId * Declaration ==> ();
     CloseSession: SourceId ==> ();
-    CurrentCapability: SourceId * CapabilityKey ==> CapabilityStatus
+    SessionCapability: SourceId * CapabilityKey ==> SessionVerdict;
+    LatestStreams: SourceId ==> set of StreamDecl
 definitions
 types
-  -- 外部来源的身份；由接入配置给出，使用方不读结构
+  -- 外部来源的身份；由接入登记给出，使用方不读结构
   SourceId = token;
 
-  -- 一项可声明能力的身份；由使用方模块指定，本模块不解释具体操作含义
+  -- 来源内一条推送流的名字；由来源在握手时给出
+  StreamName = token;
+
+  -- 一项可声明能力的身份；由使用方指定，本模块不解释其含义
   CapabilityKey = token;
+
+  -- 来源作用域内的品种身份；由映射从来源原文归一得出，核心只作相等比较
+  InstrumentId = token;
+
+  -- 核心为一次外部写铸造、随请求交给来源并在来源回声中带回的调用方键
+  ClientKey = token;
+
+  -- 来源原文；核心原样保存与转交，不解释
+  RawPayload = token;
 
   -- 来源在一次已建立会话中对某项能力的声明：支持、不支持或未确认
   Verdict = <Supported> | <Unsupported> | <Unknown>;
 
-  -- 查询来源当前能力的结局：只有会话在线时才返回声明三值，离线时为不可用
-  CapabilityStatus = Verdict | <Unavailable>;
+  -- 查询会话有效能力的结局：会话在线时为声明三值，离线时为不可用
+  SessionVerdict = Verdict | <Unavailable>;
 
-  -- 来源对单项能力的声明条目
-  CapabilityDecl ::
-    source  : SourceId       -- 声明所属的外部来源
-    cap     : CapabilityKey  -- 被声明的能力键
-    verdict : Verdict;       -- 来源给出的支持结论
+  -- 来源对一条推送流的声明：是否带可衔接的来源序号
+  StreamDecl ::
+    name     : StreamName  -- 流名
+    venueSeq : bool;       -- 该流记录是否携带可用于判完备的来源连续序号
 
-  -- 来源的在线会话集合与最近一次握手留下的能力声明副本
+  -- 一次握手交出的声明全集
+  Declaration ::
+    streams      : set of StreamDecl                -- 本来源提供的推送流
+    capabilities : map CapabilityKey to Verdict;    -- 本次会话对各能力的声明
+
+  -- 来源会话表：在线会话的有效声明，以及每个来源最近一次握手留下的声明副本
 state Sources of
-  live     : set of SourceId        -- 当前会话在线的来源集合
-  declared : set of CapabilityDecl  -- 最近握手留下的能力声明条目集合
-  inv mk_Sources(l, d) ==
-        forall s in set l & exists c in set d & c.source = s
-  init s == s = mk_Sources({}, {})
+  live   : map SourceId to Declaration  -- 当前在线会话及其会话有效声明
+  latest : map SourceId to Declaration  -- 每个来源最近一次握手的声明副本
+  inv mk_Sources(l, t) == dom l subset dom t
+  init s == s = mk_Sources({|->}, {|->})
 end
 
 operations
-  -- 建立来源会话并更新该来源的能力声明副本
-  OpenSession(source: SourceId, caps: set of CapabilityDecl)
-  ext wr live wr declared
-  post (exists c in set caps & c.source = source)
-       and live = live~ union {source}
-       and declared = {d | d in set declared~ & d.source <> source} union caps;
+  OpenSession: SourceId * Declaration ==> ()
+  OpenSession(source, decl) == is not yet specified;
 
-  -- 结束来源会话；最近声明副本保留供离线查阅，但该来源不再属于在线集合
-  CloseSession(source: SourceId)
-  ext wr live
-  post live = live~ \ {source};
+  CloseSession: SourceId ==> ()
+  CloseSession(source) == is not yet specified;
 
-  -- 查询某来源此刻对某项能力的有效结论；离线时返回不可用，不以历史声明充当当前能力
-  CurrentCapability(source: SourceId, cap: CapabilityKey) r: CapabilityStatus
-  ext rd live rd declared
-  post (source not in set live and r = <Unavailable>)
-       or (source in set live
-           and exists c in set declared &
-                 c.source = source and c.cap = cap and r = c.verdict)
-       or (source in set live
-           and (not exists c in set declared & c.source = source and c.cap = cap)
-           and r = <Unsupported>);
+  SessionCapability: SourceId * CapabilityKey ==> SessionVerdict
+  SessionCapability(source, cap) == is not yet specified;
+
+  LatestStreams: SourceId ==> set of StreamDecl
+  LatestStreams(source) == is not yet specified;
 end Source
 ```

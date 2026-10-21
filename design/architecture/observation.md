@@ -1,4 +1,4 @@
-# 观察与进度连接
+# 观察日志连接
 
 ```vdm
 module Observation
@@ -6,149 +6,137 @@ imports
   from Source
     types
       SourceId renamed SourceId;
-      CapabilityKey renamed CapabilityKey
+      StreamName renamed StreamName;
+      InstrumentId renamed InstrumentId;
+      ClientKey renamed ClientKey;
+      RawPayload renamed RawPayload,
+  from Mapping
+    types
+      Fields renamed Fields;
+      Envelope renamed Envelope;
+      Decoded renamed Decoded;
+      DecodeOutcome renamed DecodeOutcome
     operations
-      CurrentCapability renamed CurrentCapability
+      Decode renamed Decode
 exports
   types
-    StreamId;
+    DerivedId;
     RefHolder;
-    ObsPayload;
-    struct Seq;
+    struct Origin;
+    struct StreamId;
     struct LogPosition;
     struct EntryKind;
     struct Entry;
-    struct DeliveryItem;
-    struct BasisStatus;
-    struct ReadOutcome
+    struct Range;
+    struct BasisValidity;
+    struct RefOutcome
   operations
-    Append: StreamId * Seq * EntryKind * ObsPayload * [LogPosition] ==> LogPosition;
-    CheckBasis: set of LogPosition ==> BasisStatus;
-    AcquireRef: RefHolder * set of LogPosition ==> <Applied> | <Rejected>;
+    OpenEpoch: Origin * StreamName * [RawPayload] ==> StreamId;
+    Append: StreamId * EntryKind * [Decoded] * [RawPayload] * [LogPosition] ==> LogPosition;
+    Ingest: Envelope * StreamId ==> LogPosition;
+    ExtendCoverage: StreamId * nat ==> ();
+    CheckBasis: set of LogPosition * nat ==> BasisValidity;
+    AcquireRef: RefHolder * set of LogPosition ==> RefOutcome;
     ReleaseRef: RefHolder ==> ();
-    AdvanceRetention: StreamId * Seq ==> <Applied> | <Rejected>;
-    PollFrom: StreamId * Seq ==> set of DeliveryItem;
-    ReadOnce: SourceId * CapabilityKey * StreamId * Seq * ObsPayload ==> ReadOutcome
+    AdvanceRetention: StreamId * nat1 ==> RefOutcome;
+    ReadFrom: StreamId * nat ==> seq of Entry;
+    RetentionOf: StreamId ==> nat1;
+    ByClientKey: ClientKey ==> set of LogPosition
 definitions
 types
-  -- 观察流的身份；提供方创建，使用方原样传递
-  StreamId = token;
+  -- 派生流产出者的身份；由业务给出，观察侧不解释
+  DerivedId = token;
 
-  -- 持有观察位置活跃引用的对象身份（如在途写尝试或程序检查点）
+  -- 登记保留引用的持有者身份；由使用方给出
   RefHolder = token;
 
-  -- 观察记录携带的载荷；对架构不透明，由业务单元解释
-  ObsPayload = token;
+  -- 流的来头：外部来源，或核心内的派生产出者
+  External :: source : SourceId;
+  Derived  :: producer : DerivedId;
+  Origin = External | Derived;
 
-  -- 单条流内的单调递增序号，从 1 开始
-  Seq = nat
-  inv n == n > 0;
+  -- 一条观察流的身份：来头、流名与分代；每次来源连续性中断开新一代
+  StreamId ::
+    origin : Origin      -- 流的来头
+    name   : StreamName  -- 流名
+    epoch  : nat1;       -- 分代号，从 1 起
 
-  -- 一条观察记录在所属流上的唯一顺序位置
+  -- 一条记录的顺序身份：所在流与核心分配的位置号
   LogPosition ::
-    stream : StreamId  -- 所属观察流
-    seqNo  : Seq;      -- 流内序号
+    stream : StreamId  -- 所在流
+    seqNo  : nat1;     -- 流内位置号，由核心按追加先后分配
 
-  -- 观察流记录的类别：正常观察数据、来源连续性断代缺口、或来源完备覆盖证明
-  EntryKind = <Data> | <SourceGap> | <Coverage>;
+  -- 记录类别：正常数据、开启新一代的来源连续性中断、当前映射解不出的记录
+  EntryKind = <Data> | <SourceGap> | <Unmapped>;
 
-  -- 观察流上的一条不可变记录：可选指名它修正取代的旧位置
+  -- 观察流上的一条不可变记录
   Entry ::
-    pos        : LogPosition   -- 本条记录的位置
-    kind       : EntryKind     -- 正常数据、来源断代或完备覆盖证明
-    payload    : ObsPayload    -- 观察记录携带的不透明载荷
-    supersedes : [LogPosition];-- 修正派生值时所取代的旧记录位置
+    pos        : LogPosition     -- 顺序身份
+    kind       : EntryKind       -- 类别
+    decoded    : [Decoded]       -- 映射抽出的字段；解不出或缺口记录时为空
+    raw        : [RawPayload]    -- 来源原文；派生记录可无
+    supersedes : [LogPosition];  -- 派生记录修正时所取代的旧位置
 
-  -- 向消费者投递的项：流上的记录，或该消费者因慢消费/历史压缩产生的投递缺口
-  DeliveryItem = Entry | <DeliveryGap>;
+  -- 来源序号覆盖区间：该流本代内来源序号落在 [low, high) 的记录全部已在日志
+  Range ::
+    low  : nat   -- 起点（含）
+    high : nat;  -- 终点（不含）
 
-  -- 依据位置集合的有效性判定：新鲜可用、已被后续记录修正撤回、或已落入保留边界之下
-  BasisStatus = <Fresh> | <Retracted> | <BeyondRetention>;
+  -- 一组依据位置相对当前日志的有效性
+  BasisValidity = <Fresh> | <Stale> | <Retracted> | <BeyondRetention>;
 
-  -- 一次性主动读取的结局：返回追加的观察位置，或区分渠道不可用、能力不支持与能力未确认
-  ReadOutcome = LogPosition | <Unavailable> | <Unsupported> | <Unknown>;
+  -- 引用登记与保留推进的结局
+  RefOutcome = <Applied> | <Rejected>;
 
-  -- 观察日志、保留边界与活跃引用登记：保留边界绝不越过任何仍被活跃引用保护的位置
+  -- 观察日志：记录、来源序号覆盖、保留边界与活跃引用
 state Journal of
-  entries    : set of Entry                          -- 已追加的观察记录集合
-  retention  : set of LogPosition                    -- 每条流当前的保留下界位置集合
-  activeRefs : map RefHolder to set of LogPosition   -- 活跃对象登记保护的观察位置集合
-  inv mk_Journal(-, ret, refs) ==
-        forall b in set ret &
-          forall p in set dunion rng refs &
-            p.stream = b.stream => p.seqNo >= b.seqNo
-  init j == j = mk_Journal({}, {}, {|->})
+  entries   : map LogPosition to Entry        -- 全部在册记录
+  coverage  : map StreamId to Range           -- 各流本代的来源序号覆盖
+  retention : map StreamId to nat1            -- 各流保留边界：低于它的位置已删
+  refs      : map RefHolder to set of LogPosition  -- 活跃引用保护的位置
+  inv mk_Journal(e, -, r, f) ==
+        (forall p in set dom e & e(p).pos = p)
+        and (forall p in set dom e & p.seqNo = 1 => e(p).kind = <SourceGap>)
+        and (forall s in set dom r &
+               forall p in set dom e & p.stream = s => p.seqNo >= r(s))
+        and (forall h in set dom f &
+               forall p in set f(h) &
+                 p.stream in set dom r => p.seqNo >= r(p.stream))
+  init j == j = mk_Journal({|->}, {|->}, {|->}, {|->})
 end
 
 operations
-  -- 在指定观察流追加一条记录并返回其位置
-  Append(stream: StreamId, seqNo: Seq, kind: EntryKind, payload: ObsPayload, supersedes: [LogPosition]) pos: LogPosition
-  ext wr entries
-  post pos = mk_LogPosition(stream, seqNo)
-       and entries = entries~ union {mk_Entry(pos, kind, payload, supersedes)};
+  OpenEpoch: Origin * StreamName * [RawPayload] ==> StreamId
+  OpenEpoch(origin, name, raw) == is not yet specified;
 
-  -- 查询一组依据位置在当前观察日志与保留边界下的有效性状态
-  CheckBasis(basis: set of LogPosition) r: BasisStatus
-  ext rd entries rd retention
-  post let beyond = exists p in set basis &
-                      (not exists e in set entries & e.pos = p)
-                      or (exists b in set retention & b.stream = p.stream and p.seqNo < b.seqNo),
-           retracted = exists p in set basis &
-                         exists e in set entries & e.supersedes = p in
-         (beyond and r = <BeyondRetention>)
-         or (not beyond and retracted and r = <Retracted>)
-         or (not beyond and not retracted and r = <Fresh>);
+  Append: StreamId * EntryKind * [Decoded] * [RawPayload] * [LogPosition] ==> LogPosition
+  Append(stream, kind, decoded, raw, supersedes) == is not yet specified;
 
-  -- 为活跃对象登记需要保护的观察位置集合；若位置已低于保留边界则拒绝登记
-  AcquireRef(holder: RefHolder, positions: set of LogPosition) r: <Applied> | <Rejected>
-  ext rd retention wr activeRefs
-  post let valid = forall b in set retention &
-                     forall p in set positions &
-                       p.stream = b.stream => p.seqNo >= b.seqNo in
-         (valid
-          and r = <Applied>
-          and activeRefs = activeRefs~ ++ {holder |-> positions})
-         or (not valid
-             and r = <Rejected>
-             and activeRefs = activeRefs~);
+  Ingest: Envelope * StreamId ==> LogPosition
+  Ingest(env, stream) == is not yet specified;
 
-  -- 释放对象持有的全部观察位置引用，允许保留边界越过这些位置
-  ReleaseRef(holder: RefHolder)
-  ext wr activeRefs
-  post activeRefs = {holder} <-: activeRefs~;
+  ExtendCoverage: StreamId * nat ==> ()
+  ExtendCoverage(stream, through) == is not yet specified;
 
-  -- 单调推进指定流的保留边界；边界倒退或越过活跃引用位置时拒绝推进
-  AdvanceRetention(stream: StreamId, bound: Seq) r: <Applied> | <Rejected>
-  ext rd activeRefs wr retention
-  post let monotonic = forall b in set retention~ & b.stream = stream => bound >= b.seqNo,
-           referencedOk = forall p in set dunion rng activeRefs &
-                            p.stream = stream => p.seqNo >= bound in
-         (monotonic and referencedOk
-          and r = <Applied>
-          and retention = {b | b in set retention~ & b.stream <> stream}
-                          union {mk_LogPosition(stream, bound)})
-         or ((not monotonic or not referencedOk)
-             and r = <Rejected>
-             and retention = retention~);
+  CheckBasis: set of LogPosition * nat ==> BasisValidity
+  CheckBasis(basis, lag) == is not yet specified;
 
-  -- 按消费者已确认游标序号取出后续记录；若游标已落入保留边界之下则一并交出投递缺口
-  PollFrom(stream: StreamId, cursorSeq: Seq) items: set of DeliveryItem
-  ext rd entries rd retention
-  post let afterCursor = {e | e in set entries &
-                            e.pos.stream = stream and e.pos.seqNo > cursorSeq},
-           compacted = exists b in set retention &
-                         b.stream = stream and cursorSeq + 1 < b.seqNo in
-         (compacted and items = afterCursor union {<DeliveryGap>})
-         or (not compacted and items = afterCursor);
+  AcquireRef: RefHolder * set of LogPosition ==> RefOutcome
+  AcquireRef(holder, positions) == is not yet specified;
 
-  -- 场景：向来源发起一次性读取；先核对来源当前会话能力，支持时追加观察记录并返回其位置
-  ReadOnce: SourceId * CapabilityKey * StreamId * Seq * ObsPayload ==> ReadOutcome
-  ReadOnce(source, cap, stream, seqNo, payload) ==
-    cases CurrentCapability(source, cap):
-      <Supported>   -> return Append(stream, seqNo, <Data>, payload, nil),
-      <Unavailable> -> return <Unavailable>,
-      <Unsupported> -> return <Unsupported>,
-      others        -> return <Unknown>
-    end;
+  ReleaseRef: RefHolder ==> ()
+  ReleaseRef(holder) == is not yet specified;
+
+  AdvanceRetention: StreamId * nat1 ==> RefOutcome
+  AdvanceRetention(stream, bound) == is not yet specified;
+
+  ReadFrom: StreamId * nat ==> seq of Entry
+  ReadFrom(stream, after) == is not yet specified;
+
+  RetentionOf: StreamId ==> nat1
+  RetentionOf(stream) == is not yet specified;
+
+  ByClientKey: ClientKey ==> set of LogPosition
+  ByClientKey(key) == is not yet specified;
 end Observation
 ```

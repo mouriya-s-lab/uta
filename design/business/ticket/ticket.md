@@ -1,193 +1,161 @@
-# 单据与审批接入
+# 单据连接
 
 ```vdm
 module Ticket
 imports
+  from Session
+    types
+      Principal renamed Principal,
   from Source
     types
       SourceId renamed SourceId;
-      CapabilityKey renamed CapabilityKey
-    operations
-      CurrentCapability renamed CurrentCapability,
-  from Observation
-    types
-      LogPosition renamed LogPosition
-    operations
-      AcquireRef renamed AcquireRef;
-      ReleaseRef renamed ReleaseRef;
-      CheckBasis renamed CheckBasis,
-  from Effect
+      CapabilityKey renamed CapabilityKey,
+  from Mapping
     types
       LaneKey renamed LaneKey;
-      AttemptId renamed AttemptId;
-      IntentPayload renamed IntentPayload;
-      Attempt renamed Attempt
+      IntentPayload renamed IntentPayload,
+  from Observation
+    types
+      LogPosition renamed LogPosition;
+      BasisValidity renamed BasisValidity
     operations
-      Prepare renamed Prepare
+      CheckBasis renamed CheckBasis,
+  from Request
+    types
+      EffectKind renamed EffectKind,
+  from Write
+    types
+      AttemptRef renamed AttemptRef;
+      Time renamed Time;
+      Intent renamed Intent;
+      Admission renamed Admission;
+      PrepareOutcome renamed PrepareOutcome
+    operations
+      Prepare renamed Prepare;
+      LaneClear renamed LaneClear
 exports
   types
     TicketId;
-    VersionId;
-    Principal;
-    struct DecisionVerdict;
-    struct TicketStatus;
-    struct DecisionOutcome;
-    struct ReleaseOutcome;
-    struct TicketRecord
+    CheckKey;
+    struct Verdict;
+    struct Decision;
+    struct Awaiting;
+    struct Prepared;
+    struct ClosedReason;
+    struct Closed;
+    struct Status;
+    struct TicketRecord;
+    struct Alignment;
+    struct DecideOutcome;
+    struct ReleaseOutcome
   operations
     Draft: TicketRecord ==> ();
-    Revise: TicketRecord ==> <Applied> | <Rejected>;
-    Decide: TicketId * VersionId * DecisionVerdict ==> DecisionOutcome;
-    CloseTicket: TicketId ==> ();
-    Release: TicketId * Attempt * SourceId * CapabilityKey ==> ReleaseOutcome
+    Revise: TicketId * Principal * IntentPayload ==> bool;
+    SubmitForDecision: TicketId * Principal ==> bool;
+    SendBack: TicketId * Principal ==> bool;
+    Transfer: TicketId * Principal * Principal ==> bool;
+    Decide: TicketId * nat1 * Principal * Verdict ==> DecideOutcome;
+    Withdraw: TicketId * Principal ==> bool;
+    Close: TicketId * ClosedReason ==> ();
+    Release: TicketId * Alignment * Time * nat ==> ReleaseOutcome
+  functions
+    GateOpen: TicketRecord * BasisValidity * Alignment * Time -> bool
 definitions
 types
-  -- 一张单据的身份
+  -- 单据身份；业务造出，使用方不读结构
   TicketId = token;
 
-  -- 单据线性修订链上的版本身份
-  VersionId = token;
+  -- 放行前一项对账检查的身份；由业务选定必要项
+  CheckKey = token;
 
-  -- 发起或审批单据的责任主体身份
-  Principal = token;
+  -- 审批裁决：批准或否决
+  Verdict = <Approved> | <Rejected>;
 
-  -- 审批裁决的结论：批准或否决
-  DecisionVerdict = <Approved> | <Rejected>;
+  -- 一条绑定版本的裁决记录
+  Decision ::
+    decider : Principal  -- 谁作出
+    verdict : Verdict;   -- 结论
 
-  -- 单据的存续状态：待决可编辑或已关闭不可再改
-  TicketStatus = <Open> | <Closed>;
+  -- 送审中：冻结在某个版本
+  Awaiting :: version : nat1;
 
-  -- 提交审批决定的结局：生效，或因期望版本不匹配/同版本已决而冲突
-  DecisionOutcome = <Applied> | <Conflict>;
+  -- 已放行：对应的写尝试
+  Prepared :: attempt : AttemptRef;
 
-  -- 单据放行进入写边界的结局：成功交出得到 AttemptId、等待能力或通道、或因依据失效/未获批而拒绝
-  ReleaseOutcome = AttemptId | <Waiting> | <Rejected>;
+  -- 关闭原因
+  ClosedReason = Prepared | <Withdrawn> | <DecisionRejected> | <Expired>;
 
-  -- 单据的当前状态记录：持有负责人、当前版本、观察依据与绑定在该版本上的裁决
+  -- 已关闭
+  Closed :: reason : ClosedReason;
+
+  -- 单据状态
+  Status = <Drafting> | Awaiting | Closed;
+
+  -- 一张单据：一把锁、一条线性版本链、绑定版本的裁决
   TicketRecord ::
-    id          : TicketId                   -- 单据身份
-    responsible : Principal                  -- 当前持有编辑权的负责人
-    lane        : LaneKey                    -- 目标写通道
-    version     : VersionId                  -- 当前最新版本身份
-    intent      : IntentPayload              -- 当前版本的意图载荷
-    basis       : set of LogPosition         -- 当前版本引用的观察位置集合
-    decision    : [DecisionVerdict]          -- 绑定在当前版本上的审批裁决
-    status      : TicketStatus;              -- 单据是否仍处于开放状态
+    id          : TicketId                -- 身份
+    responsible : Principal               -- 当前持有编辑权的负责人
+    source      : SourceId                -- 目标来源
+    cap         : CapabilityKey           -- 放行前核对的能力
+    kind        : EffectKind              -- 效应种类
+    lane        : LaneKey                 -- 目标写通道
+    versions    : seq1 of IntentPayload   -- 版本链，下标即版本号
+    decisions   : map nat1 to Decision    -- 各版本的裁决
+    basis       : set of LogPosition      -- 决策依据的观察位置
+    deadline    : Time                    -- 过期时刻
+    status      : Status;                 -- 当前状态
 
-  -- 待决与已关闭的单据表
+  -- 放行前的对账结果：各必要项是否与当前观察对齐
+  Alignment = map CheckKey to (<Aligned> | <Diverged> | <Undecidable>);
+
+  -- 裁决结局：已记录，或期望版本不符与同版本已决时的冲突
+  DecideOutcome = <Recorded> | <Conflict>;
+
+  -- 放行结局：已放行、门未开而等待、或已关闭
+  ReleaseOutcome = AttemptRef | <Waiting> | <Closed>;
+
+  -- 单据表
 state Tickets of
-  byId : map TicketId to TicketRecord  -- 单据身份到单据记录的映射
+  byId : map TicketId to TicketRecord  -- 全部单据
+  inv mk_Tickets(b) ==
+        forall id in set dom b &
+          b(id).id = id
+          and dom b(id).decisions subset inds b(id).versions
+          and (is_Awaiting(b(id).status) => b(id).status.version = len b(id).versions)
   init t == t = mk_Tickets({|->})
 end
 
+functions
+  -- 放行门：当前版本已批准、依据新鲜、必要项全部对齐、未过期
+  GateOpen: TicketRecord * BasisValidity * Alignment * Time -> bool
+  GateOpen(rec, validity, align, now) == is not yet specified;
+
 operations
-  -- 创建单据草稿并由发起人持有责任锁；若单据身份已存在则保持原记录不变
-  Draft(draft: TicketRecord)
-  ext wr byId
-  post (draft.id not in set dom byId~
-        and draft.decision = nil
-        and draft.status = <Open>
-        and byId = byId~ ++ {draft.id |-> draft})
-       or ((draft.id in set dom byId~ or draft.decision <> nil or draft.status <> <Open>)
-           and byId = byId~);
+  Draft: TicketRecord ==> ()
+  Draft(rec) == is not yet specified;
 
-  -- 负责人修订草稿：推进版本并清空旧版本上的审批裁决；非负责人或已关闭单据拒绝修订
-  Revise(nextRec: TicketRecord) r: <Applied> | <Rejected>
-  ext wr byId
-  post (exists prev in set rng byId~ &
-          prev.id = nextRec.id
-          and prev.status = <Open>
-          and prev.responsible = nextRec.responsible
-          and prev.lane = nextRec.lane
-          and nextRec.version <> prev.version
-          and nextRec.decision = nil
-          and nextRec.status = <Open>
-          and r = <Applied>
-          and byId = byId~ ++ {nextRec.id |-> nextRec})
-       or ((not exists prev in set rng byId~ &
-              prev.id = nextRec.id
-              and prev.status = <Open>
-              and prev.responsible = nextRec.responsible
-              and prev.lane = nextRec.lane
-              and nextRec.version <> prev.version
-              and nextRec.decision = nil
-              and nextRec.status = <Open>)
-           and r = <Rejected>
-           and byId = byId~);
+  Revise: TicketId * Principal * IntentPayload ==> bool
+  Revise(id, who, next) == is not yet specified;
 
-  -- 对单据的指定版本作出批准或否决；期望版本不符或该版本已有决定时返回冲突且不改状态
-  Decide(id: TicketId, expectedVersion: VersionId, verdict: DecisionVerdict) r: DecisionOutcome
-  ext wr byId
-  post (exists rec in set rng byId~ &
-          rec.id = id
-          and rec.status = <Open>
-          and rec.version = expectedVersion
-          and rec.decision = nil
-          and r = <Applied>
-          and byId = byId~ ++ {id |-> mu(rec,
-                decision |-> verdict,
-                status |-> if verdict = <Rejected> then <Closed> else <Open>)})
-       or ((not exists rec in set rng byId~ &
-              rec.id = id
-              and rec.status = <Open>
-              and rec.version = expectedVersion
-              and rec.decision = nil)
-           and r = <Conflict>
-           and byId = byId~);
+  SubmitForDecision: TicketId * Principal ==> bool
+  SubmitForDecision(id, who) == is not yet specified;
 
-  -- 查询一张已获批准且仍处于开放状态的单据记录
-  ApprovedOpenTicket(id: TicketId) rec: [TicketRecord]
-  ext rd byId
-  post (exists found in set rng byId &
-          found.id = id
-          and found.status = <Open>
-          and found.decision = <Approved>
-          and rec = found)
-       or ((not exists found in set rng byId &
-              found.id = id and found.status = <Open> and found.decision = <Approved>)
-           and rec = nil);
+  SendBack: TicketId * Principal ==> bool
+  SendBack(id, who) == is not yet specified;
 
-  -- 将已放行或因依据失效而终止的单据标记为关闭，关闭后不可再次修订或放行
-  CloseTicket(id: TicketId)
-  ext wr byId
-  post (exists rec in set rng byId~ &
-          rec.id = id
-          and byId = byId~ ++ {id |-> mu(rec, status |-> <Closed>)})
-       or ((not exists rec in set rng byId~ & rec.id = id)
-           and byId = byId~);
+  Transfer: TicketId * Principal * Principal ==> bool
+  Transfer(id, src, dst) == is not yet specified;
 
-  -- 场景：在单据当前版本已获批准、观察依据新鲜且来源能力支持时，登记观察引用、交入写边界并关闭单据
-  Release: TicketId * Attempt * SourceId * CapabilityKey ==> ReleaseOutcome
-  Release(id, attemptEntry, source, cap) ==
-    let rec = ApprovedOpenTicket(id) in
-      if rec = nil
-      then return <Rejected>
-      else cases CheckBasis(rec.basis):
-             <Fresh> ->
-               cases CurrentCapability(source, cap):
-                 <Unavailable>, <Unknown> -> return <Waiting>,
-                 <Supported> ->
-                   cases AcquireRef(attemptEntry.holder, rec.basis):
-                     <Applied> ->
-                       cases Prepare(attemptEntry, nil):
-                         <Blocked> ->
-                           (ReleaseRef(attemptEntry.holder);
-                            return <Waiting>),
-                         others ->
-                           (CloseTicket(id);
-                            return attemptEntry.id)
-                       end,
-                     others ->
-                       (CloseTicket(id);
-                        return <Rejected>)
-                   end,
-                 others ->
-                   (CloseTicket(id);
-                    return <Rejected>)
-               end,
-             others ->
-               (CloseTicket(id);
-                return <Rejected>)
-           end;
+  Decide: TicketId * nat1 * Principal * Verdict ==> DecideOutcome
+  Decide(id, version, who, verdict) == is not yet specified;
+
+  Withdraw: TicketId * Principal ==> bool
+  Withdraw(id, who) == is not yet specified;
+
+  Close: TicketId * ClosedReason ==> ()
+  Close(id, reason) == is not yet specified;
+
+  Release: TicketId * Alignment * Time * nat ==> ReleaseOutcome
+  Release(id, align, now, lag) == is not yet specified;
 end Ticket
 ```

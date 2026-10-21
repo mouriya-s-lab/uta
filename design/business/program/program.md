@@ -1,60 +1,93 @@
-# 程序运行接入
+# 程序连接
 
 ```vdm
 module Program
 imports
+  from Session
+    types
+      Principal renamed Principal,
   from Observation
     types
-      StreamId renamed StreamId;
+      DerivedId renamed DerivedId;
       RefHolder renamed RefHolder;
-      ObsPayload renamed ObsPayload;
-      Seq renamed Seq;
-      LogPosition renamed LogPosition
+      StreamId renamed StreamId;
+      LogPosition renamed LogPosition;
+      RefOutcome renamed RefOutcome
     operations
       Append renamed Append;
-      AcquireRef renamed AcquireRef,
-  from Ticket
+      AcquireRef renamed AcquireRef;
+      ReleaseRef renamed ReleaseRef,
+  from Delivery
     types
-      TicketRecord renamed TicketRecord
+      SubscriptionId renamed SubscriptionId;
+      Item renamed Item
     operations
-      Draft renamed Draft
+      Subscribe renamed Subscribe;
+      Unsubscribe renamed Unsubscribe;
+      Deliver renamed Deliver;
+      Ack renamed Ack,
+  from Request
+    types
+      RequestRef renamed RequestRef;
+      EffectRequest renamed EffectRequest
+    operations
+      Emit renamed Emit
 exports
   types
     ProgramId;
-    struct Checkpoint
+    State;
+    struct Checkpoint;
+    struct Step
   operations
-    SaveCheckpoint: ProgramId * Checkpoint ==> ();
-    Advance: ProgramId * Checkpoint * StreamId * Seq * ObsPayload * TicketRecord ==> LogPosition
+    Load: ProgramId * Principal * set of StreamId * StreamId ==> ();
+    Unload: ProgramId ==> ();
+    SaveCheckpoint: ProgramId * Checkpoint ==> RefOutcome;
+    Advance: ProgramId * StreamId * Step ==> seq of RequestRef
 definitions
 types
-  -- 一个已装载程序的身份
+  -- 程序身份；由装载清单给出
   ProgramId = token;
 
-  -- 程序的持久检查点：记录已确认消费的输入流位置与对应的引用持有者
-  Checkpoint ::
-    holder    : RefHolder      -- 在观察日志中登记游标引用的持有者身份
-    inStream  : StreamId       -- 所消费的输入观察流
-    cursorSeq : Seq;           -- 已消费到的输入流序号
+  -- 程序自己的状态；核心不解释
+  State = token;
 
-  -- 活动程序的检查点表
+  -- 检查点：程序状态与它消费到的各输入流位置
+  Checkpoint ::
+    cursors  : map StreamId to nat  -- 各输入流已消费的位置号
+    snapshot : State;               -- 程序状态
+
+  -- 一步推进的产出：新的检查点、派生记录载荷、效应请求
+  Step ::
+    next     : Checkpoint             -- 推进后的检查点
+    requests : seq of EffectRequest;  -- 本步发出的请求
+
+  -- 已装载的程序
+  Loaded ::
+    loadedBy     : Principal        -- 装载人：程序以此身份发出请求
+    subscription : SubscriptionId   -- 程序的输入订阅
+    inputs       : set of StreamId  -- 输入流
+    output       : StreamId         -- 派生输出流
+    checkpoint   : Checkpoint;      -- 最近检查点
+
+  -- 程序表
 state Programs of
-  checkpoints : map ProgramId to Checkpoint  -- 程序身份到最近已提交检查点的映射
-  init p == p = mk_Programs({|->})
+  loaded : map ProgramId to Loaded  -- 已装载的程序
+  inv mk_Programs(l) ==
+        forall p in set dom l & dom l(p).checkpoint.cursors = l(p).inputs
+  init s == s = mk_Programs({|->})
 end
 
 operations
-  -- 更新程序的持久检查点记录
-  SaveCheckpoint(prog: ProgramId, cp: Checkpoint)
-  ext wr checkpoints
-  post checkpoints = checkpoints~ ++ {prog |-> cp};
+  Load: ProgramId * Principal * set of StreamId * StreamId ==> ()
+  Load(prog, who, inputs, output) == is not yet specified;
 
-  -- 场景：程序完成一轮确定性推进——登记新输入位置保护引用、保存检查点、提交待审单据并追加派生观察
-  Advance: ProgramId * Checkpoint * StreamId * Seq * ObsPayload * TicketRecord ==> LogPosition
-  Advance(prog, cp, outStream, outSeq, derivedPayload, intentDraft) ==
-    let cursorPos = mk_LogPosition(cp.inStream, cp.cursorSeq) in
-      (let - = AcquireRef(cp.holder, {cursorPos}) in skip;
-       SaveCheckpoint(prog, cp);
-       Draft(intentDraft);
-       return Append(outStream, outSeq, <Data>, derivedPayload, nil));
+  Unload: ProgramId ==> ()
+  Unload(prog) == is not yet specified;
+
+  SaveCheckpoint: ProgramId * Checkpoint ==> RefOutcome
+  SaveCheckpoint(prog, cp) == is not yet specified;
+
+  Advance: ProgramId * StreamId * Step ==> seq of RequestRef
+  Advance(prog, input, step) == is not yet specified;
 end Program
 ```
