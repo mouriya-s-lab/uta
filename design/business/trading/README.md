@@ -10,8 +10,8 @@
 
 ## 需求
 
-- 改单按来源能力分流为一张或两张单据：``Trading`ReplaceOrder``。
-- 通道被结果未知的尝试阻塞时，起草指向该阻塞头的撤单单据，经单据审批后以撤阻塞头方式放行：``Trading`DraftCancelOfHead``。
+- 来源不支持原子改单时，改单不能伪装成一次写，必须让人看见它是撤单加下单两件事（来源：外部场所能力调查，证据见附录 `evidence/venue-facts.md`），由 ``Trading`ReplaceOrder`` 走通。
+- ``Write`BlockingHeads`` 里有结果未知的尝试时，仍然可以对它发撤单，但撤单必须指向它、经过审批，且撤单的受理不算它已结束（来源：交易语义约束，证据见附录 `evidence/lane-facts.md`），由 ``Trading`DraftCancelOfHead`` 走通。
 
 ## 为什么
 

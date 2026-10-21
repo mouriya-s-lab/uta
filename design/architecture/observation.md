@@ -25,12 +25,11 @@ exports
     struct Entry;
     struct Range;
     struct BasisValidity;
-    struct RefOutcome
+    struct RefOutcome;
+    struct AppendOutcome
   operations
-    OpenEpoch: Origin * StreamName * [RawPayload] ==> StreamId;
-    IsOpen: StreamId ==> bool;
-    Append: StreamId * EntryKind * [Decoded] * [RawPayload] * [LogPosition] ==> LogPosition;
-    Cover: StreamId * nat ==> ();
+    OpenEpoch: Origin * StreamName * [RawPayload] * bool ==> StreamId;
+    Append: StreamId * [Decoded] * [RawPayload] * [LogPosition] ==> AppendOutcome;
     CheckBasis: set of LogPosition * nat ==> BasisValidity;
     AcquireRef: RefHolder * set of LogPosition ==> RefOutcome;
     ReleaseRef: RefHolder ==> ();
@@ -100,71 +99,71 @@ types
   -- 引用登记与保留推进的结局
   RefOutcome = <Applied> | <Rejected>;
 
-  -- 观察日志：已开代的流、记录、来源序号覆盖、保留边界与活跃引用
+  -- 追加的结局：记录的位置，或流尚未开代
+  AppendOutcome = LogPosition | <NotOpen>;
+
+  -- 观察日志：已开代的流及其是否携带来源连续序号、记录、来源序号覆盖、保留边界与活跃引用
 state Journal of
-  opened    : set of StreamId                      -- 已开代的流
+  opened    : map StreamId to bool                 -- 已开代的流；值为该流记录是否携带来源连续序号
   entries   : map LogPosition to Entry             -- 全部在册记录
   coverage  : map StreamId to Range                -- 各流本代的来源序号覆盖
   retention : map StreamId to nat1                 -- 各流保留边界：低于它的位置已删
   refs      : map RefHolder to set of LogPosition  -- 活跃引用保护的位置
   inv mk_Journal(o, e, c, r, f) ==
-        (forall p in set dom e & e(p).pos = p and p.stream in set o)
+        (forall p in set dom e & e(p).pos = p and p.stream in set dom o)
         and (forall p in set dom e & p.seqNo = 1 => e(p).kind = <SourceGap>)
-        and dom c subset o
-        and (forall s in set dom c & c(s).low <= c(s).high)
+        and (forall s in set dom c & o(s) and c(s).low <= c(s).high)
         and (forall p in set dom e &
                p.stream in set dom r => p.seqNo >= r(p.stream))
         and (forall h in set dom f &
                forall p in set f(h) &
                  p.stream in set dom r => p.seqNo >= r(p.stream))
-  init j == j = mk_Journal({}, {|->}, {|->}, {|->}, {|->})
+  init j == j = mk_Journal({|->}, {|->}, {|->}, {|->}, {|->})
 end
 
 operations
-  -- 为某来头的某流开新一代：代号比已有各代大 1，首条记录是来源连续性中断
-  OpenEpoch(origin: Origin, name: StreamName, raw: [RawPayload]) s: StreamId
+  -- 为某来头的某流开新一代：代号比已有各代大 1，首条记录是来源连续性中断；记下该流是否携带来源连续序号
+  OpenEpoch(origin: Origin, name: StreamName, raw: [RawPayload], sequenced: bool) s: StreamId
   ext wr opened wr entries
   post s.origin = origin and s.name = name
-       and s not in set opened~
-       and (forall t in set opened~ &
+       and s not in set dom opened~
+       and (forall t in set dom opened~ &
               (t.origin = origin and t.name = name) => t.epoch < s.epoch)
        and (s.epoch = 1
-            or mk_StreamId(origin, name, s.epoch - 1) in set opened~)
-       and opened = opened~ union {s}
+            or mk_StreamId(origin, name, s.epoch - 1) in set dom opened~)
+       and opened = opened~ munion {s |-> sequenced}
        and entries = entries~ munion
              {mk_LogPosition(s, 1) |->
                 mk_Entry(mk_LogPosition(s, 1), <SourceGap>, nil, raw, nil)};
 
-  -- 在已开代的流上追加一条记录：位置号为该流已有最大位置号加 1；取代位置必须在同一流上
-  Append(stream: StreamId, kind: EntryKind, decoded: [Decoded], raw: [RawPayload], supersedes: [LogPosition]) pos: LogPosition
-  ext wr entries rd opened rd retention
-  pre stream in set opened
-      and kind <> <SourceGap>
-      and (supersedes <> nil => supersedes.stream = stream)
-  post pos.stream = stream
-       and pos not in set dom entries~
-       and (forall p in set dom entries~ & p.stream = stream => p.seqNo < pos.seqNo)
-       and (pos.seqNo = 1 or mk_LogPosition(stream, pos.seqNo - 1) in set dom entries~
-            or (stream in set dom retention and pos.seqNo - 1 < retention(stream)))
-       and entries = entries~ munion {pos |-> mk_Entry(pos, kind, decoded, raw, supersedes)};
-
-  -- 推进来源序号覆盖：与已有区间衔接时终点前进，本代首次覆盖时建立区间；不衔接时不变
-  Cover(stream: StreamId, venueSeq: nat)
-  ext wr coverage rd opened
-  pre stream in set opened
-  post (stream not in set dom coverage~
-        and coverage = coverage~ munion {stream |-> mk_Range(venueSeq, venueSeq + 1)})
-       or (stream in set dom coverage~
-           and venueSeq = coverage~(stream).high
-           and coverage = coverage~ ++ {stream |-> mk_Range(coverage~(stream).low, venueSeq + 1)})
-       or (stream in set dom coverage~
-           and venueSeq <> coverage~(stream).high
-           and coverage = coverage~);
-
-  -- 某流是否已开代
-  IsOpen(stream: StreamId) r: bool
-  ext rd opened
-  post r = (stream in set opened);
+  -- 追加一条记录：流未开代则不追加；解出字段的是数据记录，没解出的是解不出记录；位置号为该流已有最大位置号加 1；携带序号的流上解出的来源序号与已有覆盖衔接时覆盖前进、本代首次时建立覆盖、否则覆盖不变；取代位置必须在同一流上
+  Append(stream: StreamId, decoded: [Decoded], raw: [RawPayload], supersedes: [LogPosition]) r: AppendOutcome
+  ext wr entries wr coverage rd opened rd retention
+  pre supersedes <> nil => supersedes.stream = stream
+  post (stream not in set dom opened and r = <NotOpen>
+        and entries = entries~ and coverage = coverage~)
+       or (stream in set dom opened
+           and r <> <NotOpen>
+           and r.stream = stream
+           and r not in set dom entries~
+           and (forall p in set dom entries~ & p.stream = stream => p.seqNo < r.seqNo)
+           and (r.seqNo = 1 or mk_LogPosition(stream, r.seqNo - 1) in set dom entries~
+                or (stream in set dom retention and r.seqNo - 1 < retention(stream)))
+           and entries = entries~ munion
+                 {r |-> mk_Entry(r, if decoded = nil then <Unmapped> else <Data>,
+                                 decoded, raw, supersedes)}
+           and let seqd = opened(stream) and decoded <> nil and decoded.venueSeq <> nil in
+                 (not seqd and coverage = coverage~)
+                 or (seqd and stream not in set dom coverage~
+                     and coverage = coverage~ munion
+                           {stream |-> mk_Range(decoded.venueSeq, decoded.venueSeq + 1)})
+                 or (seqd and stream in set dom coverage~
+                     and decoded.venueSeq = coverage~(stream).high
+                     and coverage = coverage~ ++
+                           {stream |-> mk_Range(coverage~(stream).low, decoded.venueSeq + 1)})
+                 or (seqd and stream in set dom coverage~
+                     and decoded.venueSeq <> coverage~(stream).high
+                     and coverage = coverage~));
 
   -- 查询一组依据位置的有效性：已被删、被取代、落后于流末超过允许距离或所在代已被新代接替、否则新鲜
   CheckBasis(basis: set of LogPosition, lag: nat) r: BasisValidity
@@ -179,7 +178,7 @@ operations
            stale = exists p in set basis &
                      (exists q in set dom entries &
                         q.stream = p.stream and q.seqNo > p.seqNo + lag)
-                     or (exists t in set opened &
+                     or (exists t in set dom opened &
                            t.origin = p.stream.origin and t.name = p.stream.name
                            and t.epoch > p.stream.epoch) in
          (beyond and r = <BeyondRetention>)

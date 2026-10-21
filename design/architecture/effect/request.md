@@ -51,7 +51,7 @@ types
     basis   : set of LogPosition  -- 请求所依据的观察位置
     member  : Principal;          -- 以谁的身份发出
 
-  -- 已答复
+  -- 处理器已作答；答复作为流事件回到请求方，请求从此不再等待
   Answered ::
     answer : Answer;  -- 处理器的答复
 

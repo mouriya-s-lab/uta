@@ -47,10 +47,12 @@ exports
     struct TicketStatus;
     struct TicketRecord;
     struct Alignment;
+    struct GateVerdict;
     struct DecideOutcome;
     struct ReleaseOutcome
   functions
-    GateOpen: TicketRecord * BasisValidity * Alignment * Time -> bool
+    Gate: TicketRecord * BasisValidity * Alignment * Time -> GateVerdict;
+    ToIntent: TicketRecord -> Intent
   operations
     Draft: TicketRecord ==> ();
     Revise: TicketId * Principal * IntentPayload ==> bool;
@@ -114,6 +116,9 @@ types
   -- 放行前的对账结果：各必要项是否与当前观察对齐
   Alignment = map CheckKey to (<Aligned> | <Diverged> | <Undecidable>);
 
+  -- 放行门的判定：单据已关闭、已到期、门未开、门已开
+  GateVerdict = <AlreadyClosed> | <Overdue> | <Hold> | <Open>;
+
   -- 裁决结局：已记录，或期望版本不符与同版本已决时的冲突
   DecideOutcome = <Recorded> | <Conflict>;
 
@@ -132,15 +137,24 @@ state Tickets of
 end
 
 functions
-  -- 放行门：送审中的当前版本已批准、依据新鲜、必要项全部对齐、未过期
-  GateOpen: TicketRecord * BasisValidity * Alignment * Time -> bool
-  GateOpen(rec, validity, align, now) ==
-    is_Awaiting(rec.status)
-    and rec.status.version in set dom rec.decisions
-    and rec.decisions(rec.status.version).ruling = <Approved>
-    and validity = <Fresh>
-    and (forall k in set dom align & align(k) = <Aligned>)
-    and now < rec.deadline;
+  -- 判定：放行门。已关闭与到期优先；送审中的当前版本已批准、依据新鲜、必要项全部对齐才开门
+  Gate: TicketRecord * BasisValidity * Alignment * Time -> GateVerdict
+  Gate(rec, validity, align, now) ==
+    if is_Closed(rec.status) then <AlreadyClosed>
+    elseif now >= rec.deadline then <Overdue>
+    elseif is_Awaiting(rec.status)
+           and rec.status.version in set dom rec.decisions
+           and rec.decisions(rec.status.version).ruling = <Approved>
+           and validity = <Fresh>
+           and (forall k in set dom align & align(k) = <Aligned>)
+    then <Open>
+    else <Hold>;
+
+  -- 判定：单据当前版本对应的写意图；以负责人为发出者
+  ToIntent: TicketRecord -> Intent
+  ToIntent(rec) ==
+    mk_Intent(rec.source, rec.cap, rec.kind, rec.versions(len rec.versions),
+              rec.basis, rec.deadline, rec.target, rec.responsible);
 
 operations
   -- 起草新单据：负责人取锁，只有第一个版本，尚无裁决
@@ -225,17 +239,17 @@ operations
   -- 场景：放行门。到期即关闭；门未开或通道不可准入即等待；准入成功则以准备记录关闭单据
   Release: TicketId * Admission * Alignment * Time * nat ==> ReleaseOutcome
   Release(id, how, align, now, lag) ==
-    let rec = byId(id) in
-      if is_Closed(rec.status) then return <Closed>
-      elseif now >= rec.deadline then (Close(id, <Expired>); return <Closed>)
-      elseif not GateOpen(rec, CheckBasis(rec.basis, lag), align, now) then return <Waiting>
-      else cases Prepare(mk_Intent(rec.source, rec.cap, rec.kind,
-                                   rec.versions(len rec.versions), rec.basis,
-                                   rec.deadline, rec.target, rec.responsible), how):
-             <Unmapped> -> return <Waiting>,
-             <LaneBlocked> -> return <Waiting>,
-             ref -> (Close(id, mk_Prepared(ref)); return ref)
-           end
+    cases Gate(byId(id), CheckBasis(byId(id).basis, lag), align, now):
+      <AlreadyClosed> -> return <Closed>,
+      <Overdue> -> (Close(id, <Expired>); return <Closed>),
+      <Hold> -> return <Waiting>,
+      others ->
+        cases Prepare(ToIntent(byId(id)), how):
+          <Unmapped> -> return <Waiting>,
+          <LaneBlocked> -> return <Waiting>,
+          ref -> (Close(id, mk_Prepared(ref)); return ref)
+        end
+    end
   pre id in set dom byId and (how = <CancelHead> => byId(id).target <> nil);
 
   -- 场景：写处理器接手一条等待中的请求。以请求发出者为负责人、请求依据为依据起草单据并送审，答复以单据身份回填请求；请求不存在或不在等待中则不接手

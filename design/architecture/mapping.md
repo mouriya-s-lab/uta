@@ -10,7 +10,8 @@ imports
       CapabilityKey renamed CapabilityKey;
       RawPayload renamed RawPayload;
       Verdict renamed Verdict;
-      SessionVerdict renamed SessionVerdict
+      SessionVerdict renamed SessionVerdict;
+      StreamDecl renamed StreamDecl
     operations
       SessionCapability renamed SessionCapability;
       LatestStreams renamed LatestStreams,
@@ -19,18 +20,16 @@ imports
       Decoded renamed Decoded;
       External renamed External;
       StreamId renamed StreamId;
-      LogPosition renamed LogPosition
+      AppendOutcome renamed AppendOutcome
     operations
-      IsOpen renamed IsOpen;
-      Append renamed Append;
-      Cover renamed Cover
+      OpenEpoch renamed OpenEpoch;
+      Append renamed Append
 exports
   types
     MappingId;
     LaneKey;
     IntentPayload;
     struct Envelope;
-    struct DecodeOutcome;
     struct EncodeRequest;
     struct Encoded;
     struct EncodeOutcome;
@@ -38,11 +37,13 @@ exports
     struct Evidence;
     struct CapabilityStatus
   functions
-    Combine: Verdict * SessionVerdict -> CapabilityStatus
+    Combine: Verdict * SessionVerdict -> CapabilityStatus;
+    Sequenced: StreamName * set of StreamDecl -> bool
   operations
     Install: SourceId * MappingId * map CapabilityKey to Verdict ==> ();
-    Decode: Envelope ==> DecodeOutcome;
-    Ingest: Envelope * StreamId ==> [LogPosition];
+    Decode: Envelope ==> [Decoded];
+    OpenStream: SourceId * StreamName * [RawPayload] ==> StreamId;
+    Ingest: Envelope * nat1 ==> AppendOutcome;
     Encode: EncodeRequest ==> EncodeOutcome;
     ClassifyEvidence: Probe ==> Evidence;
     CurrentCapability: SourceId * CapabilityKey ==> CapabilityStatus
@@ -62,9 +63,6 @@ types
     source : SourceId    -- 来自哪个来源
     stream : StreamName  -- 属于来源的哪条流
     raw    : RawPayload; -- 来源原文，原样保存
-
-  -- 解码结局：解出，或当前映射解不出
-  DecodeOutcome = Decoded | <Unmapped>;
 
   -- 一次编码请求：发往哪个来源的哪个意图
   EncodeRequest ::
@@ -107,6 +105,11 @@ functions
     elseif fixed = <Supported> and session = <Supported> then <Supported>
     else <Unknown>;
 
+  -- 判定：来源是否声明某条流携带可衔接的连续序号
+  Sequenced: StreamName * set of StreamDecl -> bool
+  Sequenced(name, decls) ==
+    exists s in set decls & s.name = name and s.venueSeq;
+
 operations
   -- 装载来源的当前映射：替换先前的映射与静态能力声明，不保留旧版本
   Install(source: SourceId, mapping: MappingId, caps: map CapabilityKey to Verdict)
@@ -114,28 +117,24 @@ operations
   post current = current~ ++ {source |-> mapping}
        and static = static~ ++ {source |-> caps};
 
-  -- 按来源当前映射解码信封；没有映射的来源一律解不出
-  Decode(env: Envelope) r: DecodeOutcome
+  -- 按来源当前映射解码信封，解不出为空；没有映射的来源一律解不出
+  Decode(env: Envelope) r: [Decoded]
   ext rd current
-  post env.source not in set dom current => r = <Unmapped>;
+  post env.source not in set dom current => r = nil;
 
-  -- 场景：入账。流未开代则不入；解不出仍占位置且原文保留；解出且来源声明该流带连续序号时推进覆盖
-  Ingest: Envelope * StreamId ==> [LogPosition]
-  Ingest(env, stream) ==
-    let open = IsOpen(stream) in
-      if not open then return nil
-      else cases Decode(env):
-             <Unmapped> -> return Append(stream, <Unmapped>, nil, env.raw, nil),
-             d ->
-               let pos = Append(stream, <Data>, d, env.raw, nil),
-                   decls = LatestStreams(env.source) in
-                 (if d.venueSeq <> nil
-                     and exists s in set decls & s.name = env.stream and s.venueSeq
-                  then Cover(stream, d.venueSeq);
-                  return pos)
-           end
-  pre is_External(stream.origin) and stream.origin.source = env.source
-      and stream.name = env.stream;
+  -- 场景：为某来源的某条流开新一代，按来源最近声明记下该流是否携带连续序号
+  OpenStream: SourceId * StreamName * [RawPayload] ==> StreamId
+  OpenStream(source, name, raw) ==
+    cases Sequenced(name, LatestStreams(source)):
+      true -> return OpenEpoch(mk_External(source), name, raw, true),
+      others -> return OpenEpoch(mk_External(source), name, raw, false)
+    end;
+
+  -- 场景：集成交来一封信封时，先解码再追加到该来源该流的指定一代上；解不出的也追加，原文保留
+  Ingest: Envelope * nat1 ==> AppendOutcome
+  Ingest(env, epoch) ==
+    return Append(mk_StreamId(mk_External(env.source), env.stream, epoch),
+                  Decode(env), env.raw, nil);
 
   -- 按来源当前映射编码意图并导出通道；没有映射的来源一律编不出
   Encode(req: EncodeRequest) r: EncodeOutcome

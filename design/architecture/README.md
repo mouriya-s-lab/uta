@@ -6,9 +6,9 @@
 
 账户、持仓、订单、成交与行情的原值由上游券商或交易所持有并裁决（来源：外部场所能力调查，证据见附录 `evidence/venue-facts.md`）。所以核心只记意图及其推进记录，``Observation`Entry.raw`` 原样保存来源原文作证据，``Write`Outcome`` 的每一个已知值都来自来源经集成取回的副本。
 
-提供商的类别、协议、是否提供 SDK 及 SDK 的语言无法预先确定，且上游协议何时改动无人知道（来源：多来源接入要求，证据见附录 `evidence/integration-facts.md`）。所以集成是外挂进程，只交出固定头加原文的 ``Mapping`Envelope``；核心按来源装载一份当前映射 ``Mapping`Mappings.current`` 抽出自己要用的字段，其余字段原样进出；映射不记版本，解不出记为 ``Observation`EntryKind`` 的 `<Unmapped>`，编不出返回 ``Mapping`EncodeOutcome`` 的 `<Unmapped>`，取证匹配不到一律为 ``Mapping`Evidence`` 的 `<Inconclusive>`。
+上游的类别与协议无法预先确定，也无法预先知道它何时改动（来源：多来源接入要求，证据见附录 `evidence/integration-facts.md`）。所以核心只接受 ``Mapping`Envelope``，不接受任何按上游协议定义的结构；核心按来源装载一份 ``Mapping`Mappings.current`` 抽出自己要用的 ``Observation`Decoded``，其余留在 ``Observation`Entry.raw`` 原样进出；``Mapping`Mappings`` 不记版本，解不出记为 ``Observation`EntryKind`` 的 `<Unmapped>`，编不出返回 ``Mapping`EncodeOutcome`` 的 `<Unmapped>`，``Mapping`ClassifyEvidence`` 匹配不到一律为 `<Inconclusive>`。
 
-上游推送流不存在通用断线续传游标，完备只能由来源给出的连续序号证明，且消费位置、完备进度与本地保留边界各自独立变化（来源：外部场所能力调查，证据见附录 `evidence/venue-facts.md`）。所以 ``Observation`StreamId.epoch`` 在每次来源连续性中断时开新一代并以 `<SourceGap>` 记录起点，``Observation`Journal.coverage`` 只按来源序号区间推进且 ``Mapping`Ingest`` 只在来源声明 ``Source`StreamDecl.venueSeq`` 时推进它，``Observation`LogPosition.seqNo`` 由核心分配而不取来源序号，消费位置另由 ``Delivery`Subscription.cursor`` 持有。
+上游推送流不存在通用断线续传游标，完备只能由来源给出的连续序号证明，且消费位置、完备进度与本地保留边界各自独立变化（来源：外部场所能力调查，证据见附录 `evidence/venue-facts.md`）。所以 ``Observation`StreamId.epoch`` 在每次来源连续性中断时开新一代并以 `<SourceGap>` 记录起点，``Observation`Journal.coverage`` 只按来源序号区间推进，且只对 ``Mapping`OpenStream`` 按 ``Source`StreamDecl.venueSeq`` 开出的流推进；``Observation`LogPosition.seqNo`` 由核心分配而不取来源序号，消费位置另由 ``Delivery`Subscription.cursor`` 持有。
 
 外部写的结果可能未知：网络超时、进程崩溃或连接中断可能发生在写请求已到达上游之后、回执返回之前（来源：外部场所能力调查，证据见附录 `evidence/venue-facts.md`）。所以 ``Write`Attempt`` 把等待轴 ``Write`Waiting`` 与结果轴 ``Write`Outcome`` 分开记录，``Write`Barrier`` 以持久屏障把崩溃窗口二分。
 
@@ -22,13 +22,13 @@
 
 观察与效应是两套独立的抽象：观察侧可撤回、可压缩，效应侧只追加；唯一的边是效应侧读观察侧（``Write`Intent.basis`` 引用 ``Observation`LogPosition``），观察侧不引用效应侧的任何类型。不选把两者合成一套记录：派生值的撤回不能当作外部写的补偿。
 
-不让集成把上游协议清洗成核心契约值：契约从哪里来没有稳定答案，契约一变就要改每个集成进程；核心只认信封里抽出的字段，改映射比改集成便宜，而下游仍然拿得到原文。
+不让与来源对接的进程把来源协议翻译成核心定义的结构：那套结构从哪里来没有稳定答案，它一变就要改每个对接进程；核心只认 ``Observation`Decoded`` 里抽出的字段，改 ``Mapping`Mappings.current`` 比改对接进程便宜，而下游仍然拿得到 ``Observation`Entry.raw``。
 
-映射住在核心而不住在集成：核心能够离线核验映射，集成进程不含任何 UTA 语义；不选在集成进程内求值映射，那样核心无法独立核验，集成作者要同时理解上游与 UTA。
+``Mapping`Decode`` 与 ``Mapping`Encode`` 在核心进程内求值而不在对接进程内：核心能够离线核验它们，对接进程不含任何核心的语义；不选在对接进程内求值，那样核心无法独立核验，对接的作者要同时理解来源与核心。
 
 ``Mapping`` 依赖 ``Observation`` 而不是反过来：观察日志对外部流与派生流一视同仁，不读映射的任何状态；入账 ``Mapping`Ingest`` 是先解码再追加的场景，归映射持有。不选让 ``Observation`` 调用解码：那会让读侧底座依赖含写侧编码与取证分类的模块。
 
-映射不记版本：无人知道上游何时改协议，为映射版本建立与会话或记录的绑定只换来多版本并存的复杂度；失配直接报错，在途的结果未知尝试只会得到 `<Inconclusive>` 而不会被误判。
+``Mapping`Mappings.current`` 每个来源只有一份：若保留多份，每条 ``Observation`Entry`` 与每个 ``Write`Attempt`` 都得记下它产生时用的是哪一份，替换之后两套解释并存。替换由运维在核心运行中完成，不重开 ``Source`` 会话、不改在途的 ``Write`Attempt``；旧映射下发出、结果未知的尝试改用新映射取证，匹配不到得到 `<Inconclusive>` 而不是被判为未发生。
 
 ``Delivery`` 单独成子模块：订阅归消费方、日志归核心，两者权威不同；不选把订阅游标放进 ``Observation`Journal``，那会让日志的不变量混入消费方的进度。
 

@@ -8,18 +8,17 @@
 
 从起单到放行可能相隔很久，放行时依据的观察可能已被撤回、压缩或落后于流末，而来源能力可能已变（来源：审批并发约束，证据见附录 `evidence/approval-facts.md`）。所以 ``Ticket`Release`` 在放行时刻重新核对 ``Observation`CheckBasis`` 与调用方给出的 ``Ticket`Alignment``，任一必要项不对齐即不放行；购买力、可交易性等资金面项只作为读入的对账项，核心不自行判断。
 
+谁有权裁决、哪些对账项必须对齐、是否自动批准，会随需求改变（来源：审批并发约束，证据见附录 `evidence/approval-facts.md`）。所以 ``Ticket`Decision.decider`` 只记录是谁，``Ticket`Alignment`` 只记录对齐与否；权限与必要项留在代码里。
+
 ## 需求
 
-- 负责人起草、修订、送审并可撤回单据，送审中的版本不被修改：``Ticket`Draft``、``Ticket`Revise``、``Ticket`SubmitForDecision``、``Ticket`Withdraw``。
-- 裁决者对指定版本作出裁决或退回修改，裁决者身份随裁决记录：``Ticket`Decide``、``Ticket`SendBack``。
-- 放行前确认当前版本已批准、依据未失效、必要项对齐、未过期且通道可准入，然后一次性交给写边界并关闭单据：``Ticket`Release``。
-- 写处理器接手程序或下游以效应请求发出的写意图，以请求发出者为负责人起草并送审，再以单据身份答复请求：``Ticket`AdoptRequest``。
+- 一张单可以被退回修改后再批准，批准的一定是裁决者看过的那个版本（来源：审批并发约束，证据见附录 `evidence/approval-facts.md`），由 ``Ticket`SendBack`` 与 ``Ticket`Decide`` 走通。
+- 同一张单据只放行一次，依据过期或到期之后不放行（来源：审批并发约束，证据见附录 `evidence/approval-facts.md`），由 ``Ticket`Release`` 走通。
+- 程序发出的写请求必须先成为一张由装载人负责的单据（来源：可编程派生要求，证据见附录 `evidence/integration-facts.md`），由 ``Ticket`AdoptRequest`` 走通。
 
 ## 为什么
 
-锁与版本链放在同一张单据上：负责人是唯一能改版本链的人，裁决绑定版本号，三者共享"裁决版本不超过版本链长度"这条不变量。不选让每个业务各自维护审批状态：审批、放行门与通道准入是所有外部写共有的形成期规律。
-
-是否允许起单人自批、哪些对账项是必要项、自动审批的阈值，都是随需求变动的策略，留在代码里；单据只提供裁决者身份与对账项的槽位。
+不选让 ``Trading`` 与 ``Program`` 各自记录 ``Ticket`Decision``：一张单据的裁决会散在两处。也不选把 ``Ticket`Decision`` 放进 ``Write``：``Write`Intent`` 只需要一个获准的意图。
 
 单据不持有通道键：通道由 ``Mapping`Encode`` 在放行时从当前版本的意图导出，单据在修订后不必重算它。
 

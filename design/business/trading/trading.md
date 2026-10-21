@@ -65,7 +65,7 @@ types
     revision : nat;         -- 来源给出的状态修订号
 
 functions
-  -- 有效成交集合：同一执行身份取唯一最大修订，排除作废项与同修订号内容冲突项
+  -- 判定：哪些成交观察当前有效——同一执行身份只取最大修订，作废项与同修订号内容冲突项都不算；两个实现必须得出同一集合
   EffectiveExecutions: set of FillObs -> set of FillObs
   EffectiveExecutions(fills) ==
     {f | f in set fills &
@@ -74,7 +74,7 @@ functions
        and not exists h in set fills &
              h.execId = f.execId and h.revision = f.revision and h <> f};
 
-  -- 订单状态的极大观察集合：同一订单按修订号取极大元，修订号相同时保留多值
+  -- 判定：每个订单当前可信的状态观察——按来源修订号取极大元，修订号相同时保留多值而不伪造唯一最新状态
   MaximalOrderStates: set of OrderObs -> set of OrderObs
   MaximalOrderStates(obs) ==
     {x | x in set obs &

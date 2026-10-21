@@ -10,13 +10,13 @@
 
 ## 需求
 
-- 以装载人身份装载程序并建立输入订阅：``Program`Load``。
-- 取出输入流上的投递项、推进检查点、追加派生记录并发出请求：``Program`Poll``、``Program`Advance``。
-- 卸载程序并释放其检查点持有的保留引用：``Program`Unload``。
+- 以装载人身份装载程序并建立输入订阅（来源：可编程派生要求，证据见附录 `evidence/integration-facts.md`），由 ``Program`Load`` 走通。
+- 程序取出投递项、推进检查点、追加派生记录并发出请求，崩溃重启后从最近检查点继续（来源：可编程派生要求，证据见附录 `evidence/integration-facts.md`），由 ``Program`Poll`` 与 ``Program`Advance`` 走通。
+- 卸载程序时释放它持有的保留引用，不留下阻止压缩的残余（来源：可编程派生要求，证据见附录 `evidence/integration-facts.md`），由 ``Program`Unload`` 走通。
 
 ## 为什么
 
-检查点与订阅游标同一次提交：两者分开提交时，崩溃恢复会出现"游标已确认但状态未保存"或相反，程序要么重复消费要么漏消费。不选在检查点内完整快照输入窗口：输入窗口的大小由程序决定，而保留引用只需保护游标位置之后的记录。
+``Program`Keep`` 与 ``Delivery`Ack`` 在 ``Program`Advance`` 的同一次提交里生效：两者分开提交时，崩溃恢复会出现已确认而未保存或已保存而未确认，程序要么重复消费要么漏消费。不选把已消费的记录整体存进 ``Program`Checkpoint``：要存多少由程序决定，而 ``Observation`AcquireRef`` 只需保护 ``Program`Protected`` 算出的位置之后的记录。
 
 ## 语义
 

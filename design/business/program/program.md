@@ -10,6 +10,7 @@ imports
     types
       Fields renamed Fields;
       Decoded renamed Decoded;
+      RefHolder renamed RefHolder;
       Derived renamed Derived;
       StreamId renamed StreamId;
       LogPosition renamed LogPosition;
@@ -30,7 +31,6 @@ imports
       Ack renamed Ack,
   from Request
     types
-      RequestRef renamed RequestRef;
       Principal renamed Principal;
       EffectRequest renamed EffectRequest
     operations
@@ -45,12 +45,17 @@ exports
   operations
     Register: ProgramId * Loaded ==> ();
     Forget: ProgramId ==> ();
-    Store: ProgramId * Checkpoint ==> ();
+    Keep: ProgramId * Checkpoint ==> ();
+    Protect: ProgramId * Checkpoint ==> RefOutcome;
     Load: ProgramId * Principal * set of StreamId * StreamName * State ==> ();
     Unload: ProgramId ==> ();
     Poll: ProgramId * StreamId ==> seq of Item;
-    SaveCheckpoint: ProgramId * Checkpoint ==> RefOutcome;
-    Advance: ProgramId * StreamId * Step ==> [RequestRef]
+    Confirm: ProgramId * StreamId * Checkpoint ==> ();
+    Publish: ProgramId * Step ==> ();
+    Forward: ProgramId * [EffectRequest] ==> ();
+    Advance: ProgramId * StreamId * Step ==> ()
+  functions
+    Protected: Checkpoint -> set of LogPosition
 definitions
 types
   -- 程序身份；由装载清单给出
@@ -74,6 +79,7 @@ types
   -- 已装载的程序
   Loaded ::
     loadedBy     : Principal        -- 装载人：程序以此身份发出请求
+    holder       : RefHolder        -- 程序在观察日志登记引用所用的持有者身份
     subscription : SubscriptionId   -- 程序的输入订阅
     inputs       : set of StreamId  -- 输入流
     output       : StreamId         -- 派生输出流
@@ -87,6 +93,12 @@ state Programs of
   init s == s = mk_Programs({|->})
 end
 
+functions
+  -- 判定：检查点需要保留边界保护的位置——各输入流上已消费到的位置；尚未消费的流没有位置
+  Protected: Checkpoint -> set of LogPosition
+  Protected(cp) ==
+    {mk_LogPosition(s, cp.cursors(s)) | s in set dom cp.cursors & cp.cursors(s) > 0};
+
 operations
   -- 登记已装载的程序
   Register(prog: ProgramId, entry: Loaded)
@@ -99,8 +111,8 @@ operations
   ext wr loaded
   post loaded = {prog} <-: loaded~;
 
-  -- 替换程序的最近检查点
-  Store(prog: ProgramId, cp: Checkpoint)
+  -- 把一个检查点记为程序的最近检查点，取代先前的
+  Keep(prog: ProgramId, cp: Checkpoint)
   ext wr loaded
   pre prog in set dom loaded and dom cp.cursors = loaded(prog).inputs
   post loaded = loaded~ ++ {prog |-> mu(loaded~(prog), checkpoint |-> cp)};
@@ -109,8 +121,8 @@ operations
   Load: ProgramId * Principal * set of StreamId * StreamName * State ==> ()
   Load(prog, who, inputs, outName, initial) ==
     let sub = Subscribe(inputs),
-        out = OpenEpoch(mk_Derived(mk_token(prog)), outName, nil) in
-      Register(prog, mk_Loaded(who, sub, inputs, out,
+        out = OpenEpoch(mk_Derived(mk_token(prog)), outName, nil, false) in
+      Register(prog, mk_Loaded(who, mk_token(prog), sub, inputs, out,
                                mk_Checkpoint({s |-> 0 | s in set inputs}, initial)))
   pre prog not in set dom loaded;
 
@@ -118,7 +130,7 @@ operations
   Unload: ProgramId ==> ()
   Unload(prog) ==
     (Unsubscribe(loaded(prog).subscription);
-     ReleaseRef(mk_token(prog));
+     ReleaseRef(loaded(prog).holder);
      Forget(prog))
   pre prog in set dom loaded;
 
@@ -128,32 +140,52 @@ operations
     return Deliver(loaded(prog).subscription, input)
   pre prog in set dom loaded and input in set loaded(prog).inputs;
 
-  -- 场景：保存检查点。先以程序身份登记各已消费位置的保留引用，登记被拒则不保存
-  SaveCheckpoint: ProgramId * Checkpoint ==> RefOutcome
-  SaveCheckpoint(prog, cp) ==
-    let positions = {mk_LogPosition(s, cp.cursors(s)) | s in set dom cp.cursors & cp.cursors(s) > 0},
-        granted = AcquireRef(mk_token(prog), positions) in
-      if granted = <Rejected> then return <Rejected>
-      else (Store(prog, cp); return <Applied>)
+  -- 场景：向程序的订阅确认某输入流已消费到检查点所记的位置
+  Confirm: ProgramId * StreamId * Checkpoint ==> ()
+  Confirm(prog, input, cp) ==
+    Ack(loaded(prog).subscription, input, cp.cursors(input))
+  pre prog in set dom loaded and input in set loaded(prog).inputs
+      and input in set dom cp.cursors and cp.cursors(input) >= 1;
+
+  -- 场景：把本步的派生值追加到程序的输出流；本步没有派生值则不追加
+  Publish: ProgramId * Step ==> ()
+  Publish(prog, step) ==
+    cases step.derived:
+      nil -> skip,
+      fields -> let - = Append(loaded(prog).output,
+                                mk_Decoded(nil, nil, nil, fields), nil, step.supersedes) in skip
+    end
+  pre prog in set dom loaded
+      and (step.supersedes <> nil => step.supersedes.stream = loaded(prog).output);
+
+  -- 场景：以装载人身份发出本步的请求；本步没有请求则不发出
+  Forward: ProgramId * [EffectRequest] ==> ()
+  Forward(prog, req) ==
+    cases req:
+      nil -> skip,
+      r -> let - = Emit(mu(r, member |-> loaded(prog).loadedBy)) in skip
+    end
+  pre prog in set dom loaded;
+
+  -- 场景：以程序身份登记新检查点需要保护的位置；登记成功才把它记为最近检查点
+  Protect: ProgramId * Checkpoint ==> RefOutcome
+  Protect(prog, cp) ==
+    cases AcquireRef(loaded(prog).holder, Protected(cp)):
+      <Rejected> -> return <Rejected>,
+      others -> (Keep(prog, cp); return <Applied>)
+    end
   pre prog in set dom loaded and dom cp.cursors = loaded(prog).inputs;
 
-  -- 场景：推进一步。检查点保存成功后确认该输入流游标、追加派生记录、以装载人身份发出请求；保存被拒则本步无效
-  Advance: ProgramId * StreamId * Step ==> [RequestRef]
+  -- 场景：推进一步。新检查点受保护后，确认该输入流游标、发布派生值、发出请求；未受保护则本步无效
+  Advance: ProgramId * StreamId * Step ==> ()
   Advance(prog, input, step) ==
-    let l = loaded(prog), saved = SaveCheckpoint(prog, step.next) in
-      if saved = <Rejected> then return nil
-      else
-        (Ack(l.subscription, input, step.next.cursors(input));
-         if step.derived <> nil
-         then let - = Append(l.output, <Data>, mk_Decoded(nil, nil, nil, step.derived), nil, step.supersedes) in skip;
-         if step.request <> nil
-         then return Emit(mu(step.request, member |-> l.loadedBy))
-         else return nil)
-  pre prog in set dom loaded
-      and input in set loaded(prog).inputs
-      and dom step.next.cursors = loaded(prog).inputs
-      and step.next.cursors(input) >= 1
-      and step.next.cursors(input) >= loaded(prog).checkpoint.cursors(input)
-      and (step.supersedes <> nil => step.supersedes.stream = loaded(prog).output);
+    cases Protect(prog, step.next):
+      <Rejected> -> skip,
+      others -> (Confirm(prog, input, step.next);
+                 Publish(prog, step);
+                 Forward(prog, step.request))
+    end
+  pre prog in set dom loaded and input in set loaded(prog).inputs
+      and dom step.next.cursors = loaded(prog).inputs;
 end Program
 ```
