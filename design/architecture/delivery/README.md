@@ -4,7 +4,9 @@
 
 ## 依据
 
-消费方的消费速度与核心的保留边界各自独立推进，慢消费方可能在确认之前就被压缩越过（来源：外部场所能力调查，证据见附录 `evidence/venue-facts.md`）。所以 ``Delivery`DeliveryGap`` 先于记录写在订阅上并随投递交出，直到 ``Delivery`Ack`` 确认越过它才消失；流本身不因此多出或少掉任何记录。
+下游有多个消费方，各自与核心生命周期独立，消费速度不受核心控制（来源：多来源接入要求，证据见附录 `evidence/integration-facts.md`）；核心按自己的保留策略推进 ``Observation`AdvanceRetention``，慢消费方可能在确认之前就被压缩越过。所以 ``Delivery`DeliveryGap`` 先于记录写在订阅上并随投递交出，直到 ``Delivery`Ack`` 确认越过它才消失；流本身不因此多出或少掉任何记录。
+
+来源中断后流开新一代，消费方不应为此重新订阅（来源：外部场所能力调查，证据见附录 `evidence/venue-facts.md`）。所以 ``Delivery`Subscription.streams`` 是逻辑流，``Delivery`Subscription.cursor`` 带分代，``Delivery`Deliver`` 跨代连续交出。
 
 ## 为什么
 

@@ -4,19 +4,21 @@
 
 ## 依据
 
-策略与指标程序由外部或 AI 编写，可能死循环、超内存或崩溃重启，重启后需要从最近确认的位置继续而不丢失状态（来源：可编程派生要求，证据见附录 `evidence/integration-facts.md`）。所以 ``Program`Checkpoint`` 把程序状态绑定到各输入流的已消费位置，``Program`Advance`` 在同一次提交中保存检查点、确认订阅游标并追加派生记录；程序不是行动主体，``Request`EffectRequest.member`` 取装载人 ``Program`Loaded.loadedBy``。
+策略与指标程序由外部或 AI 编写，可能死循环、超内存或崩溃重启，重启后需要从最近确认的位置继续而不丢失状态（来源：可编程派生要求，证据见附录 `evidence/integration-facts.md`）。所以 ``Program`Checkpoint`` 把程序状态绑定到各输入流的已消费游标与效应事件的已消费位置，``Program`Advance`` 在同一次提交中保存检查点、确认订阅游标并追加派生记录；程序不是行动主体，``Request`EffectRequest.member`` 取装载人 ``Program`Loaded.loadedBy``。
 
-程序需要请求核心预先不认识的副作用（来源：可编程派生要求，证据见附录 `evidence/integration-facts.md`）。所以程序的唯一出口是 ``Request`Emit``，答复与执行事实作为流事件经 ``Delivery`Deliver`` 回到程序的下一步推进。
+程序需要请求核心预先不认识的副作用，并要看到请求之后单据与写尝试的结局才能组合多步写（来源：可编程派生要求，证据见附录 `evidence/integration-facts.md`）。所以程序的唯一出口是 ``Request`Emit``，答复与后续进展经 ``Program`Events`` 从 ``Request`Requests.events`` 按位置读回。
 
 ## 需求
 
 - 以装载人身份装载程序并建立输入订阅（来源：可编程派生要求，证据见附录 `evidence/integration-facts.md`），由 ``Program`Load`` 走通。
-- 程序取出投递项、推进检查点、追加派生记录并发出请求，崩溃重启后从最近检查点继续（来源：可编程派生要求，证据见附录 `evidence/integration-facts.md`），由 ``Program`Poll`` 与 ``Program`Advance`` 走通。
+- 程序取出投递项与效应事件、推进检查点、追加派生记录并发出请求，崩溃重启后从最近检查点继续（来源：可编程派生要求，证据见附录 `evidence/integration-facts.md`），由 ``Program`Poll``、``Program`Events`` 与 ``Program`Advance`` 走通。
 - 卸载程序时释放它持有的保留引用，不留下阻止压缩的残余（来源：可编程派生要求，证据见附录 `evidence/integration-facts.md`），由 ``Program`Unload`` 走通。
 
 ## 为什么
 
 ``Program`Keep`` 与 ``Delivery`Ack`` 在 ``Program`Advance`` 的同一次提交里生效：两者分开提交时，崩溃恢复会出现已确认而未保存或已保存而未确认，程序要么重复消费要么漏消费。不选把已消费的记录整体存进 ``Program`Checkpoint``：要存多少由程序决定，而 ``Observation`AcquireRef`` 只需保护 ``Program`Protected`` 算出的位置之后的记录。
+
+``Program`Advance`` 一次只确认一条输入流：检查点里其他流的游标不变，所以 ``Program`Checkpoint.cursors`` 与 ``Delivery`Subscription.cursor`` 不会失步。
 
 ## 语义
 

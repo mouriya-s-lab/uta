@@ -7,14 +7,15 @@ imports
     types
       SourceId renamed SourceId;
       CapabilityKey renamed CapabilityKey;
-      ClientKey renamed ClientKey,
+      SessionVerdict renamed SessionVerdict
+    operations
+      SessionCapability renamed SessionCapability,
   from Mapping
     types
       IntentPayload renamed IntentPayload,
   from Observation
     types
-      LogPosition renamed LogPosition;
-      BasisValidity renamed BasisValidity
+      LogPosition renamed LogPosition
     operations
       CheckBasis renamed CheckBasis,
   from Request
@@ -25,13 +26,14 @@ imports
     operations
       RequestOf renamed RequestOf;
       StatusOf renamed StatusOf;
-      Respond renamed Respond,
+      Respond renamed Respond;
+      Record renamed Record,
   from Write
     types
       AttemptRef renamed AttemptRef;
       Time renamed Time;
+      Admission renamed Admission;
       Intent renamed Intent;
-      Admission renamed Admission
     operations
       Prepare renamed Prepare
 exports
@@ -45,25 +47,25 @@ exports
     struct ClosedReason;
     struct Closed;
     struct TicketStatus;
+    struct Proposal;
     struct TicketRecord;
     struct Alignment;
     struct GateVerdict;
     struct DecideOutcome;
     struct ReleaseOutcome
   functions
-    Gate: TicketRecord * BasisValidity * Alignment * Time -> GateVerdict;
+    Gate: TicketRecord * bool * Alignment * Time * SessionVerdict -> GateVerdict;
     ToIntent: TicketRecord -> Intent
   operations
-    Draft: TicketRecord ==> ();
-    Revise: TicketId * Principal * IntentPayload ==> bool;
-    SubmitForDecision: TicketId * Principal ==> bool;
-    SendBack: TicketId ==> bool;
-    Transfer: TicketId * Principal * Principal ==> bool;
+    Draft: Proposal ==> ();
+    Revise: TicketId * Principal * IntentPayload ==> ();
+    SubmitForDecision: TicketId * Principal ==> ();
+    SendBack: TicketId ==> ();
+    Transfer: TicketId * Principal * Principal ==> ();
     Decide: TicketId * nat1 * Principal * Ruling ==> DecideOutcome;
-    Withdraw: TicketId * Principal ==> bool;
-    Close: TicketId * ClosedReason ==> ();
-    Release: TicketId * Admission * Alignment * Time * nat ==> ReleaseOutcome;
-    AdoptRequest: RequestRef * TicketRecord ==> bool;
+    Withdraw: TicketId * Principal ==> ();
+    Release: TicketId * Alignment * Time ==> ReleaseOutcome;
+    AdoptRequest: RequestRef * Proposal ==> bool;
     RecordOf: TicketId ==> [TicketRecord]
 definitions
 types
@@ -99,7 +101,19 @@ types
   -- 单据状态：草稿中、送审中、已关闭
   TicketStatus = <Drafting> | Awaiting | Closed;
 
-  -- 一张单据：一把锁、一条线性版本链、绑定版本的裁决
+  -- 起草一张单据所需的提议：负责人、目标、首个版本的意图、依据、期限与准入方式
+  Proposal ::
+    id          : TicketId             -- 身份
+    responsible : Principal            -- 负责人
+    source      : SourceId             -- 目标来源
+    cap         : CapabilityKey        -- 放行前核对的能力
+    kind        : EffectKind           -- 效应种类
+    intent      : IntentPayload        -- 首个版本
+    basis       : set of LogPosition   -- 决策依据的观察位置
+    deadline    : Time                 -- 过期时刻
+    admission   : Admission;           -- 准入方式，随单据受审
+
+  -- 一张单据：一把锁、一条线性版本链、绑定版本的裁决、它接手的请求（若有）
   TicketRecord ::
     id          : TicketId                -- 身份
     responsible : Principal               -- 当前持有编辑权的负责人
@@ -110,14 +124,15 @@ types
     decisions   : map nat1 to Decision    -- 各版本的裁决
     basis       : set of LogPosition      -- 决策依据的观察位置
     deadline    : Time                    -- 过期时刻
-    target      : [ClientKey]             -- 撤阻塞头时指向的阻塞头调用方键
+    admission   : Admission               -- 准入方式
+    request     : [RequestRef]            -- 接手的请求
     status      : TicketStatus;           -- 当前状态
 
-  -- 放行前的对账结果：各必要项是否与当前观察对齐
-  Alignment = map CheckKey to (<Aligned> | <Diverged> | <Undecidable>);
+  -- 放行前的对账结果：未对齐的必要项；空集即全部对齐
+  Alignment = set of CheckKey;
 
-  -- 放行门的判定：单据已关闭、已到期、门未开、门已开
-  GateVerdict = <AlreadyClosed> | <Overdue> | <Hold> | <Open>;
+  -- 放行门的判定：已关闭、已到期、来源已声明不支持、门未开、门已开
+  GateVerdict = <AlreadyClosed> | <Overdue> | <Unsupported> | <Hold> | <Open>;
 
   -- 裁决结局：已记录，或期望版本不符与同版本已决时的冲突
   DecideOutcome = <Recorded> | <Conflict>;
@@ -137,79 +152,74 @@ state Tickets of
 end
 
 functions
-  -- 判定：放行门。已关闭与到期优先；送审中的当前版本已批准、依据新鲜、必要项全部对齐才开门
-  Gate: TicketRecord * BasisValidity * Alignment * Time -> GateVerdict
-  Gate(rec, validity, align, now) ==
+  -- 判定：放行门。已关闭、到期、来源明确不支持依次优先；送审中的当前版本已批准、依据新鲜、必要项全部对齐、来源此刻支持才开门
+  Gate: TicketRecord * bool * Alignment * Time * SessionVerdict -> GateVerdict
+  Gate(rec, fresh, align, now, cap) ==
     if is_Closed(rec.status) then <AlreadyClosed>
     elseif now >= rec.deadline then <Overdue>
+    elseif cap = <Unsupported> then <Unsupported>
     elseif is_Awaiting(rec.status)
            and rec.status.version in set dom rec.decisions
            and rec.decisions(rec.status.version).ruling = <Approved>
-           and validity = <Fresh>
-           and (forall k in set dom align & align(k) = <Aligned>)
+           and fresh
+           and align = {}
+           and cap = <Supported>
     then <Open>
     else <Hold>;
 
-  -- 判定：单据当前版本对应的写意图；以负责人为发出者
+  -- 判定：单据当前版本对应的写意图
   ToIntent: TicketRecord -> Intent
   ToIntent(rec) ==
-    mk_Intent(rec.source, rec.cap, rec.kind, rec.versions(len rec.versions),
-              rec.basis, rec.deadline, rec.target, rec.responsible);
+    mk_Intent(rec.source, rec.cap, rec.versions(len rec.versions), rec.deadline, rec.admission);
 
 operations
-  -- 起草新单据：负责人取锁，只有第一个版本，尚无裁决
-  Draft(rec: TicketRecord)
+  -- 起草新单据：负责人取锁，只有提议里的第一个版本，尚无裁决
+  Draft(p: Proposal)
   ext wr byId
-  pre rec.id not in set dom byId
-      and rec.status = <Drafting>
-      and len rec.versions = 1
-      and rec.decisions = {|->}
-  post byId = byId~ munion {rec.id |-> rec};
+  pre p.id not in set dom byId
+  post byId = byId~ munion
+         {p.id |-> mk_TicketRecord(p.id, p.responsible, p.source, p.cap, p.kind,
+                                   [p.intent], {|->}, p.basis, p.deadline, p.admission,
+                                   nil, <Drafting>)};
 
-  -- 负责人在草稿中追加新版本；非负责人或非草稿状态时不生效
-  Revise(id: TicketId, who: Principal, next: IntentPayload) r: bool
+  -- 接手一条请求起草单据：与起草相同，另记下所接手的请求
+  DraftFor(p: Proposal, req: RequestRef)
   ext wr byId
-  post let ok = id in set dom byId~
-                and byId~(id).responsible = who
-                and byId~(id).status = <Drafting> in
-         r = ok
-         and (ok => byId = byId~ ++ {id |-> mu(byId~(id), versions |-> byId~(id).versions ^ [next])})
-         and (not ok => byId = byId~);
+  pre p.id not in set dom byId
+  post byId = byId~ munion
+         {p.id |-> mk_TicketRecord(p.id, p.responsible, p.source, p.cap, p.kind,
+                                   [p.intent], {|->}, p.basis, p.deadline, p.admission,
+                                   req, <Drafting>)};
+
+  -- 负责人在草稿中追加新版本
+  Revise(id: TicketId, who: Principal, next: IntentPayload)
+  ext wr byId
+  pre id in set dom byId and byId(id).responsible = who and byId(id).status = <Drafting>
+  post byId = byId~ ++ {id |-> mu(byId~(id), versions |-> byId~(id).versions ^ [next])};
 
   -- 负责人把草稿送审：冻结在最新版本
-  SubmitForDecision(id: TicketId, who: Principal) r: bool
+  SubmitForDecision(id: TicketId, who: Principal)
   ext wr byId
-  post let ok = id in set dom byId~
-                and byId~(id).responsible = who
-                and byId~(id).status = <Drafting> in
-         r = ok
-         and (ok => byId = byId~ ++ {id |-> mu(byId~(id), status |-> mk_Awaiting(len byId~(id).versions))})
-         and (not ok => byId = byId~);
+  pre id in set dom byId and byId(id).responsible = who and byId(id).status = <Drafting>
+  post byId = byId~ ++ {id |-> mu(byId~(id), status |-> mk_Awaiting(len byId~(id).versions))};
 
   -- 把送审中的单据退回草稿；负责人不变，已有裁决保留在其版本上
-  SendBack(id: TicketId) r: bool
+  SendBack(id: TicketId)
   ext wr byId
-  post let ok = id in set dom byId~ and is_Awaiting(byId~(id).status) in
-         r = ok
-         and (ok => byId = byId~ ++ {id |-> mu(byId~(id), status |-> <Drafting>)})
-         and (not ok => byId = byId~);
+  pre id in set dom byId and is_Awaiting(byId(id).status)
+  post byId = byId~ ++ {id |-> mu(byId~(id), status |-> <Drafting>)};
 
   -- 负责人把未关闭的单据移交给另一个主体
-  Transfer(id: TicketId, src: Principal, dst: Principal) r: bool
+  Transfer(id: TicketId, src: Principal, dst: Principal)
   ext wr byId
-  post let ok = id in set dom byId~
-                and byId~(id).responsible = src
-                and not is_Closed(byId~(id).status) in
-         r = ok
-         and (ok => byId = byId~ ++ {id |-> mu(byId~(id), responsible |-> dst)})
-         and (not ok => byId = byId~);
+  pre id in set dom byId and byId(id).responsible = src and not is_Closed(byId(id).status)
+  post byId = byId~ ++ {id |-> mu(byId~(id), responsible |-> dst)};
 
   -- 对送审中的指定版本作出裁决；期望版本不符或该版本已决时返回冲突且不改状态；否决即关闭
   Decide(id: TicketId, version: nat1, who: Principal, ruling: Ruling) r: DecideOutcome
   ext wr byId
-  post let ok = id in set dom byId~
-                and is_Awaiting(byId~(id).status)
-                and byId~(id).status.version = version
+  pre id in set dom byId and is_Awaiting(byId(id).status)
+  post let ok = byId~(id).status.version = version
                 and version not in set dom byId~(id).decisions in
          (ok and r = <Recorded>
           and byId = byId~ ++
@@ -221,14 +231,10 @@ operations
          or (not ok and r = <Conflict> and byId = byId~);
 
   -- 负责人撤回未关闭的单据
-  Withdraw(id: TicketId, who: Principal) r: bool
+  Withdraw(id: TicketId, who: Principal)
   ext wr byId
-  post let ok = id in set dom byId~
-                and byId~(id).responsible = who
-                and not is_Closed(byId~(id).status) in
-         r = ok
-         and (ok => byId = byId~ ++ {id |-> mu(byId~(id), status |-> mk_Closed(<Withdrawn>))})
-         and (not ok => byId = byId~);
+  pre id in set dom byId and byId(id).responsible = who and not is_Closed(byId(id).status)
+  post byId = byId~ ++ {id |-> mu(byId~(id), status |-> mk_Closed(<Withdrawn>))};
 
   -- 以给定原因关闭未关闭的单据
   Close(id: TicketId, reason: ClosedReason)
@@ -236,36 +242,41 @@ operations
   pre id in set dom byId and not is_Closed(byId(id).status)
   post byId = byId~ ++ {id |-> mu(byId~(id), status |-> mk_Closed(reason))};
 
-  -- 场景：放行门。到期即关闭；门未开或通道不可准入即等待；准入成功则以准备记录关闭单据
-  Release: TicketId * Admission * Alignment * Time * nat ==> ReleaseOutcome
-  Release(id, how, align, now, lag) ==
-    cases Gate(byId(id), CheckBasis(byId(id).basis, lag), align, now):
-      <AlreadyClosed> -> return <Closed>,
-      <Overdue> -> (Close(id, <Expired>); return <Closed>),
-      <Hold> -> return <Waiting>,
-      others ->
-        cases Prepare(ToIntent(byId(id)), how):
-          <Unmapped> -> return <Waiting>,
-          <LaneBlocked> -> return <Waiting>,
-          ref -> (Close(id, mk_Prepared(ref)); return ref)
-        end
-    end
-  pre id in set dom byId and (how = <CancelHead> => byId(id).target <> nil);
+  -- 场景：放行门。到期或来源明确不支持即关单并记事；门未开或通道不可准入即等待；准入成功则以准备记录关单并记事
+  Release: TicketId * Alignment * Time ==> ReleaseOutcome
+  Release(id, align, now) ==
+    let rec = byId(id) in
+      cases Gate(rec, CheckBasis(rec.basis), align, now, SessionCapability(rec.source, rec.cap)):
+        <AlreadyClosed> -> return <Closed>,
+        <Overdue> -> (Close(id, <Expired>);
+                      Record(rec.request, mk_token(mk_(id, <Expired>)));
+                      return <Closed>),
+        <Unsupported> -> (Close(id, <DecisionRejected>);
+                          Record(rec.request, mk_token(mk_(id, <DecisionRejected>)));
+                          return <Closed>),
+        <Hold> -> return <Waiting>,
+        others ->
+          cases Prepare(ToIntent(rec)):
+            <Unmapped> -> return <Waiting>,
+            <LaneBlocked> -> return <Waiting>,
+            ref -> (Close(id, mk_Prepared(ref));
+                    Record(rec.request, mk_token(mk_(id, ref)));
+                    return ref)
+          end
+      end
+  pre id in set dom byId;
 
-  -- 场景：写处理器接手一条等待中的请求。以请求发出者为负责人、请求依据为依据起草单据并送审，答复以单据身份回填请求；请求不存在或不在等待中则不接手
-  AdoptRequest: RequestRef * TicketRecord ==> bool
-  AdoptRequest(ref, shape) ==
-    let req = RequestOf(ref), status = StatusOf(ref) in
-      if req = nil or status <> <Pending> or req.kind <> shape.kind
+  -- 场景：写处理器接手一条等待中的请求。以请求发出者为负责人、请求依据为依据起草并送审，答复以单据身份回填；请求不存在、不在等待中或种类不符则不接手
+  AdoptRequest: RequestRef * Proposal ==> bool
+  AdoptRequest(ref, p) ==
+    let req = RequestOf(ref) in
+      if req = nil or StatusOf(ref) <> <Pending> or req.kind <> p.kind
       then return false
-      else (Draft(mu(shape, responsible |-> req.member, basis |-> req.basis));
-            let - = SubmitForDecision(shape.id, req.member) in skip;
-            Respond(ref, mk_token(shape.id));
+      else (DraftFor(mu(p, responsible |-> req.member, basis |-> req.basis), ref);
+            SubmitForDecision(p.id, req.member);
+            Respond(ref, mk_token(p.id));
             return true)
-  pre shape.id not in set dom byId
-      and shape.status = <Drafting>
-      and len shape.versions = 1
-      and shape.decisions = {|->};
+  pre p.id not in set dom byId;
 
   -- 查询单据；不存在为空
   RecordOf(id: TicketId) r: [TicketRecord]

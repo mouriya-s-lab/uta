@@ -13,20 +13,23 @@ exports
     Principal;
     Payload;
     struct Answer;
-    struct HandlerClass;
+    struct Note;
     struct EffectRequest;
     struct Answered;
-    struct RequestStatus
+    struct RequestStatus;
+    struct Event
   operations
-    Register: EffectKind * HandlerClass ==> ();
+    Register: EffectKind ==> ();
     Emit: EffectRequest ==> RequestRef;
     Respond: RequestRef * Answer ==> ();
+    Record: [RequestRef] * Note ==> ();
+    ReadEvents: nat ==> seq of Event;
     StatusOf: RequestRef ==> [RequestStatus];
     RequestOf: RequestRef ==> [EffectRequest];
     Pending: EffectKind ==> set of RequestRef
 definitions
 types
-  -- 一条效应请求在请求流上的身份；核心造出，使用方不读结构
+  -- 一条效应请求在请求表里的身份；核心造出，使用方不读结构
   RequestRef = token;
 
   -- 效应种类；由处理器注册，核心不穷举
@@ -38,11 +41,11 @@ types
   -- 请求载荷；核心不解释，交给注册了该种类的处理器
   Payload = token;
 
-  -- 处理器给出的答复；核心不解释，作为流事件交回请求方
+  -- 处理器给出的答复；核心不解释，作为事件交回请求方
   Answer = token;
 
-  -- 处理器类别：向来源只读、改变外部世界、或由核心自己的记录作答
-  HandlerClass = <Read> | <Write> | <Core>;
+  -- 效应侧的一条进展记事；由追加方写入并自行解释，本模块只保证它的顺序与不丢失
+  Note = token;
 
   -- 一条效应请求：请求是值，不是调用
   EffectRequest ::
@@ -51,47 +54,65 @@ types
     basis   : set of LogPosition  -- 请求所依据的观察位置
     member  : Principal;          -- 以谁的身份发出
 
-  -- 处理器已作答；答复作为流事件回到请求方，请求从此不再等待
+  -- 处理器已作答；答复作为事件回到请求方，请求从此不再等待
   Answered ::
     answer : Answer;  -- 处理器的答复
 
   -- 请求状态：等待处理器、无处理器、已答复
   RequestStatus = <Pending> | <Unhandled> | Answered;
 
-  -- 一条请求流记录
-  Record ::
+  -- 效应事件：答复或进展记事，带它所关联的请求（若有）
+  Event ::
+    about : [RequestRef]  -- 关联的请求；进展记事可不关联
+    note  : Note;         -- 内容
+
+  -- 一条请求表记录
+  RequestEntry ::
     request : EffectRequest  -- 请求本身
     status  : RequestStatus; -- 当前状态
 
-  -- 请求表：处理器注册与请求流
+  -- 请求表与效应事件序列：事件只追加、不压缩、无分代
 state Requests of
-  handlers : map EffectKind to HandlerClass  -- 已注册的处理器及其类别
-  log      : map RequestRef to Record        -- 请求流
-  inv mk_Requests(h, l) ==
+  handlers : set of EffectKind                -- 已注册处理器的种类
+  log      : map RequestRef to RequestEntry   -- 请求表
+  events   : seq of Event                     -- 效应事件序列，下标即位置
+  inv mk_Requests(h, l, -) ==
         forall r in set dom l &
-          l(r).status = <Pending> => l(r).request.kind in set dom h
-  init r == r = mk_Requests({|->}, {|->})
+          l(r).status = <Pending> => l(r).request.kind in set h
+  init r == r = mk_Requests({}, {|->}, [])
 end
 
 operations
-  -- 注册某种类的处理器；同一种类再次注册以后者为准
-  Register(kind: EffectKind, class: HandlerClass)
+  -- 注册某种类的处理器
+  Register(kind: EffectKind)
   ext wr handlers
-  post handlers = handlers~ ++ {kind |-> class};
+  post handlers = handlers~ union {kind};
 
   -- 追加一条请求：有处理器则等待处理，否则停在无处理器；两者都不是错误
   Emit(req: EffectRequest) ref: RequestRef
   ext rd handlers wr log
   post ref not in set dom log~
        and log = log~ munion
-             {ref |-> mk_Record(req, if req.kind in set dom handlers
-                                     then <Pending> else <Unhandled>)};
+             {ref |-> mk_RequestEntry(req, if req.kind in set handlers
+                                           then <Pending> else <Unhandled>)};
 
-  -- 记录处理器对一条等待中请求的答复
+  -- 记录处理器对一条等待中请求的答复，并把答复追加为事件
   Respond(ref: RequestRef, answer: Answer)
-  ext wr log
+  ext wr log wr events
   pre ref in set dom log and log(ref).status = <Pending>
-  post log = log~ ++ {ref |-> mu(log~(ref), status |-> mk_Answered(answer))};
+  post log = log~ ++ {ref |-> mu(log~(ref), status |-> mk_Answered(answer))}
+       and events = events~ ^ [mk_Event(ref, answer)];
+
+  -- 追加一条进展记事
+  Record(about: [RequestRef], note: Note)
+  ext rd log wr events
+  pre about <> nil => about in set dom log
+  post events = events~ ^ [mk_Event(about, note)];
+
+  -- 读出位置晚于 after 的全部事件，按追加先后
+  ReadEvents(after: nat) r: seq of Event
+  ext rd events
+  post r = (if after >= len events then [] else events(after + 1, ..., len events));
 
   -- 查询请求状态；不存在的请求为空
   StatusOf(ref: RequestRef) r: [RequestStatus]

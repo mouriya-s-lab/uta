@@ -5,22 +5,24 @@ module Trading
 imports
   from Source
     types
-      CapabilityKey renamed CapabilityKey,
-  from Mapping
+      CapabilityKey renamed CapabilityKey
     operations
-      CurrentCapability renamed CurrentCapability,
+      SessionCapability renamed SessionCapability,
   from Observation
     types
       LogPosition renamed LogPosition,
   from Write
     types
-      AttemptRef renamed AttemptRef
+      AttemptRef renamed AttemptRef;
+      CancelHead renamed CancelHead
+    functions
+      KeyOf renamed KeyOf
     operations
       AttemptOf renamed AttemptOf,
   from Ticket
     types
       TicketId renamed TicketId;
-      TicketRecord renamed TicketRecord
+      Proposal renamed Proposal
     operations
       Draft renamed Draft
 exports
@@ -28,6 +30,7 @@ exports
     ExecutionId;
     OrderId;
     struct OperationKind;
+    struct TradeDraft;
     struct FillStatus;
     struct FillObs;
     struct OrderObs
@@ -35,8 +38,8 @@ exports
     EffectiveExecutions: set of FillObs -> set of FillObs;
     MaximalOrderStates: set of OrderObs -> set of OrderObs
   operations
-    ReplaceOrder: TicketRecord * TicketRecord * TicketRecord * CapabilityKey ==> seq of TicketId;
-    DraftCancelOfHead: TicketRecord * AttemptRef ==> bool
+    ReplaceOrder: TradeDraft * TradeDraft * TradeDraft * CapabilityKey ==> seq of TicketId;
+    DraftCancelOfHead: TradeDraft * AttemptRef ==> bool
 definitions
 types
   -- 来源分配的成交执行身份
@@ -48,17 +51,22 @@ types
   -- 交易写的操作种类：封闭集合
   OperationKind = <Place> | <Cancel> | <Replace> | <Close>;
 
+  -- 一张交易单据的起草：操作种类与单据提议
+  TradeDraft ::
+    op       : OperationKind  -- 这张单据做什么
+    proposal : Proposal;      -- 单据提议
+
   -- 一笔成交的有效性：有效或已作废
   FillStatus = <Valid> | <Voided>;
 
-  -- 一条成交观察
+  -- 一条成交观察；由业务从映射抽出的字段解出
   FillObs ::
     execId   : ExecutionId  -- 执行身份
     revision : nat          -- 来源给出的修订号
     status   : FillStatus   -- 有效或作废
     qty      : nat;         -- 本笔成交量
 
-  -- 一条订单状态观察
+  -- 一条订单状态观察；由业务从映射抽出的字段解出
   OrderObs ::
     orderId  : OrderId      -- 订单身份
     pos      : LogPosition  -- 所在观察位置
@@ -81,24 +89,30 @@ functions
        not exists y in set obs & y.orderId = x.orderId and y.revision > x.revision};
 
 operations
-  -- 场景：改单。来源支持原子改单时只起改单单据；不支持时显式起撤单与下单两张独立单据；能力未确认或离线时不起单
-  ReplaceOrder: TicketRecord * TicketRecord * TicketRecord * CapabilityKey ==> seq of TicketId
-  ReplaceOrder(replaceDraft, cancelDraft, placeDraft, replaceCap) ==
-    cases CurrentCapability(replaceDraft.source, replaceCap):
-      <Supported> -> (Draft(replaceDraft); return [replaceDraft.id]),
-      <Unsupported> -> (Draft(cancelDraft); Draft(placeDraft); return [cancelDraft.id, placeDraft.id]),
+  -- 场景：改单。来源此刻支持原子改单时只起改单单据；明确不支持时显式起撤单与下单两张独立单据；能力未确认或离线时不起单
+  ReplaceOrder: TradeDraft * TradeDraft * TradeDraft * CapabilityKey ==> seq of TicketId
+  ReplaceOrder(replace, cancel, place, replaceCap) ==
+    cases SessionCapability(replace.proposal.source, replaceCap):
+      <Supported> -> (Draft(replace.proposal); return [replace.proposal.id]),
+      <Unsupported> -> (Draft(cancel.proposal); Draft(place.proposal);
+                        return [cancel.proposal.id, place.proposal.id]),
       others -> return []
     end
-  pre replaceDraft.id <> cancelDraft.id and cancelDraft.id <> placeDraft.id and replaceDraft.id <> placeDraft.id;
+  pre replace.op = <Replace> and cancel.op = <Cancel> and place.op = <Place>
+      and replace.proposal.source = cancel.proposal.source
+      and cancel.proposal.source = place.proposal.source
+      and card {replace.proposal.id, cancel.proposal.id, place.proposal.id} = 3;
 
-  -- 场景：起草撤阻塞头的撤单单据。目标必须是已过屏障、等待仍在进行的尝试；撤单指向它的调用方键
-  DraftCancelOfHead: TicketRecord * AttemptRef ==> bool
-  DraftCancelOfHead(cancelDraft, head) ==
+  -- 场景：起草撤阻塞头的撤单单据。目标必须是已过屏障、等待仍在进行、同一来源的尝试；单据以撤阻塞头方式准入并指向它的调用方键
+  DraftCancelOfHead: TradeDraft * AttemptRef ==> bool
+  DraftCancelOfHead(cancel, head) ==
     cases AttemptOf(head):
       nil -> return false,
-      a -> if a.barriered and a.waiting = <Active>
-           then (Draft(mu(cancelDraft, target |-> a.key)); return true)
+      a -> if a.barriered and a.waiting = <Active> and a.intent.source = cancel.proposal.source
+           then (Draft(mu(cancel.proposal, admission |-> mk_CancelHead(KeyOf(head))));
+                 return true)
            else return false
-    end;
+    end
+  pre cancel.op = <Cancel>;
 end Trading
 ```

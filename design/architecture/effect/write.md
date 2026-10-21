@@ -7,75 +7,78 @@ imports
     types
       SourceId renamed SourceId;
       CapabilityKey renamed CapabilityKey;
+      RawPayload renamed RawPayload
+    operations
+      SessionCapability renamed SessionCapability,
+  from Observation
+    types
       ClientKey renamed ClientKey;
-      RawPayload renamed RawPayload,
+      LogPosition renamed LogPosition
+    operations
+      ByClientKey renamed ByClientKey,
   from Mapping
     types
       LaneKey renamed LaneKey;
       IntentPayload renamed IntentPayload;
       EncodeRequest renamed EncodeRequest;
       Encoded renamed Encoded;
+      Probe renamed Probe;
       Evidence renamed Evidence
     operations
       Encode renamed Encode;
-      CurrentCapability renamed CurrentCapability,
-  from Observation
-    types
-      LogPosition renamed LogPosition
-    operations
-      ByClientKey renamed ByClientKey,
+      ClassifyEvidence renamed ClassifyEvidence,
   from Request
-    types
-      EffectKind renamed EffectKind;
-      Principal renamed Principal
+    operations
+      Record renamed Record
 exports
   types
     AttemptRef;
     struct Time;
-    struct Intent;
+    struct CancelHead;
     struct Admission;
+    struct Intent;
     struct Waiting;
     struct Outcome;
     struct Attempt;
-    struct AdmitOutcome;
     struct PrepareOutcome;
     struct GateOutcome;
     struct Reply
   functions
+    KeyOf: AttemptRef -> ClientKey;
     BlockingHeads: set of Attempt * LaneKey -> set of Attempt
   operations
-    Admit: Intent * Encoded * Admission ==> AdmitOutcome;
-    Prepare: Intent * Admission ==> PrepareOutcome;
-    Seal: AttemptRef ==> ();
-    Expire: AttemptRef ==> ();
+    Prepare: Intent ==> PrepareOutcome;
     Barrier: AttemptRef * Time ==> GateOutcome;
+    Expire: AttemptRef ==> ();
     CompleteSend: AttemptRef * Reply ==> ();
     Resolve: AttemptRef * Evidence ==> ();
-    Abandon: AttemptRef ==> ();
+    ProbeAttempt: AttemptRef * RawPayload ==> Evidence;
     Attribute: AttemptRef * LogPosition ==> bool;
+    Abandon: AttemptRef ==> ();
     LaneClear: LaneKey ==> bool;
     AttemptOf: AttemptRef ==> [Attempt]
 definitions
 types
-  -- 一次写尝试的身份：它的准备记录在执行事实日志中的位置；核心造出
+  -- 一次写尝试的身份；核心造出，使用方不读结构
   AttemptRef = token;
 
   -- 核心时钟的一个时刻；由调用方在过门时读入
   Time = nat;
 
+  -- 撤阻塞头准入：指向已过屏障的阻塞头的调用方键
+  CancelHead ::
+    target : ClientKey;  -- 要撤的阻塞头
+
+  -- 准入方式：通道空时的普通准入、针对阻塞头的撤单、显式绕过
+  Admission = <Normal> | CancelHead | <Bypass>;
+
   -- 已获准进入写边界的意图
   Intent ::
-    source   : SourceId             -- 发往哪个来源
-    cap      : CapabilityKey        -- 发出前要核对的能力
-    kind     : EffectKind           -- 效应种类
-    payload  : IntentPayload        -- 意图载荷
-    basis    : set of LogPosition   -- 决策所依据的观察位置
-    deadline : Time                 -- 过期时刻：未过屏障而到达它即不再发出
-    target   : [ClientKey]          -- 撤阻塞头时指向的阻塞头调用方键
-    issuer   : Principal;           -- 以谁的身份发出
-
-  -- 准入方式：通道空时的普通准入、针对已过屏障阻塞头的撤单、显式绕过
-  Admission = <Normal> | <CancelHead> | <Bypass>;
+    source    : SourceId        -- 发往哪个来源
+    cap       : CapabilityKey   -- 发出前要核对的能力
+    payload   : IntentPayload   -- 意图载荷
+    deadline  : Time            -- 过期时刻：未过屏障而到达它即不再发出
+    admission : Admission;      -- 准入方式，随意图一起获准
 
   -- 等待轴：核心还要不要为这次尝试等下去；源头是核心自己的记录
   Waiting = <Active> | <Finished> | <Expired> | <Abandoned>;
@@ -88,18 +91,13 @@ types
     ref       : AttemptRef   -- 身份
     intent    : Intent       -- 获准的意图
     lane      : LaneKey      -- 所在写通道
-    request   : RawPayload   -- 映射编出的请求原文
-    key       : ClientKey    -- 核心按 ref 铸造的调用方键
-    admitted  : Admission    -- 准入方式
+    request   : RawPayload   -- 映射编出的、已带调用方键的请求原文
     barriered : bool         -- 是否已落发送屏障
     waiting   : Waiting      -- 等待轴
     outcome   : Outcome;     -- 结果轴
 
-  -- 准入结局：建立尝试，或被通道阻塞
-  AdmitOutcome = AttemptRef | <LaneBlocked>;
-
-  -- 准备结局：准入结局，或映射编不出
-  PrepareOutcome = AdmitOutcome | <Unmapped>;
+  -- 准备结局：建立尝试、被通道阻塞、或映射编不出
+  PrepareOutcome = AttemptRef | <LaneBlocked> | <Unmapped>;
 
   -- 过门结局：已发出、已过期、或条件不满足而等待
   GateOutcome = <Sent> | <Expired> | <Waiting>;
@@ -121,44 +119,51 @@ state Attempts of
                and (x.waiting = <Abandoned> => x.outcome in set {<Unknown>, <Found>, <Absent>}))
         and (forall x in set rng a &
                let heads = BlockingHeads(rng a, x.lane) in
-                 card {h | h in set heads & h.admitted = <Normal>} <= 1
-                 and forall h in set heads & h.admitted = <CancelHead> =>
-                       exists b in set heads & b.barriered and b.key = h.intent.target)
+                 card {h | h in set heads & h.intent.admission = <Normal>} <= 1
+                 and forall h in set heads & is_CancelHead(h.intent.admission) =>
+                       exists b in set heads & b.barriered and KeyOf(b.ref) = h.intent.admission.target)
   init s == s = mk_Attempts({|->})
 end
 
 functions
-  -- 某通道的阻塞头集合：等待仍为 Active 的尝试
+  -- 判定：一次尝试的调用方键——尝试身份的单射，同一意图再次准入得到新键
+  KeyOf: AttemptRef -> ClientKey
+  KeyOf(ref) == mk_token(ref);
+
+  -- 判定：某通道的阻塞头集合——等待仍为 Active 的尝试，不论是否已过屏障
   BlockingHeads: set of Attempt * LaneKey -> set of Attempt
   BlockingHeads(as, lane) ==
     {x | x in set as & x.lane = lane and x.waiting = <Active>};
 
 operations
+  -- 取一个尚未使用的尝试身份
+  Mint() r: AttemptRef
+  ext rd attempts
+  post r not in set dom attempts;
+
   -- 把编码后的意图记为新尝试：普通准入要求通道无阻塞头，撤阻塞头准入要求目标是已过屏障的阻塞头，绕过准入不看通道
-  Admit(intent: Intent, enc: Encoded, how: Admission) r: AdmitOutcome
+  Admit(ref: AttemptRef, intent: Intent, enc: Encoded) r: bool
   ext wr attempts
-  pre how = <CancelHead> => intent.target <> nil
+  pre ref not in set dom attempts
   post let heads = BlockingHeads(rng attempts~, enc.lane),
-           admitted = cases how:
+           admitted = cases intent.admission:
                         <Normal> -> heads = {},
-                        <CancelHead> -> exists b in set heads &
-                                          b.barriered and b.key = intent.target,
+                        mk_CancelHead(t) -> exists b in set heads & b.barriered and KeyOf(b.ref) = t,
                         <Bypass> -> true
                       end in
-         (admitted and r <> <LaneBlocked>
-          and r not in set dom attempts~
-          and attempts = attempts~ munion
-                {r |-> mk_Attempt(r, intent, enc.lane, enc.request, mk_token(r),
-                                  how, false, <Active>, <Pending>)})
-         or (not admitted and r = <LaneBlocked> and attempts = attempts~);
+         r = admitted
+         and (admitted => attempts = attempts~ munion
+                {ref |-> mk_Attempt(ref, intent, enc.lane, enc.request, false, <Active>, <Pending>)})
+         and (not admitted => attempts = attempts~);
 
-  -- 场景：编码意图并准入；编不出时不建立尝试
-  Prepare: Intent * Admission ==> PrepareOutcome
-  Prepare(intent, how) ==
-    cases Encode(mk_EncodeRequest(intent.source, intent.payload)):
-      <Unmapped> -> return <Unmapped>,
-      enc -> return Admit(intent, enc, how)
-    end;
+  -- 场景：准备一次写。先取身份与键，带键编码；编不出不建尝试；通道阻塞不建尝试
+  Prepare: Intent ==> PrepareOutcome
+  Prepare(intent) ==
+    let ref = Mint() in
+      cases Encode(mk_EncodeRequest(intent.source, intent.payload, KeyOf(ref))):
+        <Unmapped> -> return <Unmapped>,
+        enc -> if Admit(ref, intent, enc) then return ref else return <LaneBlocked>
+      end;
 
   -- 落发送屏障：此后该尝试视为可能已发出
   Seal(ref: AttemptRef)
@@ -167,12 +172,20 @@ operations
       and not attempts(ref).barriered and attempts(ref).waiting = <Active>
   post attempts = attempts~ ++ {ref |-> mu(attempts~(ref), barriered |-> true)};
 
-  -- 未过屏障的尝试到期：等待结束，确知未发出
-  Expire(ref: AttemptRef)
+  -- 未过屏障的尝试结束等待：确知未发出，移出阻塞头
+  MarkExpired(ref: AttemptRef)
   ext wr attempts
   pre ref in set dom attempts
       and not attempts(ref).barriered and attempts(ref).waiting = <Active>
   post attempts = attempts~ ++ {ref |-> mu(attempts~(ref), waiting |-> <Expired>)};
+
+  -- 场景：终止一个未过屏障的尝试并记事；到期与人工丢弃走同一出口
+  Expire: AttemptRef ==> ()
+  Expire(ref) ==
+    (MarkExpired(ref);
+     Record(nil, mk_token(mk_(ref, <Expired>))))
+  pre ref in set dom attempts
+      and not attempts(ref).barriered and attempts(ref).waiting = <Active>;
 
   -- 场景：发出前门。到期即过期；来源此刻能力为支持才落屏障并发出；否则保持未发出等待
   Barrier: AttemptRef * Time ==> GateOutcome
@@ -180,14 +193,16 @@ operations
     let a = attempts(ref) in
       if now >= a.intent.deadline
       then (Expire(ref); return <Expired>)
-      elseif CurrentCapability(a.intent.source, a.intent.cap) = <Supported>
-      then (Seal(ref); return <Sent>)
+      elseif SessionCapability(a.intent.source, a.intent.cap) = <Supported>
+      then (Seal(ref);
+            Record(nil, mk_token(mk_(ref, <Sent>)));
+            return <Sent>)
       else return <Waiting>
   pre ref in set dom attempts
       and not attempts(ref).barriered and attempts(ref).waiting = <Active>;
 
-  -- 记录集成对已过屏障尝试的回复：有结论即结束等待；无响应进入结果未知并继续等待
-  CompleteSend(ref: AttemptRef, reply: Reply)
+  -- 记下集成的回复：有结论即结束等待；无响应进入结果未知并继续等待
+  MarkReply(ref: AttemptRef, reply: Reply)
   ext wr attempts
   pre ref in set dom attempts
       and attempts(ref).barriered and attempts(ref).outcome = <Pending>
@@ -196,8 +211,16 @@ operations
                      waiting |-> if reply = <NoResponse> then <Active> else <Finished>,
                      outcome |-> if reply = <NoResponse> then <Unknown> else reply)};
 
+  -- 场景：集成对已过屏障尝试回复后记录并记事
+  CompleteSend: AttemptRef * Reply ==> ()
+  CompleteSend(ref, reply) ==
+    (MarkReply(ref, reply);
+     Record(nil, mk_token(mk_(ref, reply))))
+  pre ref in set dom attempts
+      and attempts(ref).barriered and attempts(ref).outcome = <Pending>;
+
   -- 以取证结论收敛结果未知的尝试：查清即记下结果并结束仍在进行的等待；未查清不变；已放弃的等待不恢复
-  Resolve(ref: AttemptRef, evidence: Evidence)
+  MarkEvidence(ref: AttemptRef, evidence: Evidence)
   ext wr attempts
   pre ref in set dom attempts and attempts(ref).outcome = <Unknown>
   post (evidence = <Inconclusive> and attempts = attempts~)
@@ -208,20 +231,43 @@ operations
                              waiting |-> if attempts~(ref).waiting = <Active>
                                          then <Finished> else attempts~(ref).waiting)});
 
+  -- 场景：以证据收敛并记事；未查清不记事
+  Resolve: AttemptRef * Evidence ==> ()
+  Resolve(ref, evidence) ==
+    (MarkEvidence(ref, evidence);
+     if evidence <> <Inconclusive>
+     then Record(nil, mk_token(mk_(ref, evidence))))
+  pre ref in set dom attempts and attempts(ref).outcome = <Unknown>;
+
+  -- 场景：主动取证。把回读原文连同本尝试的调用方键交给映射分类，再以结论收敛
+  ProbeAttempt: AttemptRef * RawPayload ==> Evidence
+  ProbeAttempt(ref, raw) ==
+    let ev = ClassifyEvidence(mk_Probe(attempts(ref).intent.source, KeyOf(ref), raw)) in
+      (Resolve(ref, ev); return ev)
+  pre ref in set dom attempts and attempts(ref).outcome = <Unknown>;
+
+  -- 场景：被动归因。带本尝试调用方键回声的观察记录到达时，作为查到的证据收敛
+  Attribute: AttemptRef * LogPosition ==> bool
+  Attribute(ref, pos) ==
+    if pos in set ByClientKey(KeyOf(ref))
+    then (Resolve(ref, <Found>); return true)
+    else return false
+  pre ref in set dom attempts and attempts(ref).outcome = <Unknown>;
+
   -- 放弃为结果未知的尝试继续等待：移出阻塞头，不断言来源是否执行
-  Abandon(ref: AttemptRef)
+  MarkAbandoned(ref: AttemptRef)
   ext wr attempts
   pre ref in set dom attempts
       and attempts(ref).waiting = <Active> and attempts(ref).outcome = <Unknown>
   post attempts = attempts~ ++ {ref |-> mu(attempts~(ref), waiting |-> <Abandoned>)};
 
-  -- 场景：被动归因。带本尝试调用方键回声的观察记录到达时，作为查到的证据收敛
-  Attribute: AttemptRef * LogPosition ==> bool
-  Attribute(ref, pos) ==
-    if pos in set ByClientKey(attempts(ref).key)
-    then (Resolve(ref, <Found>); return true)
-    else return false
-  pre ref in set dom attempts and attempts(ref).outcome = <Unknown>;
+  -- 场景：放弃等待并记事
+  Abandon: AttemptRef ==> ()
+  Abandon(ref) ==
+    (MarkAbandoned(ref);
+     Record(nil, mk_token(mk_(ref, <Abandoned>))))
+  pre ref in set dom attempts
+      and attempts(ref).waiting = <Active> and attempts(ref).outcome = <Unknown>;
 
   -- 某通道此刻是否没有阻塞头
   LaneClear(lane: LaneKey) r: bool
