@@ -23,7 +23,9 @@ imports
       RequestRef renamed RequestRef;
       EffectKind renamed EffectKind;
       Principal renamed Principal;
-      Note renamed Note
+      Note renamed Note;
+      EffectRequest renamed EffectRequest;
+      RequestStatus renamed RequestStatus
     operations
       RequestOf renamed RequestOf;
       StatusOf renamed StatusOf;
@@ -59,6 +61,7 @@ exports
     struct ReleaseOutcome
   functions
     Current: TicketRecord -> Version;
+    MatchesRequest: Proposal * [EffectRequest] * [RequestStatus] -> bool;
     Gate: TicketRecord * bool * Alignment * Time * SessionVerdict -> GateVerdict;
     ToIntent: TicketRecord -> Intent;
     Progress: TicketRecord -> Note
@@ -195,6 +198,15 @@ functions
     let v = Current(rec) in
       mk_Intent(rec.source, rec.cap, v.intent, v.deadline, v.admission, rec.request);
 
+  -- 判定：一张单据提议是否如实承接了一条等待处理的请求——请求存在且等待处理，负责人、种类与依据同请求一致
+  MatchesRequest: Proposal * [EffectRequest] * [RequestStatus] -> bool
+  MatchesRequest(p, req, status) ==
+    req <> nil
+    and status = <Pending>
+    and p.responsible = req.member
+    and p.kind = req.kind
+    and p.first.basis = req.basis;
+
 operations
   -- 起草新单据：负责人取锁，只有提议里的第一个版本，尚无裁决
   Draft(p: Proposal)
@@ -237,8 +249,8 @@ operations
   pre id in set dom byId and byId(id).responsible = src and not is_Closed(byId(id).status)
   post byId = byId~ ++ {id |-> mu(byId~(id), responsible |-> dst)};
 
-  -- 对送审中的指定版本作出裁决；期望版本不符或该版本已决时返回冲突且不改状态；批准进入已批准，否决即关闭
-  Decide(id: TicketId, version: nat1, who: Principal, ruling: Ruling) r: DecideOutcome
+  -- 对送审中的指定版本记下裁决；期望版本不符或该版本已决时返回冲突且不改状态；批准进入已批准，否决即关闭
+  RecordDecision(id: TicketId, version: nat1, who: Principal, ruling: Ruling) r: DecideOutcome
   ext wr byId
   pre id in set dom byId and is_Awaiting(byId(id).status)
   post let ok = byId~(id).status.version = version
@@ -252,23 +264,38 @@ operations
                                       else mk_Approved(version))})
          or (not ok and r = <Conflict> and byId = byId~);
 
-  -- 负责人撤回未关闭的单据
-  Withdraw(id: TicketId, who: Principal)
-  ext wr byId
-  pre id in set dom byId and byId(id).responsible = who and not is_Closed(byId(id).status)
-  post byId = byId~ ++ {id |-> mu(byId~(id), status |-> mk_Closed(<Withdrawn>))};
-
   -- 以给定原因关闭未关闭的单据
   Close(id: TicketId, reason: ClosedReason)
   ext wr byId
   pre id in set dom byId and not is_Closed(byId(id).status)
   post byId = byId~ ++ {id |-> mu(byId~(id), status |-> mk_Closed(reason))};
 
+  -- 场景：把单据此刻的状态经 Record 交给它所接手的请求方
+  AnnounceTicket: TicketId ==> ()
+  AnnounceTicket(id) ==
+    Record(byId(id).request, Progress(byId(id)))
+  pre id in set dom byId;
+
+  -- 场景：对送审中的指定版本作出裁决——经 RecordDecision 记下裁决后，经 AnnounceTicket 让请求方得知
+  Decide: TicketId * nat1 * Principal * Ruling ==> DecideOutcome
+  Decide(id, version, who, ruling) ==
+    cases RecordDecision(id, version, who, ruling):
+      <Conflict> -> return <Conflict>,
+      others -> (AnnounceTicket(id); return <Recorded>)
+    end
+  pre id in set dom byId and is_Awaiting(byId(id).status);
+
+  -- 场景：负责人撤回未关闭的单据——经 CloseAs 关单并记事
+  Withdraw: TicketId * Principal ==> ()
+  Withdraw(id, who) ==
+    CloseAs(id, <Withdrawn>)
+  pre id in set dom byId and byId(id).responsible = who and not is_Closed(byId(id).status);
+
   -- 场景：以某原因关单并记事
   CloseAs: TicketId * ClosedReason ==> ()
   CloseAs(id, reason) ==
     (Close(id, reason);
-     Record(byId(id).request, Progress(byId(id))))
+     AnnounceTicket(id))
   pre id in set dom byId and not is_Closed(byId(id).status);
 
   -- 场景：放行门。已批准的单据到期、来源明确不支持或依据失效即关单；门未开或通道不可准入即等待；准入成功则以准备记录关单
@@ -291,17 +318,15 @@ operations
     end
   pre id in set dom byId;
 
-  -- 场景：写处理器接手一条等待中的请求。以请求发出者为负责人、请求依据为依据起草并送审，答复以单据身份回填；请求不存在、不在等待中或种类不符则不接手
+  -- 场景：写处理器接手一条等待中的请求——提议经 MatchesRequest 确认如实承接请求时，经 DraftFor 起草、经 SubmitForDecision 送审、再经 Respond 以单据身份答复请求
   AdoptRequest: RequestRef * Proposal ==> bool
   AdoptRequest(ref, p) ==
-    let req = RequestOf(ref) in
-      if req = nil or StatusOf(ref) <> <Pending> or req.kind <> p.kind
-      then return false
-      else (DraftFor(mu(p, responsible |-> req.member,
-                          first |-> mu(p.first, basis |-> req.basis)), ref);
-            SubmitForDecision(p.id, req.member);
-            Respond(ref, mk_token(p.id));
-            return true)
+    if MatchesRequest(p, RequestOf(ref), StatusOf(ref))
+    then (DraftFor(p, ref);
+          SubmitForDecision(p.id, p.responsible);
+          Respond(ref, mk_token(p.id));
+          return true)
+    else return false
   pre p.id not in set dom byId;
 
   -- 查询单据；不存在为空

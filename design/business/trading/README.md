@@ -16,10 +16,10 @@
 
 ## 为什么
 
-``Trading`OperationKind`` 由起草方随 ``Trading`TradeDraft`` 给出而不从 ``Mapping`IntentPayload`` 推断：载荷对核心不透明，核心读不出它是下单还是撤单。它是封闭集合：下单、撤单、改单、平仓之外的写不是交易写，新增一种要改映射与集成，是协议扩展，不是业务参数。
+``Trading`OperationKind`` 由起草方随 ``Trading`TradeDraft`` 给出而不从 ``Mapping`IntentPayload`` 推断：载荷对核心不透明，核心读不出它是下单还是撤单；``Trading`TradeDraft`` 的不变量通过 ``Trading`KindOf`` 把它绑定到 ``Ticket`Proposal.kind``，使单据记录保留操作种类。它是封闭集合：下单、撤单、改单、平仓之外的写不是交易写，新增一种要改映射与集成，是协议扩展，不是业务参数。
 
 成交归并与订单定序写成显式纯函数：两个实现必须得出同一集合，否则对账结论因实现而异。
 
 ## 语义
 
-撤阻塞头的单据经 ``Ticket`Release`` 以 ``Write`CancelHead`` 放行；撤单尝试本身的结果不决议它所指向的阻塞头，阻塞头仍由 ``Write`Resolve``、``Write`Attribute`` 或 ``Write`Abandon`` 收敛。
+``Trading`ReplaceOrder`` 在来源不支持原子改单时拆出撤单与下单两张草稿单据，下单单据放行时的 ``Ticket`Alignment`` 需确认原订单已终结，而不以撤单尝试被受理为准。撤阻塞头的单据经 ``Ticket`Release`` 以 ``Write`CancelHead`` 放行；撤单尝试本身的结果不决议它所指向的阻塞头，阻塞头仍由 ``Write`Resolve``、``Write`Attribute`` 或 ``Write`Abandon`` 收敛。

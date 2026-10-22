@@ -14,6 +14,8 @@ imports
       StreamId renamed StreamId;
       Cursor renamed Cursor;
       LogPosition renamed LogPosition
+    functions
+      Earlier renamed Earlier
     operations
       OpenEpoch renamed OpenEpoch;
       Append renamed Append,
@@ -28,6 +30,7 @@ imports
       Ack renamed Ack,
   from Request
     types
+      RequestRef renamed RequestRef;
       Principal renamed Principal;
       EffectRequest renamed EffectRequest;
       Event renamed Event
@@ -40,13 +43,16 @@ exports
     State;
     struct Checkpoint;
     struct Step
+  functions
+    Attributed: EffectRequest * Principal -> EffectRequest
   operations
     Load: ProgramId * Principal * set of StreamId * StreamName * State ==> ();
     Unload: ProgramId ==> ();
+    CheckpointOf: ProgramId ==> [Checkpoint];
     Poll: ProgramId * StreamId ==> seq of Item;
     Events: ProgramId ==> seq of Event;
-    AdvanceOn: ProgramId * StreamId * Step ==> ();
-    AdvanceOnEvents: ProgramId * Step ==> ()
+    AdvanceOn: ProgramId * StreamId * Step ==> [RequestRef];
+    AdvanceOnEvents: ProgramId * Step ==> [RequestRef]
 definitions
 types
   -- 程序身份；由装载清单给出
@@ -84,6 +90,11 @@ state Programs of
   init s == s = mk_Programs({|->})
 end
 
+functions
+  -- 判定：程序发出请求时归属的主体——一律取装载该程序的主体，程序自身不是行动主体
+  Attributed: EffectRequest * Principal -> EffectRequest
+  Attributed(req, who) == mu(req, member |-> who);
+
 operations
   -- 登记已装载的程序
   Register(prog: ProgramId, entry: Loaded)
@@ -119,6 +130,12 @@ operations
      Forget(prog))
   pre prog in set dom loaded;
 
+  -- 查询程序最近的检查点；未装载的程序为空
+  CheckpointOf(prog: ProgramId) r: [Checkpoint]
+  ext rd loaded
+  post (prog in set dom loaded and r = loaded(prog).checkpoint)
+       or (prog not in set dom loaded and r = nil);
+
   -- 场景：取出某输入流上游标之后的投递项；被压缩越过的部分以缺口交出，程序自己决定怎样对待
   Poll: ProgramId * StreamId ==> seq of Item
   Poll(prog, input) ==
@@ -141,35 +158,36 @@ operations
   pre prog in set dom loaded
       and (step.supersedes <> nil => step.supersedes.stream = loaded(prog).output);
 
-  -- 场景：以装载人身份发出本步的请求；本步没有请求则不发出
-  Forward: ProgramId * [EffectRequest] ==> ()
+  -- 场景：以装载人身份发出本步的请求并交回请求身份；本步没有请求则不发出
+  Forward: ProgramId * [EffectRequest] ==> [RequestRef]
   Forward(prog, req) ==
     cases req:
-      nil -> skip,
-      r -> let - = Emit(mu(r, member |-> loaded(prog).loadedBy)) in skip
+      nil -> return nil,
+      r -> return Emit(Attributed(r, loaded(prog).loadedBy))
     end
   pre prog in set dom loaded;
 
-  -- 场景：对某条输入流上的记录推进一步——新检查点经 Keep 生效，该流经 Ack 确认，派生值经 Publish 发布，请求经 Forward 发出
-  AdvanceOn: ProgramId * StreamId * Step ==> ()
+  -- 场景：对某条输入流上的记录推进一步——新检查点经 Keep 生效，该流经 Ack 确认，派生值经 Publish 发布，请求经 Forward 发出并交回请求身份
+  AdvanceOn: ProgramId * StreamId * Step ==> [RequestRef]
   AdvanceOn(prog, input, step) ==
     (Keep(prog, step.next);
      Ack(loaded(prog).subscription, input, step.next.cursors(input));
      Publish(prog, step);
-     Forward(prog, step.request))
+     return Forward(prog, step.request))
   pre prog in set dom loaded and input in set loaded(prog).inputs
       and dom step.next.cursors = loaded(prog).inputs
+      and not Earlier(step.next.cursors(input), loaded(prog).checkpoint.cursors(input))
       and (forall s in set loaded(prog).inputs &
              s <> input => step.next.cursors(s) = loaded(prog).checkpoint.cursors(s))
       and step.next.reqCursor >= loaded(prog).checkpoint.reqCursor
       and (step.supersedes <> nil => step.supersedes.stream = loaded(prog).output);
 
-  -- 场景：只因效应事件推进一步——新检查点经 Keep 生效，没有流要确认，派生值经 Publish 发布，请求经 Forward 发出
-  AdvanceOnEvents: ProgramId * Step ==> ()
+  -- 场景：只因效应事件推进一步——新检查点经 Keep 生效，没有流要确认，派生值经 Publish 发布，请求经 Forward 发出并交回请求身份
+  AdvanceOnEvents: ProgramId * Step ==> [RequestRef]
   AdvanceOnEvents(prog, step) ==
     (Keep(prog, step.next);
      Publish(prog, step);
-     Forward(prog, step.request))
+     return Forward(prog, step.request))
   pre prog in set dom loaded
       and step.next.cursors = loaded(prog).checkpoint.cursors
       and step.next.reqCursor >= loaded(prog).checkpoint.reqCursor

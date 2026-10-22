@@ -12,7 +12,7 @@
 
 ## 需求
 
-- 一张单可以被退回修改后再批准，批准的一定是裁决者看过的那个版本，批准之后不能再被退回（来源：审批并发约束，证据见附录 `evidence/approval-facts.md`），由 ``Ticket`SendBack`` 与 ``Ticket`Decide`` 走通。
+- 一张单可以被退回修改后再批准，批准的一定是裁决者看过的那个版本，批准之后不能再被退回（来源：审批并发约束，证据见附录 `evidence/approval-facts.md`），由 ``Ticket`Draft``、``Ticket`SubmitForDecision``、``Ticket`SendBack``、``Ticket`Revise`` 与 ``Ticket`Decide`` 走通。
 - 同一张单据只放行一次；到期、来源不支持或依据失效时以如实的原因关单，不冒充裁决（来源：审批并发约束，证据见附录 `evidence/approval-facts.md`），由 ``Ticket`Release`` 走通。
 - 程序发出的写请求必须先成为一张由装载人负责的单据（来源：可编程派生要求，证据见附录 `evidence/integration-facts.md`），由 ``Ticket`AdoptRequest`` 走通。
 
@@ -28,4 +28,4 @@
 
 ## 语义
 
-``Ticket`Release`` 调用 ``Write`Prepare`` 成功后在同一次提交中以 ``Ticket`Prepared`` 关闭单据并经 ``Request`Record`` 记事；``Write`Prepare`` 返回 `<LaneBlocked>` 或 `<Unmapped>` 时单据保持已批准状态，由实现按节奏重试 ``Ticket`Release``。对账项 ``Ticket`Alignment`` 由业务在放行时刻对当前观察或一次性读计算后传入，具体检查目录属实现，索引见附录 `reference/original-design-index.md`。
+``Ticket`Release`` 调用 ``Write`Prepare`` 成功后在同一次提交中以 ``Ticket`Prepared`` 关闭单据并经 ``Request`Record`` 记事；``Write`Prepare`` 返回 `<LaneBlocked>` 或 `<Unmapped>` 时单据保持已批准状态，由实现按节奏重试 ``Ticket`Release``。写处理器将 ``Request`EffectRequest.payload`` 解为 ``Ticket`Proposal`` 后调用 ``Ticket`AdoptRequest``。对账项 ``Ticket`Alignment`` 由业务在放行时刻对当前观察或一次性读计算后传入，具体检查目录属实现，索引见附录 `reference/original-design-index.md`。
