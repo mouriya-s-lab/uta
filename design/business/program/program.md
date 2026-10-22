@@ -10,16 +10,13 @@ imports
     types
       Fields renamed Fields;
       Decoded renamed Decoded;
-      RefHolder renamed RefHolder;
       Derived renamed Derived;
       StreamId renamed StreamId;
       Cursor renamed Cursor;
-      LogPosition renamed LogPosition;
+      LogPosition renamed LogPosition
     operations
       OpenEpoch renamed OpenEpoch;
-      Append renamed Append;
-      AcquireRef renamed AcquireRef;
-      ReleaseRef renamed ReleaseRef,
+      Append renamed Append,
   from Delivery
     types
       SubscriptionId renamed SubscriptionId;
@@ -43,14 +40,13 @@ exports
     State;
     struct Checkpoint;
     struct Step
-  functions
-    Protected: Checkpoint -> set of LogPosition
   operations
     Load: ProgramId * Principal * set of StreamId * StreamName * State ==> ();
     Unload: ProgramId ==> ();
     Poll: ProgramId * StreamId ==> seq of Item;
     Events: ProgramId ==> seq of Event;
-    Advance: ProgramId * StreamId * Step ==> ()
+    AdvanceOn: ProgramId * StreamId * Step ==> ();
+    AdvanceOnEvents: ProgramId * Step ==> ()
 definitions
 types
   -- 程序身份；由装载清单给出
@@ -75,7 +71,6 @@ types
   -- 已装载的程序
   Loaded ::
     loadedBy     : Principal        -- 装载人：程序以此身份发出请求
-    holder       : RefHolder        -- 程序在观察日志登记引用所用的持有者身份
     subscription : SubscriptionId   -- 程序的输入订阅
     inputs       : set of StreamId  -- 输入流
     output       : StreamId         -- 派生输出流
@@ -88,13 +83,6 @@ state Programs of
         forall p in set dom l & dom l(p).checkpoint.cursors = l(p).inputs
   init s == s = mk_Programs({|->})
 end
-
-functions
-  -- 判定：检查点需要保留边界保护的位置——各输入流上已消费到的位置；尚未消费的流没有位置
-  Protected: Checkpoint -> set of LogPosition
-  Protected(cp) ==
-    {mk_LogPosition(s, cp.cursors(s).epoch, cp.cursors(s).seqNo)
-       | s in set dom cp.cursors & cp.cursors(s).seqNo > 0};
 
 operations
   -- 登记已装载的程序
@@ -120,19 +108,18 @@ operations
     let sub = Subscribe(inputs),
         out = mk_StreamId(mk_Derived(mk_token(prog)), outName) in
       (OpenEpoch(out, nil);
-       Register(prog, mk_Loaded(who, mk_token(prog), sub, inputs, out,
+       Register(prog, mk_Loaded(who, sub, inputs, out,
                                 mk_Checkpoint({s |-> mk_Cursor(1, 0) | s in set inputs}, 0, initial))))
   pre prog not in set dom loaded;
 
-  -- 场景：卸载程序。删除订阅、释放检查点持有的保留引用、移除登记
+  -- 场景：卸载程序。删除订阅、移除登记
   Unload: ProgramId ==> ()
   Unload(prog) ==
     (Unsubscribe(loaded(prog).subscription);
-     ReleaseRef(loaded(prog).holder);
      Forget(prog))
   pre prog in set dom loaded;
 
-  -- 场景：取出某输入流上游标之后的投递项
+  -- 场景：取出某输入流上游标之后的投递项；被压缩越过的部分以缺口交出，程序自己决定怎样对待
   Poll: ProgramId * StreamId ==> seq of Item
   Poll(prog, input) ==
     return Deliver(loaded(prog).subscription, input)
@@ -163,18 +150,28 @@ operations
     end
   pre prog in set dom loaded;
 
-  -- 场景：推进一步——新检查点经 AcquireRef 受保护后，依次经 Keep、Ack、Publish、Forward 生效；未受保护则本步无效
-  Advance: ProgramId * StreamId * Step ==> ()
-  Advance(prog, input, step) ==
-    cases AcquireRef(loaded(prog).holder, Protected(step.next)):
-      <Rejected> -> skip,
-      others -> (Keep(prog, step.next);
-                 Ack(loaded(prog).subscription, input, step.next.cursors(input));
-                 Publish(prog, step);
-                 Forward(prog, step.request))
-    end
+  -- 场景：对某条输入流上的记录推进一步——新检查点经 Keep 生效，该流经 Ack 确认，派生值经 Publish 发布，请求经 Forward 发出
+  AdvanceOn: ProgramId * StreamId * Step ==> ()
+  AdvanceOn(prog, input, step) ==
+    (Keep(prog, step.next);
+     Ack(loaded(prog).subscription, input, step.next.cursors(input));
+     Publish(prog, step);
+     Forward(prog, step.request))
   pre prog in set dom loaded and input in set loaded(prog).inputs
       and dom step.next.cursors = loaded(prog).inputs
+      and (forall s in set loaded(prog).inputs &
+             s <> input => step.next.cursors(s) = loaded(prog).checkpoint.cursors(s))
+      and step.next.reqCursor >= loaded(prog).checkpoint.reqCursor
+      and (step.supersedes <> nil => step.supersedes.stream = loaded(prog).output);
+
+  -- 场景：只因效应事件推进一步——新检查点经 Keep 生效，没有流要确认，派生值经 Publish 发布，请求经 Forward 发出
+  AdvanceOnEvents: ProgramId * Step ==> ()
+  AdvanceOnEvents(prog, step) ==
+    (Keep(prog, step.next);
+     Publish(prog, step);
+     Forward(prog, step.request))
+  pre prog in set dom loaded
+      and step.next.cursors = loaded(prog).checkpoint.cursors
       and step.next.reqCursor >= loaded(prog).checkpoint.reqCursor
       and (step.supersedes <> nil => step.supersedes.stream = loaded(prog).output);
 end Program

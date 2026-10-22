@@ -16,6 +16,7 @@ imports
       StreamId renamed StreamId;
       LogPosition renamed LogPosition
     operations
+      OpenEpoch renamed OpenEpoch;
       Append renamed Append
 exports
   types
@@ -33,6 +34,7 @@ exports
   operations
     Install: SourceId * MappingId ==> ();
     Decode: Envelope ==> [Decoded];
+    Break: Envelope ==> ();
     Ingest: Envelope ==> LogPosition;
     Encode: EncodeRequest ==> EncodeOutcome;
     ClassifyEvidence: Probe ==> Evidence
@@ -102,6 +104,11 @@ operations
   Ingest: Envelope ==> LogPosition
   Ingest(env) ==
     return Append(StreamOf(env), Decode(env), env.raw, nil);
+
+  -- 场景：来源连续性中断——集成交来某条流的中断信号时，经 OpenEpoch 为该流开新一代；会话建立后每条流的首条信封之前也经此开第一代
+  Break: Envelope ==> ()
+  Break(env) ==
+    OpenEpoch(StreamOf(env), env.raw);
 
   -- 按来源当前映射把意图连同调用方键编成请求并导出通道；没有映射的来源一律编不出
   Encode(req: EncodeRequest) r: EncodeOutcome

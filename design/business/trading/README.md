@@ -6,7 +6,7 @@
 
 部分上游场所不支持单次原子改单，且撤单请求被受理不代表原订单未在撤单到达前成交（来源：外部场所能力调查，证据见附录 `evidence/venue-facts.md`）。所以 ``Trading`ReplaceOrder`` 只在 ``Source`SessionCapability`` 返回 `<Supported>` 时起一张改单单据，返回 `<Unsupported>` 时显式拆为撤单与下单两张独立单据，返回 `<Unknown>` 或 `<Unavailable>` 时不起单；撤单尝试的受理不证明目标订单已结束。
 
-同一笔成交会经回执、推送与查询多次到达且事后可被上游修订或作废，订单状态观察之间只有来源修订号能定序（来源：外部场所能力调查，证据见附录 `evidence/venue-facts.md`）。所以 ``Trading`EffectiveExecutions`` 按 ``Trading`FillObs.execId`` 与 ``Trading`FillObs.revision`` 归并去重，``Trading`MaximalOrderStates`` 按 ``Trading`OrderObs.revision`` 求极大元，修订号相同时保留多值而不伪造唯一最新状态；从 ``Observation`Decoded.fields`` 解出 ``Trading`FillObs`` 与 ``Trading`OrderObs`` 属实现。
+同一笔成交会多次到达且事后可被上游修订或作废，订单状态之间只有来源修订号能定序（来源：外部场所能力调查，证据见附录 `evidence/venue-facts.md`）。所以 ``Trading`EffectiveExecutions`` 对同一 ``Trading`FillObs.execId`` 只取 ``Trading`FillObs.revision`` 最大的一条，``Trading`MaximalOrderStates`` 对同一 ``Trading`OrderObs.orderId`` 只取 ``Trading`OrderObs.revision`` 不被超过的那些，相同时都保留；``Trading`FillObs`` 与 ``Trading`OrderObs`` 怎样从 ``Observation`Decoded.fields`` 解出属实现。
 
 ## 需求
 

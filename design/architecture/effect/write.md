@@ -29,6 +29,7 @@ imports
       ClassifyEvidence renamed ClassifyEvidence,
   from Request
     types
+      RequestRef renamed RequestRef;
       Note renamed Note
     operations
       Record renamed Record
@@ -75,13 +76,14 @@ types
   -- 准入方式：通道空时的普通准入、针对阻塞头的撤单、显式绕过
   Admission = <Normal> | CancelHead | <Bypass>;
 
-  -- 已获准进入写边界的意图
+  -- 进入写边界的意图；谁获准它进入由业务决定
   Intent ::
     source    : SourceId        -- 发往哪个来源
     cap       : CapabilityKey   -- 发出前要核对的能力
     payload   : IntentPayload   -- 意图载荷
     deadline  : Time            -- 过期时刻：未过屏障而到达它即不再发出
-    admission : Admission;      -- 准入方式，随意图一起获准
+    admission : Admission       -- 准入方式，随意图一起进入
+    about     : [RequestRef];   -- 这次写所响应的请求；进展事件由此关联回请求
 
   -- 等待轴：核心还要不要为这次尝试等下去；源头是核心自己的记录
   Waiting = <Active> | <Finished> | <Expired> | <Abandoned>;
@@ -121,10 +123,7 @@ state Attempts of
                and (x.waiting = <Expired> => not x.barriered)
                and (x.waiting = <Abandoned> => x.outcome in set {<Unknown>, <Found>, <Absent>}))
         and (forall x in set rng a &
-               let heads = BlockingHeads(rng a, x.lane) in
-                 card {h | h in set heads & h.intent.admission = <Normal>} <= 1
-                 and forall h in set heads & is_CancelHead(h.intent.admission) =>
-                       exists b in set heads & b.barriered and KeyOf(b.ref) = h.intent.admission.target)
+               card {h | h in set BlockingHeads(rng a, x.lane) & h.intent.admission = <Normal>} <= 1)
   init s == s = mk_Attempts({|->})
 end
 
@@ -186,11 +185,17 @@ operations
       and not attempts(ref).barriered and attempts(ref).waiting = <Active>
   post attempts = attempts~ ++ {ref |-> mu(attempts~(ref), waiting |-> <Expired>)};
 
-  -- 场景：未过屏障的尝试走到出口——经 MarkExpired 离开阻塞头，再经 Record 对程序可见；到期与人工丢弃同一出口
+  -- 场景：把一次尝试此刻的位置经 Record 交给它所响应的请求方
+  Announce: AttemptRef ==> ()
+  Announce(ref) ==
+    Record(attempts(ref).intent.about, Progress(attempts(ref)))
+  pre ref in set dom attempts;
+
+  -- 场景：未过屏障的尝试走到出口——经 MarkExpired 离开阻塞头，再经 Announce 让请求方得知；到期与人工丢弃同一出口
   Expire: AttemptRef ==> ()
   Expire(ref) ==
     (MarkExpired(ref);
-     Record(nil, Progress(attempts(ref))))
+     Announce(ref))
   pre ref in set dom attempts
       and not attempts(ref).barriered and attempts(ref).waiting = <Active>;
 
@@ -202,7 +207,7 @@ operations
       then (Expire(ref); return <Expired>)
       elseif SessionCapability(a.intent.source, a.intent.cap) = <Supported>
       then (Seal(ref);
-            Record(nil, Progress(attempts(ref)));
+            Announce(ref);
             return <Sent>)
       else return <Waiting>
   pre ref in set dom attempts
@@ -218,11 +223,11 @@ operations
                      waiting |-> if reply = <NoResponse> then <Active> else <Finished>,
                      outcome |-> if reply = <NoResponse> then <Unknown> else reply)};
 
-  -- 场景：集成的回复到达——经 MarkReply 进入两根轴，再经 Record 对程序可见
+  -- 场景：集成的回复到达——经 MarkReply 进入两根轴，再经 Announce 让请求方得知
   CompleteSend: AttemptRef * Reply ==> ()
   CompleteSend(ref, reply) ==
     (MarkReply(ref, reply);
-     Record(nil, Progress(attempts(ref))))
+     Announce(ref))
   pre ref in set dom attempts
       and attempts(ref).barriered and attempts(ref).outcome = <Pending>;
 
@@ -238,11 +243,11 @@ operations
                              waiting |-> if attempts~(ref).waiting = <Active>
                                          then <Finished> else attempts~(ref).waiting)});
 
-  -- 场景：取证结论到达——经 MarkEvidence 收敛，再经 Record 对程序可见
+  -- 场景：来源给出的结论进入尝试——先经 MarkEvidence 改两根轴，再经 Announce；未查清也公布，请求方由此知道查过而未定
   Resolve: AttemptRef * Evidence ==> ()
   Resolve(ref, evidence) ==
     (MarkEvidence(ref, evidence);
-     Record(nil, Progress(attempts(ref))))
+     Announce(ref))
   pre ref in set dom attempts and attempts(ref).outcome = <Unknown>;
 
   -- 场景：主动取证——回读原文连同本尝试的调用方键经 ClassifyEvidence 得出结论，再经 Resolve 收敛
@@ -267,11 +272,11 @@ operations
       and attempts(ref).waiting = <Active> and attempts(ref).outcome = <Unknown>
   post attempts = attempts~ ++ {ref |-> mu(attempts~(ref), waiting |-> <Abandoned>)};
 
-  -- 场景：放弃等待——经 MarkAbandoned 离开阻塞头，再经 Record 对程序可见
+  -- 场景：放弃等待——经 MarkAbandoned 离开阻塞头，再经 Announce 让请求方得知
   Abandon: AttemptRef ==> ()
   Abandon(ref) ==
     (MarkAbandoned(ref);
-     Record(nil, Progress(attempts(ref))))
+     Announce(ref))
   pre ref in set dom attempts
       and attempts(ref).waiting = <Active> and attempts(ref).outcome = <Unknown>;
 

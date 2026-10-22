@@ -5,6 +5,7 @@ module Trading
 imports
   from Source
     types
+      SourceId renamed SourceId;
       CapabilityKey renamed CapabilityKey
     operations
       SessionCapability renamed SessionCapability,
@@ -14,6 +15,7 @@ imports
   from Write
     types
       AttemptRef renamed AttemptRef;
+      Attempt renamed Attempt;
       CancelHead renamed CancelHead
     functions
       KeyOf renamed KeyOf
@@ -36,7 +38,8 @@ exports
     struct OrderObs
   functions
     EffectiveExecutions: set of FillObs -> set of FillObs;
-    MaximalOrderStates: set of OrderObs -> set of OrderObs
+    MaximalOrderStates: set of OrderObs -> set of OrderObs;
+    Cancellable: [Attempt] * SourceId -> bool
   operations
     ReplaceOrder: TradeDraft * TradeDraft * TradeDraft * CapabilityKey ==> seq of TicketId;
     DraftCancelOfHead: TradeDraft * AttemptRef ==> bool
@@ -88,6 +91,11 @@ functions
     {x | x in set obs &
        not exists y in set obs & y.orderId = x.orderId and y.revision > x.revision};
 
+  -- 判定：一次尝试此刻能否被撤——存在、已过屏障、等待仍在进行、且属于撤单要发往的来源
+  Cancellable: [Attempt] * SourceId -> bool
+  Cancellable(a, source) ==
+    a <> nil and a.barriered and a.waiting = <Active> and a.intent.source = source;
+
 operations
   -- 场景：改单。来源此刻支持原子改单时只起改单单据；明确不支持时显式起撤单与下单两张独立单据；能力未确认或离线时不起单
   ReplaceOrder: TradeDraft * TradeDraft * TradeDraft * CapabilityKey ==> seq of TicketId
@@ -103,16 +111,14 @@ operations
       and cancel.proposal.source = place.proposal.source
       and card {replace.proposal.id, cancel.proposal.id, place.proposal.id} = 3;
 
-  -- 场景：起草撤阻塞头的撤单单据。目标必须是已过屏障、等待仍在进行、同一来源的尝试；单据以撤阻塞头方式准入并指向它的调用方键
+  -- 场景：对阻塞头起撤单——目标可撤时，以撤阻塞头方式起草指向它的调用方键的撤单单据
   DraftCancelOfHead: TradeDraft * AttemptRef ==> bool
   DraftCancelOfHead(cancel, head) ==
-    cases AttemptOf(head):
-      nil -> return false,
-      a -> if a.barriered and a.waiting = <Active> and a.intent.source = cancel.proposal.source
-           then (Draft(mu(cancel.proposal, admission |-> mk_CancelHead(KeyOf(head))));
-                 return true)
-           else return false
-    end
+    if Cancellable(AttemptOf(head), cancel.proposal.source)
+    then (Draft(mu(cancel.proposal,
+                   first |-> mu(cancel.proposal.first, admission |-> mk_CancelHead(KeyOf(head)))));
+          return true)
+    else return false
   pre cancel.op = <Cancel>;
 end Trading
 ```

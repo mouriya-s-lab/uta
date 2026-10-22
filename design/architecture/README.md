@@ -8,11 +8,11 @@
 
 上游的类别与协议无法预先确定，也无法预先知道它何时改动（来源：多来源接入要求，证据见附录 `evidence/integration-facts.md`）。所以核心只接受 ``Mapping`Envelope``，不接受任何按上游协议定义的结构；核心按来源装载一份 ``Mapping`Mappings.current`` 抽出自己要用的 ``Observation`Decoded``，其余留在 ``Observation`Entry.raw`` 原样进出；``Mapping`Mappings`` 不记版本，解不出记为 ``Observation`EntryKind`` 的 `<Unmapped>`，编不出返回 ``Mapping`EncodeOutcome`` 的 `<Unmapped>`，``Mapping`ClassifyEvidence`` 匹配不到一律为 `<Inconclusive>`。
 
-上游推送流在断线后无法从上次位置续接，是否漏收只能由来源给出的连续序号证明，且消费位置、是否漏收与本地保留边界各自独立变化（来源：外部场所能力调查，证据见附录 `evidence/venue-facts.md`）。所以 ``Observation`LogPosition.epoch`` 在每次来源连续性中断时开新一代并以 `<SourceGap>` 记录起点，``Observation`LogPosition.seqNo`` 由核心分配而不取来源序号，消费位置另由 ``Delivery`Subscription.cursor`` 持有；按来源序号判是否漏收属实现，索引见附录 `reference/original-design-index.md`。
+上游推送流在断线后无法从上次位置续接，是否漏收只能由来源给出的连续序号证明，且消费位置、是否漏收与本地保留边界各自独立变化（来源：外部场所能力调查，证据见附录 `evidence/venue-facts.md`）。所以来源的连续性中断作为一个事件经 ``Mapping`Break`` 进入核心，``Observation`LogPosition.epoch`` 由此开新一代并以 `<SourceGap>` 记录起点，``Observation`LogPosition.seqNo`` 由核心分配而不取来源序号，消费位置另由 ``Delivery`Subscription.cursor`` 持有；按来源序号判是否漏收属实现，索引见附录 `reference/original-design-index.md`。
 
 外部写的结果可能未知：网络超时、进程崩溃或连接中断可能发生在写请求已到达上游之后、回执返回之前（来源：外部场所能力调查，证据见附录 `evidence/venue-facts.md`）。所以 ``Write`Attempt`` 把等待轴 ``Write`Waiting`` 与结果轴 ``Write`Outcome`` 分开记录，``Write`Barrier`` 以持久屏障把崩溃窗口二分。
 
-同一品种上的后续写的语义依赖前一笔的结果，而资金面能否成交只由上游裁决，本地没有判断的位置（来源：交易语义约束，证据见附录 `evidence/lane-facts.md`）。所以 ``Mapping`LaneKey`` 由映射从意图导出，``Write`BlockingHeads`` 只在同一通道内阻塞；资金面核对只作为 ``Ticket`Alignment`` 里的一项读入，不进通道。
+同一品种上的后续写的语义依赖前一笔的结果，而资金面能否成交只由上游裁决，本地没有判断的位置（来源：交易语义约束，证据见附录 `evidence/lane-facts.md`）。所以 ``Mapping`LaneKey`` 由映射从意图导出，``Write`BlockingHeads`` 只在同一通道内阻塞；资金面核对只是进入写边界之前的一次读，不进通道。
 
 部分能力在握手前未知，且只在会话在线时有效（来源：外部场所能力调查，证据见附录 `evidence/venue-facts.md`）。所以 ``Source`SessionCapability`` 只读 ``Source`Sources.live``，离线一律为 `<Unavailable>`；``Source`Sources.latest`` 只供离线查阅最近声明，从不代替此刻的能力。
 
@@ -32,10 +32,12 @@
 
 ``Delivery`` 单独成子模块：订阅归消费方、日志归核心，两者权威不同；不选把订阅游标放进 ``Observation`Journal``，那会让日志的不变量混入消费方的进度。
 
-效应请求是值，不是调用：``Request`EffectRequest`` 追加为记录，答复与效应侧的后续进展经 ``Request`Record`` 追加到 ``Request`Requests.events``，请求方按位置读回；不选代数效应式的通用续接，续接函数随程序状态持久化会带来多次恢复时的资源泄漏，而按位置读事件不需要它。
+效应请求是值，不是调用：``Request`EffectRequest`` 追加为记录，答复与效应侧的后续进展经 ``Request`Record`` 追加到 ``Request`Requests.events``，请求方按位置读回；不选代数效应式的通用续接，续接函数随请求方状态持久化会带来多次恢复时的资源泄漏，而按位置读事件不需要它。
 
-``Observation`StreamId`` 不含分代，分代只在 ``Observation`LogPosition.epoch`` 与 ``Observation`Cursor.epoch`` 上：订阅与程序检查点绑定逻辑流，来源中断开新一代后 ``Observation`ReadFrom`` 跨代按先后交出记录，订阅方先收到新一代的 `<SourceGap>` 再收到数据。不选让订阅绑定带分代的流身份：开新代后订阅方无从得知新代，停在旧代末尾。
+``Observation`StreamId`` 不含分代，分代只在 ``Observation`LogPosition.epoch`` 与 ``Observation`Cursor.epoch`` 上：订阅绑定逻辑流，来源中断开新一代后 ``Observation`ReadFrom`` 跨代按先后交出记录，订阅方先收到新一代的 `<SourceGap>` 再收到数据。不选让订阅绑定带分代的流身份：开新代后订阅方无从得知新代，停在旧代末尾。
+
+消费方面对压缩只有一套机制：``Delivery`DeliveryGap``。不选为慢消费方登记引用阻止 ``Observation`AdvanceRetention``：一个慢消费方会锁死整条流的压缩，而缺口本来就是消费方必须处理的输入。
 
 ## 语义
 
-每个 ``Source`SourceId`` 对应一个独立的集成子进程与会话通道；``Observation`Journal``、``Write`Attempts``、``Request`Requests``、``Delivery`Subscriptions`` 都在核心进程内持久保存。核心进程重启后 ``Source`Sources.live`` 从空重建，直到各集成子进程重新握手；``Source`Sources.latest`` 保留。映射由核心在启动时与运维动作时装载，替换映射不开新会话。解释层在核心之外：它把下游连接上认证过的主体作为 ``Request`Principal`` 交进核心，把核心的记录与状态翻译成下游接口；核心不记下游连接，也不认证主体。
+每个 ``Source`SourceId`` 对应一个独立的集成子进程与会话通道；集成在会话建立后、每条流的首条信封之前先交出 ``Mapping`Break``，之后每次失去连续性再交一次。``Observation`Journal``、``Write`Attempts``、``Request`Requests``、``Delivery`Subscriptions`` 都在核心进程内持久保存。核心进程重启后 ``Source`Sources.live`` 从空重建，直到各集成子进程重新握手；``Source`Sources.latest`` 保留。映射由核心在启动时与运维动作时装载，替换映射不开新会话。解释层在核心之外：它把下游连接上认证过的主体作为 ``Request`Principal`` 交进核心，把核心的记录与状态翻译成下游接口；核心不记下游连接，也不认证主体。

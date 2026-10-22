@@ -34,7 +34,7 @@ imports
       AttemptRef renamed AttemptRef;
       Time renamed Time;
       Admission renamed Admission;
-      Intent renamed Intent;
+      Intent renamed Intent
     operations
       Prepare renamed Prepare
 exports
@@ -44,23 +44,27 @@ exports
     struct Ruling;
     struct Decision;
     struct Awaiting;
+    struct Approved;
     struct Prepared;
     struct ClosedReason;
     struct Closed;
     struct TicketStatus;
+    struct Version;
     struct Proposal;
     struct TicketRecord;
     struct Alignment;
+    struct Lapse;
     struct GateVerdict;
     struct DecideOutcome;
     struct ReleaseOutcome
   functions
+    Current: TicketRecord -> Version;
     Gate: TicketRecord * bool * Alignment * Time * SessionVerdict -> GateVerdict;
     ToIntent: TicketRecord -> Intent;
     Progress: TicketRecord -> Note
   operations
     Draft: Proposal ==> ();
-    Revise: TicketId * Principal * IntentPayload ==> ();
+    Revise: TicketId * Principal * Version ==> ();
     SubmitForDecision: TicketId * Principal ==> ();
     SendBack: TicketId ==> ();
     Transfer: TicketId * Principal * Principal ==> ();
@@ -85,56 +89,64 @@ types
     decider : Principal  -- 谁作出
     ruling  : Ruling;    -- 结论
 
-  -- 送审中：冻结在某个版本
+  -- 送审中：冻结在某个版本，等待裁决
   Awaiting ::
     version : nat1;  -- 冻结的版本号
+
+  -- 已批准：某个版本获批，等待放行
+  Approved ::
+    version : nat1;  -- 获批的版本号
 
   -- 已放行：对应的写尝试
   Prepared ::
     attempt : AttemptRef;  -- 放行产生的尝试
 
-  -- 关闭原因
-  ClosedReason = Prepared | <Withdrawn> | <DecisionRejected> | <Expired>;
+  -- 放行门关单的三种事实，后续处置各不相同：到期可重起同一意图；来源不支持要换来源或等能力变化；依据失效要重取依据再起
+  Lapse = <Expired> | <Unsupported> | <BasisLost>;
+
+  -- 关闭原因：已放行、负责人撤回、裁决否决、或放行门确认了一种不可逆事实
+  ClosedReason = Prepared | <Withdrawn> | <DecisionRejected> | Lapse;
 
   -- 已关闭
   Closed ::
     reason : ClosedReason;  -- 为何关闭
 
-  -- 单据状态：草稿中、送审中、已关闭
-  TicketStatus = <Drafting> | Awaiting | Closed;
+  -- 单据状态：草稿中、送审中、已批准、已关闭
+  TicketStatus = <Drafting> | Awaiting | Approved | Closed;
 
-  -- 起草一张单据所需的提议：负责人、目标、首个版本的意图、依据、期限与准入方式
+  -- 单据的一个版本：裁决所绑定的全部内容
+  Version ::
+    intent    : IntentPayload       -- 意图
+    basis     : set of LogPosition  -- 决策依据的观察位置
+    deadline  : Time                -- 过期时刻
+    admission : Admission;          -- 准入方式
+
+  -- 起草一张单据所需的提议：负责人、目标与首个版本
   Proposal ::
-    id          : TicketId             -- 身份
-    responsible : Principal            -- 负责人
-    source      : SourceId             -- 目标来源
-    cap         : CapabilityKey        -- 放行前核对的能力
-    kind        : EffectKind           -- 效应种类
-    intent      : IntentPayload        -- 首个版本
-    basis       : set of LogPosition   -- 决策依据的观察位置
-    deadline    : Time                 -- 过期时刻
-    admission   : Admission;           -- 准入方式，随单据受审
+    id          : TicketId        -- 身份
+    responsible : Principal       -- 负责人
+    source      : SourceId        -- 目标来源
+    cap         : CapabilityKey   -- 放行前核对的能力
+    kind        : EffectKind      -- 效应种类
+    first       : Version;        -- 首个版本
 
   -- 一张单据：一把锁、一条线性版本链、绑定版本的裁决、它接手的请求（若有）
   TicketRecord ::
-    id          : TicketId                -- 身份
-    responsible : Principal               -- 当前持有编辑权的负责人
-    source      : SourceId                -- 目标来源
-    cap         : CapabilityKey           -- 放行前核对的能力
-    kind        : EffectKind              -- 效应种类
-    versions    : seq1 of IntentPayload   -- 版本链，下标即版本号
-    decisions   : map nat1 to Decision    -- 各版本的裁决
-    basis       : set of LogPosition      -- 决策依据的观察位置
-    deadline    : Time                    -- 过期时刻
-    admission   : Admission               -- 准入方式
-    request     : [RequestRef]            -- 接手的请求
-    status      : TicketStatus;           -- 当前状态
+    id          : TicketId              -- 身份
+    responsible : Principal             -- 当前持有编辑权的负责人
+    source      : SourceId              -- 目标来源
+    cap         : CapabilityKey         -- 放行前核对的能力
+    kind        : EffectKind            -- 效应种类
+    versions    : seq1 of Version       -- 版本链，下标即版本号
+    decisions   : map nat1 to Decision  -- 各版本的裁决
+    request     : [RequestRef]          -- 接手的请求
+    status      : TicketStatus;         -- 当前状态
 
   -- 放行前的对账结果：未对齐的必要项；空集即全部对齐
   Alignment = set of CheckKey;
 
-  -- 放行门的判定：已关闭、已到期、来源已声明不支持、门未开、门已开
-  GateVerdict = <AlreadyClosed> | <Overdue> | <Unsupported> | <Hold> | <Open>;
+  -- 放行门的判定：已关闭、尚未批准、确认了一种不可逆事实、门未开、门已开
+  GateVerdict = <AlreadyClosed> | <NotApproved> | Lapse | <Hold> | <Open>;
 
   -- 裁决结局：已记录，或期望版本不符与同版本已决时的冲突
   DecideOutcome = <Recorded> | <Conflict>;
@@ -142,7 +154,7 @@ types
   -- 放行结局：已放行的尝试、门未开而等待、或单据已关闭
   ReleaseOutcome = AttemptRef | <Waiting> | <Closed>;
 
-  -- 单据表：裁决只落在已有版本上，送审冻结的是最新版本
+  -- 单据表：裁决只落在已有版本上，送审与获批冻结的是最新版本，获批的版本确有批准裁决
 state Tickets of
   byId : map TicketId to TicketRecord  -- 全部单据
   inv mk_Tickets(b) ==
@@ -150,33 +162,38 @@ state Tickets of
           b(id).id = id
           and dom b(id).decisions subset inds b(id).versions
           and (is_Awaiting(b(id).status) => b(id).status.version = len b(id).versions)
+          and (is_Approved(b(id).status) =>
+                 b(id).status.version = len b(id).versions
+                 and b(id).status.version in set dom b(id).decisions
+                 and b(id).decisions(b(id).status.version).ruling = <Approved>)
   init t == t = mk_Tickets({|->})
 end
 
 functions
+  -- 判定：单据的当前版本
+  Current: TicketRecord -> Version
+  Current(rec) == rec.versions(len rec.versions);
+
   -- 判定：一张单据此刻的状态记成一条记事；两个实现必须写出同一条
   Progress: TicketRecord -> Note
   Progress(rec) == mk_token(mk_(rec.id, rec.status));
 
-  -- 判定：放行门。已关闭、到期、来源明确不支持依次优先；送审中的当前版本已批准、依据新鲜、必要项全部对齐、来源此刻支持才开门
+  -- 判定：放行门。只对已批准的单据开门或关单；到期、来源明确不支持、依据不可逆失效各自关单；对账项未对齐或能力未确认时等待
   Gate: TicketRecord * bool * Alignment * Time * SessionVerdict -> GateVerdict
   Gate(rec, fresh, align, now, cap) ==
     if is_Closed(rec.status) then <AlreadyClosed>
-    elseif now >= rec.deadline then <Overdue>
+    elseif not is_Approved(rec.status) then <NotApproved>
+    elseif now >= Current(rec).deadline then <Expired>
     elseif cap = <Unsupported> then <Unsupported>
-    elseif is_Awaiting(rec.status)
-           and rec.status.version in set dom rec.decisions
-           and rec.decisions(rec.status.version).ruling = <Approved>
-           and fresh
-           and align = {}
-           and cap = <Supported>
-    then <Open>
+    elseif not fresh then <BasisLost>
+    elseif align = {} and cap = <Supported> then <Open>
     else <Hold>;
 
-  -- 判定：单据当前版本对应的写意图
+  -- 判定：单据当前版本对应的写意图，带它接手的请求
   ToIntent: TicketRecord -> Intent
   ToIntent(rec) ==
-    mk_Intent(rec.source, rec.cap, rec.versions(len rec.versions), rec.deadline, rec.admission);
+    let v = Current(rec) in
+      mk_Intent(rec.source, rec.cap, v.intent, v.deadline, v.admission, rec.request);
 
 operations
   -- 起草新单据：负责人取锁，只有提议里的第一个版本，尚无裁决
@@ -185,8 +202,7 @@ operations
   pre p.id not in set dom byId
   post byId = byId~ munion
          {p.id |-> mk_TicketRecord(p.id, p.responsible, p.source, p.cap, p.kind,
-                                   [p.intent], {|->}, p.basis, p.deadline, p.admission,
-                                   nil, <Drafting>)};
+                                   [p.first], {|->}, nil, <Drafting>)};
 
   -- 接手一条请求起草单据：与起草相同，另记下所接手的请求
   DraftFor(p: Proposal, req: RequestRef)
@@ -194,22 +210,22 @@ operations
   pre p.id not in set dom byId
   post byId = byId~ munion
          {p.id |-> mk_TicketRecord(p.id, p.responsible, p.source, p.cap, p.kind,
-                                   [p.intent], {|->}, p.basis, p.deadline, p.admission,
-                                   req, <Drafting>)};
+                                   [p.first], {|->}, req, <Drafting>)};
 
   -- 负责人在草稿中追加新版本
-  Revise(id: TicketId, who: Principal, next: IntentPayload)
+  Revise(id: TicketId, who: Principal, next: Version)
   ext wr byId
   pre id in set dom byId and byId(id).responsible = who and byId(id).status = <Drafting>
   post byId = byId~ ++ {id |-> mu(byId~(id), versions |-> byId~(id).versions ^ [next])};
 
-  -- 负责人把草稿送审：冻结在最新版本
+  -- 负责人把草稿送审：冻结在最新版本；已有裁决的版本必须先修订才能再送
   SubmitForDecision(id: TicketId, who: Principal)
   ext wr byId
   pre id in set dom byId and byId(id).responsible = who and byId(id).status = <Drafting>
+      and len byId(id).versions not in set dom byId(id).decisions
   post byId = byId~ ++ {id |-> mu(byId~(id), status |-> mk_Awaiting(len byId~(id).versions))};
 
-  -- 把送审中的单据退回草稿；负责人不变，已有裁决保留在其版本上
+  -- 裁决者把送审中的单据退回草稿；已批准的单据不能退回；谁有权退回由业务决定
   SendBack(id: TicketId)
   ext wr byId
   pre id in set dom byId and is_Awaiting(byId(id).status)
@@ -221,7 +237,7 @@ operations
   pre id in set dom byId and byId(id).responsible = src and not is_Closed(byId(id).status)
   post byId = byId~ ++ {id |-> mu(byId~(id), responsible |-> dst)};
 
-  -- 对送审中的指定版本作出裁决；期望版本不符或该版本已决时返回冲突且不改状态；否决即关闭
+  -- 对送审中的指定版本作出裁决；期望版本不符或该版本已决时返回冲突且不改状态；批准进入已批准，否决即关闭
   Decide(id: TicketId, version: nat1, who: Principal, ruling: Ruling) r: DecideOutcome
   ext wr byId
   pre id in set dom byId and is_Awaiting(byId(id).status)
@@ -233,7 +249,7 @@ operations
                            decisions |-> byId~(id).decisions munion {version |-> mk_Decision(who, ruling)},
                            status |-> if ruling = <Rejected>
                                       then mk_Closed(<DecisionRejected>)
-                                      else byId~(id).status)})
+                                      else mk_Approved(version))})
          or (not ok and r = <Conflict> and byId = byId~);
 
   -- 负责人撤回未关闭的单据
@@ -248,26 +264,29 @@ operations
   pre id in set dom byId and not is_Closed(byId(id).status)
   post byId = byId~ ++ {id |-> mu(byId~(id), status |-> mk_Closed(reason))};
 
-  -- 场景：放行门。到期或来源明确不支持即关单并记事；门未开或通道不可准入即等待；准入成功则以准备记录关单并记事
+  -- 场景：以某原因关单并记事
+  CloseAs: TicketId * ClosedReason ==> ()
+  CloseAs(id, reason) ==
+    (Close(id, reason);
+     Record(byId(id).request, Progress(byId(id))))
+  pre id in set dom byId and not is_Closed(byId(id).status);
+
+  -- 场景：放行门。已批准的单据到期、来源明确不支持或依据失效即关单；门未开或通道不可准入即等待；准入成功则以准备记录关单
   Release: TicketId * Alignment * Time ==> ReleaseOutcome
   Release(id, align, now) ==
-    cases Gate(byId(id), CheckBasis(byId(id).basis), align, now,
+    cases Gate(byId(id), CheckBasis(Current(byId(id)).basis), align, now,
                SessionCapability(byId(id).source, byId(id).cap)):
       <AlreadyClosed> -> return <Closed>,
-      <Overdue> -> (Close(id, <Expired>);
-                    Record(byId(id).request, Progress(byId(id)));
-                    return <Closed>),
-      <Unsupported> -> (Close(id, <DecisionRejected>);
-                        Record(byId(id).request, Progress(byId(id)));
-                        return <Closed>),
+      <NotApproved> -> return <Waiting>,
+      <Expired> -> (CloseAs(id, <Expired>); return <Closed>),
+      <Unsupported> -> (CloseAs(id, <Unsupported>); return <Closed>),
+      <BasisLost> -> (CloseAs(id, <BasisLost>); return <Closed>),
       <Hold> -> return <Waiting>,
       others ->
         cases Prepare(ToIntent(byId(id))):
           <Unmapped> -> return <Waiting>,
           <LaneBlocked> -> return <Waiting>,
-          ref -> (Close(id, mk_Prepared(ref));
-                  Record(byId(id).request, Progress(byId(id)));
-                  return ref)
+          ref -> (CloseAs(id, mk_Prepared(ref)); return ref)
         end
     end
   pre id in set dom byId;
@@ -278,7 +297,8 @@ operations
     let req = RequestOf(ref) in
       if req = nil or StatusOf(ref) <> <Pending> or req.kind <> p.kind
       then return false
-      else (DraftFor(mu(p, responsible |-> req.member, basis |-> req.basis), ref);
+      else (DraftFor(mu(p, responsible |-> req.member,
+                          first |-> mu(p.first, basis |-> req.basis)), ref);
             SubmitForDecision(p.id, req.member);
             Respond(ref, mk_token(p.id));
             return true)

@@ -4,13 +4,13 @@
 
 ## 依据
 
-``Program`` 与下游需要以 ``Request`EffectRequest`` 请求核心预先不认识的种类（来源：可编程派生要求，证据见附录 `evidence/integration-facts.md`）。所以 ``Request`EffectKind`` 由 ``Request`Register`` 登记而不由核心穷举，没有登记的种类的请求停在 ``Request`RequestStatus`` 的 `<Unhandled>` 而不是报错。
+核心内与下游的请求方需要以 ``Request`EffectRequest`` 请求核心预先不认识的种类（来源：可编程派生要求，证据见附录 `evidence/integration-facts.md`）。所以 ``Request`EffectKind`` 由 ``Request`Register`` 登记而不由核心穷举，没有登记的种类的请求停在 ``Request`RequestStatus`` 的 `<Unhandled>` 而不是报错。
 
-请求随程序推进先持久化、处理在其后，不存在同步返回值；程序与重启恢复都只能读持久记录，而效应侧的事实不能被压缩或撤回（来源：可编程派生要求，证据见附录 `evidence/integration-facts.md`）。所以答复与写尝试的每次迁移都经 ``Request`Record`` 追加到 ``Request`Requests.events``，程序按位置 ``Request`ReadEvents`` 读回；事件序列不进观察日志。
+请求先持久化、处理在其后，不存在同步返回值；请求方与重启恢复都只能读持久记录，而效应侧的事实不能被压缩或撤回（来源：可编程派生要求，证据见附录 `evidence/integration-facts.md`）。所以答复与写尝试的每次迁移都经 ``Request`Record`` 追加到 ``Request`Requests.events``，并以 ``Write`Intent.about`` 关联回它所响应的请求，请求方按位置 ``Request`ReadEvents`` 读回；事件序列不进观察日志。
 
 外部写不可逆，且写请求可能在到达上游之后、回执返回之前丢失回执（来源：外部场所能力调查，证据见附录 `evidence/venue-facts.md`）。所以 ``Write`Barrier`` 在调用集成之前持久落下屏障，``Write`Attempt.barriered`` 为假的尝试确知未发出，为真而无后继的尝试只能进入 ``Write`Outcome`` 的 `<Unknown>`，由 ``Write`Resolve`` 与 ``Write`Attribute`` 以证据收敛，核心从不自动重发。
 
-同一品种上的后续写依赖前一笔的结果（来源：交易语义约束，证据见附录 `evidence/lane-facts.md`）。所以 ``Write`BlockingHeads`` 在前一笔等待仍为 `<Active>` 时阻塞同通道的普通准入，不论它是否已过屏障；撤阻塞头的撤单以 ``Write`CancelHead`` 准入，并必须指向已过屏障的阻塞头的调用方键。
+同一品种上的后续写依赖前一笔的结果（来源：交易语义约束，证据见附录 `evidence/lane-facts.md`）。所以 ``Write`BlockingHeads`` 在前一笔等待仍为 `<Active>` 时阻塞同通道的普通准入，不论它是否已过屏障；撤阻塞头的撤单以 ``Write`CancelHead`` 准入，``Write`Admit`` 那一刻它必须指向已过屏障的阻塞头的调用方键；之后两次尝试各自收敛，原尝试先结束不影响撤单尝试。
 
 ## 为什么
 
@@ -20,11 +20,11 @@
 
 调用方键是尝试身份的单射 ``Write`KeyOf``，在 ``Write`Prepare`` 里先于编码铸出并交给 ``Mapping`Encode``：同一意图重新准入是新的尝试，必须拿到新键，否则来源的幂等去重会把两次尝试混为一次。不选先编码再铸键：请求原文里就没有键。
 
-未过屏障的尝试留在 ``Write`BlockingHeads``：从 ``Write`Prepare`` 提交到 ``Write`Barrier`` 落盘之间有窗口，不占住通道，同通道第二张单据会在窗口内准入。它的出口是 ``Write`Expire``：到期或人工丢弃都走它，因为它确知未发出。
+未过屏障的尝试留在 ``Write`BlockingHeads``：从 ``Write`Prepare`` 提交到 ``Write`Barrier`` 落盘之间有窗口，不占住通道，同通道第二笔意图会在窗口内准入。它的出口是 ``Write`Expire``：到期或人工丢弃都走它，因为它确知未发出。
 
 ``Request`Requests.events`` 不进 ``Observation`Journal``：观察日志可经 ``Observation`AdvanceRetention`` 删、可经 ``Observation`Entry.supersedes`` 撤、有 ``Observation`LogPosition.epoch`` 分代，事件序列三者都没有；不选让 ``Delivery`` 同时订阅两类流，那会让只为 ``Delivery`DeliveryGap`` 存在的投递逻辑背上永远不触发的分支。
 
-``Write`Admission`` 的 `<Bypass>` 随 ``Ticket`Proposal.admission`` 受审而不是放行时的参数：越过阻塞的决定留在裁决记录里，审批者看得到它。
+``Write`Admission`` 随 ``Write`Intent`` 一起进入写边界而不是 ``Write`Prepare`` 的参数：越过阻塞的决定和意图本身一起形成、一起被记录，发出点不另收指令。
 
 ## 语义
 

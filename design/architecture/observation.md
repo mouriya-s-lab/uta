@@ -11,7 +11,6 @@ imports
 exports
   types
     struct DerivedId;
-    struct RefHolder;
     struct ClientKey;
     Fields;
     struct Decoded;
@@ -22,18 +21,16 @@ exports
     struct Cursor;
     struct LogPosition;
     struct EntryKind;
-    struct Entry;
-    struct RefOutcome
+    struct Entry
   functions
     After: LogPosition * Cursor -> bool;
     Earlier: Cursor * Cursor -> bool
   operations
     OpenEpoch: StreamId * [RawPayload] ==> ();
+    IsOpen: StreamId ==> bool;
     Append: StreamId * [Decoded] * [RawPayload] * [LogPosition] ==> LogPosition;
     CheckBasis: set of LogPosition ==> bool;
-    AcquireRef: RefHolder * set of LogPosition ==> RefOutcome;
-    ReleaseRef: RefHolder ==> ();
-    AdvanceRetention: StreamId * Cursor ==> RefOutcome;
+    AdvanceRetention: StreamId * Cursor ==> ();
     ReadFrom: StreamId * Cursor ==> seq of Entry;
     RetentionOf: StreamId ==> Cursor;
     ByClientKey: ClientKey ==> set of LogPosition
@@ -41,9 +38,6 @@ definitions
 types
   -- 派生流产出者的身份；由业务给出，观察侧不解释
   DerivedId = token;
-
-  -- 登记保留引用的持有者身份；由使用方给出
-  RefHolder = token;
 
   -- 核心为一次外部写铸造、随请求交给来源、在来源回声的记录里带回的调用方键
   ClientKey = token;
@@ -94,16 +88,12 @@ types
     raw        : [RawPayload]    -- 来源原文；派生记录可无
     supersedes : [LogPosition];  -- 派生记录修正时所取代的旧位置
 
-  -- 引用登记与保留推进的结局
-  RefOutcome = <Applied> | <Rejected>;
-
-  -- 观察日志：各流的当前代与流末、全部记录、保留边界与活跃引用
+  -- 观察日志：各流的当前代与流末、全部记录与保留边界
 state Journal of
-  head      : map StreamId to Cursor               -- 各已开代流的当前代与该代最后分配的位置号
-  entries   : map LogPosition to Entry             -- 全部在册记录
-  retention : map StreamId to Cursor               -- 各流保留边界：不晚于它的位置已删
-  refs      : map RefHolder to set of LogPosition  -- 活跃引用保护的位置
-  inv mk_Journal(h, e, r, f) ==
+  head      : map StreamId to Cursor    -- 各已开代流的当前代与该代最后分配的位置号
+  entries   : map LogPosition to Entry  -- 全部在册记录
+  retention : map StreamId to Cursor    -- 各流保留边界：不晚于它的位置已删
+  inv mk_Journal(h, e, r) ==
         (forall p in set dom e &
            e(p).pos = p
            and p.stream in set dom h
@@ -113,10 +103,7 @@ state Journal of
                (p.seqNo = 1 and is_External(p.stream.origin)) => e(p).kind = <SourceGap>)
         and (forall p in set dom e &
                p.stream in set dom r => After(p, r(p.stream)))
-        and (forall x in set dom f &
-               forall p in set f(x) &
-                 p.stream in set dom r => After(p, r(p.stream)))
-  init j == j = mk_Journal({|->}, {|->}, {|->}, {|->})
+  init j == j = mk_Journal({|->}, {|->}, {|->})
 end
 
 functions
@@ -144,6 +131,11 @@ operations
              and head = head~ ++ {stream |-> mk_Cursor(e, 0)}
              and entries = entries~);
 
+  -- 某流是否已开过代
+  IsOpen(stream: StreamId) r: bool
+  ext rd head
+  post r = (stream in set dom head);
+
   -- 在已开代的流上追加一条记录：位置在当前代流末之后；解出字段的是数据记录，没解出的是解不出记录；取代位置必须在同一流上
   Append(stream: StreamId, decoded: [Decoded], raw: [RawPayload], supersedes: [LogPosition]) r: LogPosition
   ext wr head wr entries
@@ -155,7 +147,7 @@ operations
              {r |-> mk_Entry(r, if decoded = nil then <Unmapped> else <Data>,
                              decoded, raw, supersedes)};
 
-  -- 一组依据位置是否仍然新鲜：全部在册、没有被取代、所在代仍是该流当前代
+  -- 一组依据位置是否仍然新鲜：全部在册、没有被取代、所在代仍是该流当前代；任一项为假即不可逆
   CheckBasis(basis: set of LogPosition) r: bool
   ext rd head rd entries
   post r = (forall p in set basis &
@@ -163,31 +155,14 @@ operations
               and not (exists e in set rng entries & e.supersedes = p)
               and p.epoch = head(p.stream).epoch);
 
-  -- 为持有者登记需要保护的位置集合，替换它先前的登记；任一位置已不晚于保留边界则拒绝
-  AcquireRef(holder: RefHolder, positions: set of LogPosition) r: RefOutcome
-  ext rd retention wr refs
-  post let valid = forall p in set positions &
-                     p.stream in set dom retention => After(p, retention(p.stream)) in
-         (valid and r = <Applied> and refs = refs~ ++ {holder |-> positions})
-         or (not valid and r = <Rejected> and refs = refs~);
-
-  -- 解除持有者的全部登记
-  ReleaseRef(holder: RefHolder)
-  ext wr refs
-  post refs = {holder} <-: refs~;
-
-  -- 推进某流的保留边界并删去不晚于它的记录；边界倒退或越过活跃引用时拒绝
-  AdvanceRetention(stream: StreamId, bound: Cursor) r: RefOutcome
-  ext rd refs wr retention wr entries
-  post let forward = stream not in set dom retention~ or Earlier(retention~(stream), bound),
-           referencedOk = forall x in set dom refs &
-                            forall p in set refs(x) &
-                              p.stream = stream => After(p, bound) in
-         (forward and referencedOk and r = <Applied>
+  -- 推进某流的保留边界并删去不晚于它的记录；边界只前进，倒退时不变
+  AdvanceRetention(stream: StreamId, bound: Cursor)
+  ext wr retention wr entries
+  post let forward = stream not in set dom retention~ or Earlier(retention~(stream), bound) in
+         (forward
           and retention = retention~ ++ {stream |-> bound}
           and entries = {p | p in set dom entries~ & p.stream <> stream or After(p, bound)} <: entries~)
-         or (not (forward and referencedOk) and r = <Rejected>
-             and retention = retention~ and entries = entries~);
+         or (not forward and retention = retention~ and entries = entries~);
 
   -- 按位置先后读出某流上晚于游标的全部在册记录，跨代连续
   ReadFrom(stream: StreamId, since: Cursor) items: seq of Entry
