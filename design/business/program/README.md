@@ -10,8 +10,8 @@
 
 ## 需求
 
-- 程序不是行动主体，它发出的每条请求都要能追溯到装载它的人（来源：可编程派生要求，证据见附录 `evidence/integration-facts.md`），由 ``Program`Load`` 与 ``Program`Attributed`` 走通。
-- 程序崩溃重启后从最近一次确认的位置继续，不重复消费、不漏消费，也不重复发出请求（来源：可编程派生要求，证据见附录 `evidence/integration-facts.md`），由 ``Program`CheckpointOf``、``Program`Poll``、``Program`Events``、``Program`AdvanceOn`` 与 ``Program`AdvanceOnEvents`` 走通。
+- 程序不是行动主体，它发出的每条请求都要能追溯到装载它的人（来源：可编程派生要求，证据见附录 `evidence/integration-facts.md`），由 ``Program`Load`` 与 ``Program`AdvanceOn`` 走通。
+- 程序崩溃重启后从最近一次确认的位置继续，不重复消费、不漏消费，也不重复发出请求（来源：可编程派生要求，证据见附录 `evidence/integration-facts.md`），由 ``Program`Poll``、``Program`Events``、``Program`AdvanceOn`` 与 ``Program`AdvanceOnEvents`` 走通。
 - 程序被卸载后，核心里不再有任何东西替它等待记录（来源：可编程派生要求，证据见附录 `evidence/integration-facts.md`），由 ``Program`Unload`` 走通。
 
 ## 为什么
@@ -24,4 +24,4 @@
 
 ## 语义
 
-程序在受监督的子进程中运行，核心按 ``Program`Loaded.subscription`` 投递并收回 ``Program`Step``；子进程崩溃后核心从 ``Program`Loaded.checkpoint`` 重新装载。
+程序在受监督的子进程中运行，核心按 ``Program`Loaded.subscription`` 投递并收回 ``Program`Step``；子进程崩溃后核心经 ``Program`CheckpointOf`` 取回最近检查点重新装载。

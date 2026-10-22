@@ -27,8 +27,7 @@ exports
     Earlier: Cursor * Cursor -> bool
   operations
     OpenEpoch: StreamId * [RawPayload] ==> ();
-    IsOpen: StreamId ==> bool;
-    Append: StreamId * [Decoded] * [RawPayload] * [LogPosition] ==> LogPosition;
+    Append: StreamId * [Decoded] * [RawPayload] * [LogPosition] ==> [LogPosition];
     CheckBasis: set of LogPosition ==> bool;
     AdvanceRetention: StreamId * Cursor ==> ();
     ReadFrom: StreamId * Cursor ==> seq of Entry;
@@ -130,22 +129,17 @@ operations
          or (is_Derived(stream.origin)
              and head = head~ ++ {stream |-> mk_Cursor(e, 0)}
              and entries = entries~);
-
-  -- 某流是否已开过代
-  IsOpen(stream: StreamId) r: bool
-  ext rd head
-  post r = (stream in set dom head);
-
-  -- 在已开代的流上追加一条记录：位置在当前代流末之后；解出字段的是数据记录，没解出的是解不出记录；取代位置必须在同一流上
-  Append(stream: StreamId, decoded: [Decoded], raw: [RawPayload], supersedes: [LogPosition]) r: LogPosition
+  -- 在流上追加一条记录：流尚未开代时不追加；已开代时位置在当前代流末之后，解出字段的是数据记录，没解出的是解不出记录；取代位置必须在同一流上
+  Append(stream: StreamId, decoded: [Decoded], raw: [RawPayload], supersedes: [LogPosition]) r: [LogPosition]
   ext wr head wr entries
-  pre stream in set dom head
-      and (supersedes <> nil => supersedes.stream = stream)
-  post r = mk_LogPosition(stream, head~(stream).epoch, head~(stream).seqNo + 1)
-       and head = head~ ++ {stream |-> mk_Cursor(r.epoch, r.seqNo)}
-       and entries = entries~ munion
-             {r |-> mk_Entry(r, if decoded = nil then <Unmapped> else <Data>,
-                             decoded, raw, supersedes)};
+  pre supersedes <> nil => supersedes.stream = stream
+  post (stream not in set dom head~ and r = nil and head = head~ and entries = entries~)
+       or (stream in set dom head~
+           and r = mk_LogPosition(stream, head~(stream).epoch, head~(stream).seqNo + 1)
+           and head = head~ ++ {stream |-> mk_Cursor(r.epoch, r.seqNo)}
+           and entries = entries~ munion
+                 {r |-> mk_Entry(r, if decoded = nil then <Unmapped> else <Data>,
+                                 decoded, raw, supersedes)});
 
   -- 一组依据位置是否仍然新鲜：全部在册、没有被取代、所在代仍是该流当前代；任一项为假即不可逆
   CheckBasis(basis: set of LogPosition) r: bool

@@ -6,7 +6,7 @@
 
 待决意图在送审期间可能被修订，而另一个裁决者可能基于过期版本作出批准（来源：审批并发约束，证据见附录 `evidence/approval-facts.md`）。所以 ``Ticket`TicketRecord.status`` 在 ``Ticket`Awaiting`` 与 ``Ticket`Approved`` 期间冻结版本，``Ticket`Revise`` 只在草稿中可用，``Ticket`SendBack`` 退回草稿后才能修订，已裁决的版本必须先修订才能再送审，``Ticket`Decide`` 在期望版本不符或同版本已决时返回 `<Conflict>`；``Ticket`Version`` 把意图、依据、期限与准入方式一起绑进版本，退回后任一项都可改。
 
-从起单到放行可能相隔很久，放行时依据的观察可能已被压缩、取代或换代，而来源能力可能已变（来源：审批并发约束，证据见附录 `evidence/approval-facts.md`）。所以 ``Ticket`Release`` 只对 ``Ticket`Approved`` 的单据开门，在放行时刻重新核对 ``Observation`CheckBasis``、调用方给出的 ``Ticket`Alignment`` 与 ``Source`SessionCapability``：依据失效不可逆，以 `<BasisLost>` 关单；来源明确不支持以 `<Unsupported>` 关单；能力未确认、离线或对账项未对齐时等待；购买力、可交易性等资金面项只作为读入的对账项，核心不自行判断。
+从起单到放行可能相隔很久，放行时依据的观察可能已被删、被取代或已换代，而来源能力可能已变（来源：审批并发约束，证据见附录 `evidence/approval-facts.md`）。所以 ``Ticket`Release`` 只对 ``Ticket`Approved`` 的单据开门，在放行时刻重新核对 ``Observation`CheckBasis``、调用方给出的 ``Ticket`Alignment`` 与 ``Source`SessionCapability``：依据失效不可逆，以 `<BasisLost>` 关单；来源明确不支持以 `<Unsupported>` 关单；能力未确认、离线或对账项未对齐时等待；购买力与可交易性只作为读入的 ``Ticket`Alignment``，核心不自行判断。
 
 谁能作出 ``Ticket`Decision``、``Ticket`Alignment`` 里哪些 ``Ticket`CheckKey`` 必须对齐、是否自动批准，会随需求改变（来源：审批并发约束，证据见附录 `evidence/approval-facts.md`）。所以 ``Ticket`Decision.decider`` 只记录是谁，``Ticket`Alignment`` 只记录未对齐的项；谁有权、哪些项必要，不进 ``Ticket``。
 
@@ -18,7 +18,7 @@
 
 ## 为什么
 
-不选让 ``Trading`` 与 ``Program`` 各自保存 ``Ticket`Decision``：同一张 ``Ticket`TicketRecord`` 的 ``Ticket`Decision`` 会分在两个模块里。也不选把 ``Ticket`Decision`` 放进 ``Write``：``Write`Intent`` 只带载荷与 ``Write`Intent.admission``，``Write`` 不读 ``Ticket`Decision.decider``。
+不选把 ``Ticket`Decision`` 放进 ``Write``：``Write`Prepare`` 与 ``Write`Barrier`` 只处理 ``Write`Intent`` 的准入与发出，不关心它在送交之前改过几版、由哪个 ``Request`Principal`` 批准；把形成期的锁与版本链留在 ``Ticket``，各种 ``Request`EffectKind`` 共用同一套审批与放行规则。
 
 ``Ticket`Version.admission`` 随版本受审：批准的是带准入方式的意图，放行时不再另给参数。不选把准入方式作为 ``Ticket`Release`` 的参数：审批者批准的普通单据会在放行时被改成绕过。
 

@@ -19,7 +19,6 @@ imports
       LogPosition renamed LogPosition
     operations
       OpenEpoch renamed OpenEpoch;
-      IsOpen renamed IsOpen;
       Append renamed Append
 exports
   types
@@ -103,12 +102,10 @@ operations
   ext rd current
   post env.source not in set dom current => r = nil;
 
-  -- 场景：入账——所属流已经 IsOpen 确认为已开代时，信封经 Decode 后经 Append 进入该流；解不出的也进入，原文保留；未开代则不入账
+  -- 场景：入账——集成交来的信封经 Decode 后经 Append 进入它所属的流；解不出的也进入，原文保留
   Ingest: Envelope ==> [LogPosition]
   Ingest(env) ==
-    if IsOpen(StreamOf(env))
-    then return Append(StreamOf(env), Decode(env), env.raw, nil)
-    else return nil;
+    return Append(StreamOf(env), Decode(env), env.raw, nil);
 
   -- 场景：来源连续性中断——信封所属流在 LatestStreams 中时，经 OpenEpoch 为该流开新一代；会话建立后每条流的首条信封之前也经此开第一代
   Break: Envelope ==> bool
