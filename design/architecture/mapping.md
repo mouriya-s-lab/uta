@@ -7,7 +7,9 @@ imports
     types
       SourceId renamed SourceId;
       StreamName renamed StreamName;
-      RawPayload renamed RawPayload,
+      RawPayload renamed RawPayload
+    operations
+      LatestStreams renamed LatestStreams,
   from Observation
     types
       ClientKey renamed ClientKey;
@@ -17,6 +19,7 @@ imports
       LogPosition renamed LogPosition
     operations
       OpenEpoch renamed OpenEpoch;
+      IsOpen renamed IsOpen;
       Append renamed Append
 exports
   types
@@ -34,8 +37,8 @@ exports
   operations
     Install: SourceId * MappingId ==> ();
     Decode: Envelope ==> [Decoded];
-    Break: Envelope ==> ();
-    Ingest: Envelope ==> LogPosition;
+    Break: Envelope ==> bool;
+    Ingest: Envelope ==> [LogPosition];
     Encode: EncodeRequest ==> EncodeOutcome;
     ClassifyEvidence: Probe ==> Evidence
 definitions
@@ -100,15 +103,19 @@ operations
   ext rd current
   post env.source not in set dom current => r = nil;
 
-  -- 场景：入账——集成交来的信封经 Decode 后经 Append 进入它所属的流；解不出的也进入，原文保留
-  Ingest: Envelope ==> LogPosition
+  -- 场景：入账——所属流已经 IsOpen 确认为已开代时，信封经 Decode 后经 Append 进入该流；解不出的也进入，原文保留；未开代则不入账
+  Ingest: Envelope ==> [LogPosition]
   Ingest(env) ==
-    return Append(StreamOf(env), Decode(env), env.raw, nil);
+    if IsOpen(StreamOf(env))
+    then return Append(StreamOf(env), Decode(env), env.raw, nil)
+    else return nil;
 
-  -- 场景：来源连续性中断——集成交来某条流的中断信号时，经 OpenEpoch 为该流开新一代；会话建立后每条流的首条信封之前也经此开第一代
-  Break: Envelope ==> ()
+  -- 场景：来源连续性中断——信封所属流在 LatestStreams 中时，经 OpenEpoch 为该流开新一代；会话建立后每条流的首条信封之前也经此开第一代
+  Break: Envelope ==> bool
   Break(env) ==
-    OpenEpoch(StreamOf(env), env.raw);
+    if env.stream in set LatestStreams(env.source)
+    then (OpenEpoch(StreamOf(env), env.raw); return true)
+    else return false;
 
   -- 按来源当前映射把意图连同调用方键编成请求并导出通道；没有映射的来源一律编不出
   Encode(req: EncodeRequest) r: EncodeOutcome

@@ -59,7 +59,6 @@ exports
     ProbeAttempt: AttemptRef * RawPayload ==> Evidence;
     Attribute: AttemptRef * LogPosition ==> bool;
     Abandon: AttemptRef ==> ();
-    LaneClear: LaneKey ==> bool;
     AttemptOf: AttemptRef ==> [Attempt]
 definitions
 types
@@ -123,7 +122,9 @@ state Attempts of
                and (x.waiting = <Expired> => not x.barriered)
                and (x.waiting = <Abandoned> => x.outcome in set {<Unknown>, <Found>, <Absent>}))
         and (forall x in set rng a &
-               card {h | h in set BlockingHeads(rng a, x.lane) & h.intent.admission = <Normal>} <= 1)
+               let heads = BlockingHeads(rng a, x.lane) in
+                 card {h | h in set heads & h.intent.admission = <Normal>} <= 1
+                 and card {h | h in set heads & is_CancelHead(h.intent.admission)} <= 1)
   init s == s = mk_Attempts({|->})
 end
 
@@ -154,7 +155,9 @@ operations
   post let heads = BlockingHeads(rng attempts~, enc.lane),
            admitted = cases intent.admission:
                         <Normal> -> heads = {},
-                        mk_CancelHead(t) -> exists b in set heads & b.barriered and KeyOf(b.ref) = t,
+                        mk_CancelHead(t) ->
+                          (exists b in set heads & b.outcome = <Unknown> and KeyOf(b.ref) = t)
+                          and not (exists c in set heads & is_CancelHead(c.intent.admission)),
                         <Bypass> -> true
                       end in
          r = admitted
@@ -162,13 +165,15 @@ operations
                 {ref |-> mk_Attempt(ref, intent, enc.lane, enc.request, false, <Active>, <Pending>)})
          and (not admitted => attempts = attempts~);
 
-  -- 场景：准备一次写。先取身份与键，带键编码；编不出不建尝试；通道阻塞不建尝试
+  -- 场景：准备一次写——先取身份与键，带键经 Encode 编码，经 Admit 准入后经 Announce 让请求方得知；编不出或通道阻塞时不建尝试
   Prepare: Intent ==> PrepareOutcome
   Prepare(intent) ==
     let ref = Mint() in
       cases Encode(mk_EncodeRequest(intent.source, intent.payload, KeyOf(ref))):
         <Unmapped> -> return <Unmapped>,
-        enc -> if Admit(ref, intent, enc) then return ref else return <LaneBlocked>
+        enc -> if Admit(ref, intent, enc)
+               then (Announce(ref); return ref)
+               else return <LaneBlocked>
       end;
 
   -- 落发送屏障：此后该尝试视为可能已发出
@@ -199,13 +204,13 @@ operations
   pre ref in set dom attempts
       and not attempts(ref).barriered and attempts(ref).waiting = <Active>;
 
-  -- 场景：发出前门。到期即过期；来源此刻能力为支持才落屏障并发出；否则保持未发出等待
+  -- 场景：发出前门——到期或来源已明确不支持即经 Expire 终止；来源此刻支持才经 Seal 落屏障并经 Announce 让请求方得知；其余保持未发出等待
   Barrier: AttemptRef * Time ==> GateOutcome
   Barrier(ref, now) ==
-    let a = attempts(ref) in
-      if now >= a.intent.deadline
+    let cap = SessionCapability(attempts(ref).intent.source, attempts(ref).intent.cap) in
+      if now >= attempts(ref).intent.deadline or cap = <Unsupported>
       then (Expire(ref); return <Expired>)
-      elseif SessionCapability(a.intent.source, a.intent.cap) = <Supported>
+      elseif cap = <Supported>
       then (Seal(ref);
             Announce(ref);
             return <Sent>)
@@ -280,10 +285,6 @@ operations
   pre ref in set dom attempts
       and attempts(ref).waiting = <Active> and attempts(ref).outcome = <Unknown>;
 
-  -- 某通道此刻是否没有阻塞头
-  LaneClear(lane: LaneKey) r: bool
-  ext rd attempts
-  post r = (BlockingHeads(rng attempts, lane) = {});
 
   -- 查询尝试记录；不存在为空
   AttemptOf(ref: AttemptRef) r: [Attempt]

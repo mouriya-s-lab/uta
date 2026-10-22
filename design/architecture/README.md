@@ -14,7 +14,7 @@
 
 同一品种上的后续写的语义依赖前一笔的结果，而资金面能否成交只由上游裁决，本地没有判断的位置（来源：交易语义约束，证据见附录 `evidence/lane-facts.md`）。所以 ``Mapping`LaneKey`` 由映射从意图导出，``Write`BlockingHeads`` 只在同一通道内阻塞；资金面核对只是进入写边界之前的一次读，不进通道。
 
-部分能力在握手前未知，且只在会话在线时有效（来源：外部场所能力调查，证据见附录 `evidence/venue-facts.md`）。所以 ``Source`SessionCapability`` 只读 ``Source`Sources.live``，离线一律为 `<Unavailable>`；``Source`Sources.latest`` 只供离线查阅最近声明，从不代替此刻的能力。
+部分能力在握手前未知，且只在会话在线时有效（来源：外部场所能力调查，证据见附录 `evidence/venue-facts.md`）。所以 ``Source`SessionCapability`` 只读 ``Source`Sources.live``，离线一律为 `<Unavailable>`；``Source`Sources.latest`` 保留最近握手声明的流集合供 ``Mapping`Break`` 核对，从不代替此刻的能力。
 
 下游有多个消费方，各自与核心生命周期独立，解释层不持有状态（来源：多来源接入要求，证据见附录 `evidence/integration-facts.md`）。所以 ``Request`Principal`` 只作为行动主体的不透明身份进入核心，持久订阅 ``Delivery`Subscriptions`` 归核心所有而不随下游连接断开消失。
 

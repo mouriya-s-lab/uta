@@ -9,7 +9,7 @@ imports
 exports
   types
     RequestRef;
-    EffectKind;
+    struct EffectKind;
     Principal;
     Payload;
     struct Answer;
