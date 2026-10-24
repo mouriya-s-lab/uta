@@ -19,9 +19,6 @@ exports
     struct DeliveryGap;
     struct Item;
     struct Subscription
-  functions
-    GapBefore: StreamId * Cursor * Cursor -> [DeliveryGap];
-    Ordered: DeliveryGap * seq of Entry -> seq of Item
   operations
     Subscribe: set of StreamId ==> SubscriptionId;
     Unsubscribe: SubscriptionId ==> ();
@@ -61,16 +58,6 @@ state Subscriptions of
   init s == s = mk_Subscriptions({|->})
 end
 
-functions
-  -- 判定：游标之后、保留边界之前有没有已被删去的位置；有则为那段缺口。两个实现必须算出同一段
-  GapBefore: StreamId * Cursor * Cursor -> [DeliveryGap]
-  GapBefore(stream, cursor, bound) ==
-    if Earlier(cursor, bound) then mk_DeliveryGap(stream, cursor, bound) else nil;
-
-  -- 判定：交出的次序——缺口先于它之后的记录，消费者先知道少了什么再收到后续记录
-  Ordered: DeliveryGap * seq of Entry -> seq of Item
-  Ordered(gap, entries) == [gap] ^ entries;
-
 operations
   -- 建立订阅：新身份，各流游标从第一代起点之前开始，无缺口
   Subscribe(streams: set of StreamId) id: SubscriptionId
@@ -93,21 +80,15 @@ operations
       and Earlier(subs(id).cursor(gap.stream), gap.high)
   post subs = subs~ ++ {id |-> mu(subs~(id), gaps |-> subs~(id).gaps union {gap})};
 
-  -- 场景：跳过一段已被删去的位置——缺口先经 RecordGap 写在订阅上，再与边界之后的记录按 Ordered 一起交出
-  Skip: SubscriptionId * DeliveryGap ==> seq of Item
-  Skip(id, gap) ==
-    (RecordGap(id, gap);
-     return Ordered(gap, ReadFrom(gap.stream, gap.high)))
-  pre id in set dom subs and gap.stream in set subs(id).streams
-      and Earlier(gap.low, gap.high) and Earlier(subs(id).cursor(gap.stream), gap.high);
-
-  -- 场景：投递——游标之前已被删去时先经 Skip，否则直接经 ReadFrom 交出游标之后的记录
+  -- 场景：交出某流上游标之后的记录；游标已落在保留边界之前时，先写下并交出缺口，再交出边界之后的记录
   Deliver: SubscriptionId * StreamId ==> seq of Item
   Deliver(id, stream) ==
-    cases GapBefore(stream, CursorOf(id, stream), RetentionOf(stream)):
-      nil -> return ReadFrom(stream, CursorOf(id, stream)),
-      gap -> return Skip(id, gap)
-    end
+    let cur = subs(id).cursor(stream), bound = RetentionOf(stream) in
+      if Earlier(cur, bound)
+      then let gap = mk_DeliveryGap(stream, cur, bound) in
+             (RecordGap(id, gap);
+              return [gap] ^ ReadFrom(stream, bound))
+      else return ReadFrom(stream, cur)
   pre id in set dom subs and stream in set subs(id).streams;
 
   -- 确认某流消费到某游标：游标只前进，被越过的缺口随之消失

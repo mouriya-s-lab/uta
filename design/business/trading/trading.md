@@ -5,7 +5,6 @@ module Trading
 imports
   from Source
     types
-      SourceId renamed SourceId;
       CapabilityKey renamed CapabilityKey
     operations
       SessionCapability renamed SessionCapability,
@@ -18,7 +17,6 @@ imports
   from Write
     types
       AttemptRef renamed AttemptRef;
-      Attempt renamed Attempt;
       CancelHead renamed CancelHead
     functions
       KeyOf renamed KeyOf
@@ -43,8 +41,7 @@ exports
   functions
     KindOf: OperationKind -> EffectKind;
     EffectiveExecutions: set of FillObs -> set of FillObs;
-    MaximalOrderStates: set of OrderObs -> set of OrderObs;
-    Cancellable: [Attempt] * SourceId -> bool
+    MaximalOrderStates: set of OrderObs -> set of OrderObs
   operations
     ReplaceOrder: TradeDraft * TradeDraft * TradeDraft * CapabilityKey ==> seq of TicketId;
     DraftCancelOfHead: TradeDraft * AttemptRef ==> bool
@@ -82,9 +79,9 @@ types
     revision : nat;         -- 来源给出的状态修订号
 
 functions
-  -- 判定：交易操作种类对应的效应种类身份
+  -- 交易操作种类对应的效应种类身份；身份的编码属实现，不展开
   KindOf: OperationKind -> EffectKind
-  KindOf(op) == mk_token(op);
+  KindOf(op) == is not yet specified;
 
   -- 判定：哪些成交观察当前有效——同一执行身份只取最大修订，作废项与同修订号内容冲突项都不算；两个实现必须得出同一集合
   EffectiveExecutions: set of FillObs -> set of FillObs
@@ -100,11 +97,6 @@ functions
   MaximalOrderStates(obs) ==
     {x | x in set obs &
        not exists y in set obs & y.orderId = x.orderId and y.revision > x.revision};
-
-  -- 判定：一次尝试此刻能否作为结果未知的阻塞头被撤——存在、等待仍在进行、结果未知、且属于撤单要发往的来源
-  Cancellable: [Attempt] * SourceId -> bool
-  Cancellable(a, source) ==
-    a <> nil and a.waiting = <Active> and a.outcome = <Unknown> and a.intent.source = source;
 
 operations
   -- 场景：改单。单据号均未占用时，来源此刻支持原子改单则只起改单单据；明确不支持则显式起撤单与下单两张独立单据；其余不起单
@@ -125,14 +117,19 @@ operations
       and cancel.proposal.source = place.proposal.source
       and card {replace.proposal.id, cancel.proposal.id, place.proposal.id} = 3;
 
-  -- 场景：对阻塞头起撤单——目标可撤且单据号未占用时，以撤阻塞头方式起草指向它的调用方键的撤单单据
+  -- 场景：对阻塞头起撤单——目标仍在等待、结果未知、同一来源且单据号未占用时，以撤阻塞头方式起草指向它的调用方键的撤单单据
   DraftCancelOfHead: TradeDraft * AttemptRef ==> bool
   DraftCancelOfHead(cancel, head) ==
-    if Cancellable(AttemptOf(head), cancel.proposal.source) and RecordOf(cancel.proposal.id) = nil
-    then (Draft(mu(cancel.proposal,
-                   first |-> mu(cancel.proposal.first, admission |-> mk_CancelHead(KeyOf(head)))));
-          return true)
-    else return false
+    cases AttemptOf(head):
+      nil -> return false,
+      a -> if a.waiting = <Active> and a.outcome = <Unknown>
+              and a.intent.source = cancel.proposal.source
+              and RecordOf(cancel.proposal.id) = nil
+           then (Draft(mu(cancel.proposal,
+                          first |-> mu(cancel.proposal.first, admission |-> mk_CancelHead(KeyOf(head)))));
+                 return true)
+           else return false
+    end
   pre cancel.op = <Cancel>;
 end Trading
 ```

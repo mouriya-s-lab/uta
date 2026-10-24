@@ -31,8 +31,6 @@ exports
     struct EncodeOutcome;
     struct Probe;
     struct Evidence
-  functions
-    StreamOf: Envelope -> StreamId
   operations
     Install: SourceId * MappingId ==> ();
     Decode: Envelope ==> [Decoded];
@@ -86,11 +84,6 @@ state Mappings of
   init m == m = mk_Mappings({|->})
 end
 
-functions
-  -- 判定：一封信封落在哪条逻辑流上——该来源的外部来头加流名
-  StreamOf: Envelope -> StreamId
-  StreamOf(env) == mk_StreamId(mk_External(env.source), env.stream);
-
 operations
   -- 装载来源的当前映射：替换先前的映射，不保留旧版本
   Install(source: SourceId, mapping: MappingId)
@@ -102,16 +95,16 @@ operations
   ext rd current
   post env.source not in set dom current => r = nil;
 
-  -- 场景：入账——集成交来的信封经 Decode 后经 Append 进入它所属的流；解不出的也进入，原文保留
+  -- 场景：入账——集成交来的信封解码后追加到它所属的流上；解不出的也追加，原文保留
   Ingest: Envelope ==> [LogPosition]
   Ingest(env) ==
-    return Append(StreamOf(env), Decode(env), env.raw, nil);
+    return Append(mk_StreamId(mk_External(env.source), env.stream), Decode(env), env.raw, nil);
 
-  -- 场景：来源连续性中断——信封所属流在 LatestStreams 中时，经 OpenEpoch 为该流开新一代；会话建立后每条流的首条信封之前也经此开第一代
+  -- 场景：来源连续性中断——信封所属流在来源最近声明里时，为该流开新一代；会话建立后每条流的首条信封之前也经此开第一代
   Break: Envelope ==> bool
   Break(env) ==
     if env.stream in set LatestStreams(env.source)
-    then (OpenEpoch(StreamOf(env), env.raw); return true)
+    then (OpenEpoch(mk_StreamId(mk_External(env.source), env.stream), env.raw); return true)
     else return false;
 
   -- 按来源当前映射把意图连同调用方键编成请求并导出通道；没有映射的来源一律编不出

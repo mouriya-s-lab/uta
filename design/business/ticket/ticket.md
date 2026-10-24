@@ -63,7 +63,6 @@ exports
     Current: TicketRecord -> Version;
     MatchesRequest: Proposal * [EffectRequest] * [RequestStatus] -> bool;
     Gate: TicketRecord * bool * Alignment * Time * SessionVerdict -> GateVerdict;
-    ToIntent: TicketRecord -> Intent;
     Progress: TicketRecord -> Note
   operations
     Draft: Proposal ==> ();
@@ -177,9 +176,9 @@ functions
   Current: TicketRecord -> Version
   Current(rec) == rec.versions(len rec.versions);
 
-  -- 判定：一张单据此刻的状态记成一条记事；两个实现必须写出同一条
+  -- 一张单据此刻的状态记成的一条记事；记事的编码属实现，不展开
   Progress: TicketRecord -> Note
-  Progress(rec) == mk_token(mk_(rec.id, rec.status));
+  Progress(rec) == is not yet specified;
 
   -- 判定：放行门。只对已批准的单据开门或关单；到期、来源明确不支持、依据不可逆失效各自关单；对账项未对齐或能力未确认时等待
   Gate: TicketRecord * bool * Alignment * Time * SessionVerdict -> GateVerdict
@@ -191,12 +190,6 @@ functions
     elseif not fresh then <BasisLost>
     elseif align = {} and cap = <Supported> then <Open>
     else <Hold>;
-
-  -- 判定：单据当前版本对应的写意图，带它接手的请求
-  ToIntent: TicketRecord -> Intent
-  ToIntent(rec) ==
-    let v = Current(rec) in
-      mk_Intent(rec.source, rec.cap, v.intent, v.deadline, v.admission, rec.request);
 
   -- 判定：一张单据提议是否如实承接了一条等待处理的请求——请求存在且等待处理，负责人、种类与依据同请求一致
   MatchesRequest: Proposal * [EffectRequest] * [RequestStatus] -> bool
@@ -270,50 +263,40 @@ operations
   pre id in set dom byId and not is_Closed(byId(id).status)
   post byId = byId~ ++ {id |-> mu(byId~(id), status |-> mk_Closed(reason))};
 
-  -- 场景：把单据此刻的状态经 Record 交给它所接手的请求方
-  AnnounceTicket: TicketId ==> ()
-  AnnounceTicket(id) ==
-    Record(byId(id).request, Progress(byId(id)))
-  pre id in set dom byId;
-
-  -- 场景：对送审中的指定版本作出裁决——经 RecordDecision 记下裁决后，经 AnnounceTicket 让请求方得知
+  -- 场景：对送审中的指定版本作出裁决；裁决记下后让它所接手的请求方得知
   Decide: TicketId * nat1 * Principal * Ruling ==> DecideOutcome
   Decide(id, version, who, ruling) ==
     cases RecordDecision(id, version, who, ruling):
       <Conflict> -> return <Conflict>,
-      others -> (AnnounceTicket(id); return <Recorded>)
+      others -> (Record(byId(id).request, Progress(byId(id))); return <Recorded>)
     end
   pre id in set dom byId and is_Awaiting(byId(id).status);
 
-  -- 场景：负责人撤回未关闭的单据——经 CloseAs 关单并记事
+  -- 场景：负责人撤回未关闭的单据；关单后让它所接手的请求方得知
   Withdraw: TicketId * Principal ==> ()
   Withdraw(id, who) ==
-    CloseAs(id, <Withdrawn>)
+    (Close(id, <Withdrawn>);
+     Record(byId(id).request, Progress(byId(id))))
   pre id in set dom byId and byId(id).responsible = who and not is_Closed(byId(id).status);
 
-  -- 场景：以某原因关单并记事
-  CloseAs: TicketId * ClosedReason ==> ()
-  CloseAs(id, reason) ==
-    (Close(id, reason);
-     AnnounceTicket(id))
-  pre id in set dom byId and not is_Closed(byId(id).status);
-
-  -- 场景：放行门。已批准的单据到期、来源明确不支持或依据失效即关单；门未开或通道不可准入即等待；准入成功则以准备记录关单
+  -- 场景：放行门。已批准的单据到期、来源明确不支持或依据失效即关单；门未开或通道不可准入即等待；准入成功则以准备记录关单；每次关单后让它所接手的请求方得知
   Release: TicketId * Alignment * Time ==> ReleaseOutcome
   Release(id, align, now) ==
     cases Gate(byId(id), CheckBasis(Current(byId(id)).basis), align, now,
                SessionCapability(byId(id).source, byId(id).cap)):
       <AlreadyClosed> -> return <Closed>,
       <NotApproved> -> return <Waiting>,
-      <Expired> -> (CloseAs(id, <Expired>); return <Closed>),
-      <Unsupported> -> (CloseAs(id, <Unsupported>); return <Closed>),
-      <BasisLost> -> (CloseAs(id, <BasisLost>); return <Closed>),
+      <Expired> -> (Close(id, <Expired>); Record(byId(id).request, Progress(byId(id))); return <Closed>),
+      <Unsupported> -> (Close(id, <Unsupported>); Record(byId(id).request, Progress(byId(id))); return <Closed>),
+      <BasisLost> -> (Close(id, <BasisLost>); Record(byId(id).request, Progress(byId(id))); return <Closed>),
       <Hold> -> return <Waiting>,
       others ->
-        cases Prepare(ToIntent(byId(id))):
+        cases Prepare(mk_Intent(byId(id).source, byId(id).cap, Current(byId(id)).intent,
+                                Current(byId(id)).deadline, Current(byId(id)).admission,
+                                byId(id).request)):
           <Unmapped> -> return <Waiting>,
           <LaneBlocked> -> return <Waiting>,
-          ref -> (CloseAs(id, mk_Prepared(ref)); return ref)
+          ref -> (Close(id, mk_Prepared(ref)); Record(byId(id).request, Progress(byId(id))); return ref)
         end
     end
   pre id in set dom byId;

@@ -133,9 +133,9 @@ functions
   KeyOf: AttemptRef -> ClientKey
   KeyOf(ref) == mk_token(ref);
 
-  -- 判定：一次尝试此刻在两根轴上的位置记成一条记事；两个实现必须写出同一条
+  -- 一次尝试此刻在两根轴上的位置记成的一条记事；记事的编码属实现，不展开
   Progress: Attempt -> Note
-  Progress(a) == mk_token(mk_(a.ref, a.barriered, a.waiting, a.outcome));
+  Progress(a) == is not yet specified;
 
   -- 判定：某通道的阻塞头集合——等待仍为 Active 的尝试，不论是否已过屏障
   BlockingHeads: set of Attempt * LaneKey -> set of Attempt
@@ -165,14 +165,14 @@ operations
                 {ref |-> mk_Attempt(ref, intent, enc.lane, enc.request, false, <Active>, <Pending>)})
          and (not admitted => attempts = attempts~);
 
-  -- 场景：准备一次写——先取身份与键，带键经 Encode 编码，经 Admit 准入后经 Announce 让请求方得知；编不出或通道阻塞时不建尝试
+  -- 场景：准备一次写——先取身份与键，带键编码；准入后让请求方得知；编不出或通道阻塞时不建尝试
   Prepare: Intent ==> PrepareOutcome
   Prepare(intent) ==
     let ref = Mint() in
       cases Encode(mk_EncodeRequest(intent.source, intent.payload, KeyOf(ref))):
         <Unmapped> -> return <Unmapped>,
         enc -> if Admit(ref, intent, enc)
-               then (Announce(ref); return ref)
+               then (Record(intent.about, Progress(attempts(ref))); return ref)
                else return <LaneBlocked>
       end;
 
@@ -190,21 +190,15 @@ operations
       and not attempts(ref).barriered and attempts(ref).waiting = <Active>
   post attempts = attempts~ ++ {ref |-> mu(attempts~(ref), waiting |-> <Expired>)};
 
-  -- 场景：把一次尝试此刻的位置经 Record 交给它所响应的请求方
-  Announce: AttemptRef ==> ()
-  Announce(ref) ==
-    Record(attempts(ref).intent.about, Progress(attempts(ref)))
-  pre ref in set dom attempts;
-
-  -- 场景：未过屏障的尝试走到出口——经 MarkExpired 离开阻塞头，再经 Announce 让请求方得知；到期与人工丢弃同一出口
+  -- 场景：未过屏障的尝试走到出口——离开阻塞头后，让请求方得知；到期与人工丢弃同一出口
   Expire: AttemptRef ==> ()
   Expire(ref) ==
     (MarkExpired(ref);
-     Announce(ref))
+     Record(attempts(ref).intent.about, Progress(attempts(ref))))
   pre ref in set dom attempts
       and not attempts(ref).barriered and attempts(ref).waiting = <Active>;
 
-  -- 场景：发出前门——到期或来源已明确不支持即经 Expire 终止；来源此刻支持才经 Seal 落屏障并经 Announce 让请求方得知；其余保持未发出等待
+  -- 场景：发出前门——到期或来源已明确不支持即终止；来源此刻支持才落屏障并让请求方得知；其余保持未发出等待
   Barrier: AttemptRef * Time ==> GateOutcome
   Barrier(ref, now) ==
     let cap = SessionCapability(attempts(ref).intent.source, attempts(ref).intent.cap) in
@@ -212,7 +206,7 @@ operations
       then (Expire(ref); return <Expired>)
       elseif cap = <Supported>
       then (Seal(ref);
-            Announce(ref);
+            Record(attempts(ref).intent.about, Progress(attempts(ref)));
             return <Sent>)
       else return <Waiting>
   pre ref in set dom attempts
@@ -228,11 +222,11 @@ operations
                      waiting |-> if reply = <NoResponse> then <Active> else <Finished>,
                      outcome |-> if reply = <NoResponse> then <Unknown> else reply)};
 
-  -- 场景：集成的回复到达——经 MarkReply 进入两根轴，再经 Announce 让请求方得知
+  -- 场景：集成的回复到达——记进两根轴后，让请求方得知
   CompleteSend: AttemptRef * Reply ==> ()
   CompleteSend(ref, reply) ==
     (MarkReply(ref, reply);
-     Announce(ref))
+     Record(attempts(ref).intent.about, Progress(attempts(ref))))
   pre ref in set dom attempts
       and attempts(ref).barriered and attempts(ref).outcome = <Pending>;
 
@@ -248,11 +242,11 @@ operations
                              waiting |-> if attempts~(ref).waiting = <Active>
                                          then <Finished> else attempts~(ref).waiting)});
 
-  -- 场景：来源给出的结论进入尝试——先经 MarkEvidence 改两根轴，再经 Announce；未查清也公布，请求方由此知道查过而未定
+  -- 场景：来源给出的结论进入尝试——收敛后让请求方得知；未查清也告知，请求方由此知道查过而未定
   Resolve: AttemptRef * Evidence ==> ()
   Resolve(ref, evidence) ==
     (MarkEvidence(ref, evidence);
-     Announce(ref))
+     Record(attempts(ref).intent.about, Progress(attempts(ref))))
   pre ref in set dom attempts and attempts(ref).outcome = <Unknown>;
 
   -- 场景：主动取证——回读原文连同本尝试的调用方键经 ClassifyEvidence 得出结论，再经 Resolve 收敛
@@ -277,14 +271,13 @@ operations
       and attempts(ref).waiting = <Active> and attempts(ref).outcome = <Unknown>
   post attempts = attempts~ ++ {ref |-> mu(attempts~(ref), waiting |-> <Abandoned>)};
 
-  -- 场景：放弃等待——经 MarkAbandoned 离开阻塞头，再经 Announce 让请求方得知
+  -- 场景：放弃等待——离开阻塞头后，让尝试所响应的请求方得知
   Abandon: AttemptRef ==> ()
   Abandon(ref) ==
     (MarkAbandoned(ref);
-     Announce(ref))
+     Record(attempts(ref).intent.about, Progress(attempts(ref))))
   pre ref in set dom attempts
       and attempts(ref).waiting = <Active> and attempts(ref).outcome = <Unknown>;
-
 
   -- 查询尝试记录；不存在为空
   AttemptOf(ref: AttemptRef) r: [Attempt]
