@@ -13,6 +13,7 @@
 | 映射 DSL：值树、字段处置表、枚举映射 | `d6d31da:design/core/01-base/01-value-tree.md:5-89`；`d6d31da:design/core/04-boundary/01-integration.md:202-236` |
 | 读模型 | `d6d31da:design/core/04-boundary/05-views.md:59-259` |
 | 审批规则链步序与冷却 | `d6d31da:design/core/03-read-write/04-decision-chain.md:65-290` |
+| 越过阻塞时的阻塞头快照 | `d6d31da:design/core/03-read-write/05-lane.md:125-138` |
 | 订阅按主体过滤与配额 | `d6d31da:design/core/02-read/03-consumption.md:105-122,212-220`；`d6d31da:design/core/02-read/04-supply.md:20-63` |
 | 一次性读的在途并入、等待上限与通道缺口 | `d6d31da:design/core/02-read/02-one-shot-read.md:53-175` |
 | 定时器请求与规则时限 | `d6d31da:design/core/05-runtime/03-timer.md:1-55` |
