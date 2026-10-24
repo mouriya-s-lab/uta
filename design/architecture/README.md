@@ -41,3 +41,5 @@
 ## 语义
 
 每个 ``Source`SourceId`` 对应一个独立的集成子进程与会话通道；集成在会话建立后、每条流的首条信封之前先交出 ``Mapping`Break``，之后每次失去连续性再交一次。``Observation`Journal``、``Write`Attempts``、``Request`Requests``、``Delivery`Subscriptions`` 都在核心进程内持久保存。核心进程重启后 ``Source`Sources.live`` 从空重建，直到各集成子进程重新握手；``Source`Sources.latest`` 保留。映射由核心在启动时与运维动作时装载，替换映射不开新会话。解释层在核心之外：它把下游连接上认证过的主体作为 ``Request`Principal`` 交进核心，把核心的记录与状态翻译成下游接口；核心不记下游连接，也不认证主体。
+
+当前映射对一段回读原文匹配不到时，``Mapping`ClassifyEvidence`` 必须给出 `<Inconclusive>`，不得给出 `<Absent>`：匹配不到说明协议或映射可能变了，不说明来源没有执行。

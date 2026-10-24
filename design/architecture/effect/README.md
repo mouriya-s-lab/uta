@@ -29,3 +29,5 @@
 ## 语义
 
 ``Write`Barrier`` 的屏障记录先于对集成的调用持久写下；核心进程崩溃重启后，``Write`Attempt.barriered`` 为真且结果仍为 `<Pending>` 的尝试经 ``Write`CompleteSend`` 以 `<NoResponse>` 记为 `<Unknown>`，为假的尝试在对账启动之后重新过 ``Write`Barrier``。处理器在核心进程内运行；写处理器把请求转成 ``Write`Intent`` 的路径由业务决定。尝试进入 `<Unknown>` 时以及带调用方键的观察入账时对 `<Unknown>` 尝试调用 ``Write`Attribute``；仍未查清的尝试，核心按来源可用的回读渠道周期调用 ``Write`ProbeAttempt``，渠道种类、顺序与调用间隔由实现决定，索引见附录 `reference/original-design-index.md`。
+
+每个 ``Write`Attempt.request`` 至多发往来源一次，崩溃重启之后或久无回复时也不再发；同一个 ``Write`Intent`` 要再发，只能再经 ``Write`Prepare`` 成为新的 ``Write`AttemptRef``。

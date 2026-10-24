@@ -25,3 +25,5 @@
 ## 语义
 
 程序在受监督的子进程中运行，核心按 ``Program`Loaded.subscription`` 投递并收回 ``Program`Step``；子进程崩溃后核心经 ``Program`CheckpointOf`` 取回最近检查点重新装载。
+
+``Program`Keep``、``Delivery`Ack``、派生记录的 ``Observation`Append`` 与请求的 ``Request`Emit`` 在 ``Program`AdvanceOn`` 的同一次提交中生效，任一失败则整步都不生效。

@@ -41,11 +41,11 @@ types
     streams      : set of StreamName               -- 本来源提供的推送流
     capabilities : map CapabilityKey to Verdict;   -- 本次会话对各能力的声明
 
-  -- 来源会话表：在线会话的有效声明，以及每个来源最近一次握手留下的声明副本
+  -- 来源会话表：在线会话的有效声明总等于该来源的最近声明；会话结束后最近声明保留
 state Sources of
   live   : map SourceId to Declaration  -- 当前在线会话及其会话有效声明
   latest : map SourceId to Declaration  -- 每个来源最近一次握手的声明副本
-  inv mk_Sources(l, t) == dom l subset dom t
+  inv mk_Sources(l, t) == forall s in set dom l & s in set dom t and l(s) = t(s)
   init s == s = mk_Sources({|->}, {|->})
 end
 
