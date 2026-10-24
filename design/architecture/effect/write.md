@@ -72,8 +72,8 @@ types
   CancelHead ::
     target : ClientKey;  -- 要撤的阻塞头
 
-  -- 准入方式：通道空时的普通准入、针对阻塞头的撤单、显式绕过
-  Admission = <Normal> | CancelHead | <Bypass>;
+  -- 准入方式：通道空时的普通准入、针对结果未知的阻塞头的撤单
+  Admission = <Normal> | CancelHead;
 
   -- 进入写边界的意图；谁获准它进入由业务决定
   Intent ::
@@ -133,9 +133,9 @@ functions
   KeyOf: AttemptRef -> ClientKey
   KeyOf(ref) == mk_token(ref);
 
-  -- 判定：一次尝试此刻在两根轴上的位置记成一条记事；两个实现必须写出同一条
+  -- 一次尝试此刻在两根轴上的位置记成的一条记事；记事的编码属实现，不展开
   Progress: Attempt -> Note
-  Progress(a) == mk_token(mk_(a.ref, a.barriered, a.waiting, a.outcome));
+  Progress(a) == is not yet specified;
 
   -- 判定：某通道的阻塞头集合——等待仍为 Active 的尝试，不论是否已过屏障
   BlockingHeads: set of Attempt * LaneKey -> set of Attempt
@@ -148,7 +148,7 @@ operations
   ext rd attempts
   post r not in set dom attempts;
 
-  -- 把编码后的意图记为新尝试：普通准入要求通道无阻塞头，撤阻塞头准入要求目标是已过屏障的阻塞头，绕过准入不看通道
+  -- 把编码后的意图记为新尝试：普通准入要求通道无阻塞头，撤阻塞头准入要求目标是结果未知的阻塞头且通道上没有别的撤阻塞头
   Admit(ref: AttemptRef, intent: Intent, enc: Encoded) r: bool
   ext wr attempts
   pre ref not in set dom attempts
@@ -157,8 +157,7 @@ operations
                         <Normal> -> heads = {},
                         mk_CancelHead(t) ->
                           (exists b in set heads & b.outcome = <Unknown> and KeyOf(b.ref) = t)
-                          and not (exists c in set heads & is_CancelHead(c.intent.admission)),
-                        <Bypass> -> true
+                          and not (exists c in set heads & is_CancelHead(c.intent.admission))
                       end in
          r = admitted
          and (admitted => attempts = attempts~ munion

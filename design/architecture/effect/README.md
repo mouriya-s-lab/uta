@@ -24,7 +24,7 @@
 
 ``Request`Requests.events`` 不进 ``Observation`Journal``：观察日志可经 ``Observation`AdvanceRetention`` 删、可经 ``Observation`Entry.supersedes`` 撤、有 ``Observation`LogPosition.epoch`` 分代，事件序列三者都没有；不选让 ``Delivery`` 同时订阅两类流，那会让只为 ``Delivery`DeliveryGap`` 存在的投递逻辑背上永远不触发的分支。
 
-``Write`Admission`` 随 ``Write`Intent`` 一起进入写边界而不是 ``Write`Prepare`` 的参数：越过阻塞的决定和意图本身一起形成、一起被记录，发出点不另收指令。
+``Write`Admission`` 随 ``Write`Intent`` 一起进入写边界而不是 ``Write`Prepare`` 的参数：撤阻塞头的决定和意图本身一起形成、一起被记录，发出点不另收指令。
 
 ## 语义
 
